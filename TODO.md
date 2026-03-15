@@ -65,5 +65,5 @@
 - [ ] README (build/run/controls)
 
 ## Current focus
-- Active task: **T04 - Data model + POSCAR/CONTCAR import/export (ready for review/commit)**
-- Active branch: **task/04-vasp-io-structure**
+- Active task: **T05 - Atom rendering, selection, gizmo**
+- Active branch: **task/05-editor-selection-gizmo**

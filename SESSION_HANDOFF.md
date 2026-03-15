@@ -1,49 +1,44 @@
 # Session Handoff
 
 ## Current state
-- Branch: task/03-renderer-opengl
-- Last commit on branch: edf2a81 (T02 baseline)
-- T03 implementation is in working tree and build-verified, but not committed yet.
+- Branch: task/05-editor-selection-gizmo
+- Last completed task branch: task/04-vasp-io-structure
+- Latest T04 commit: 0e98222 (POSCAR I/O, native dialogs, structure preview)
+- T05 branch created from T04 head and ready for next implementation step.
 
-## Uncommitted changes (expected)
-- README.md
-- TODO.md
-- premake5.lua
-- scripts/FetchDeps.ps1
-- src/Core/Application.cpp
-- src/Core/ApplicationContext.cpp
-- src/Core/ApplicationContext.h
-- src/Layers/EditorLayer.cpp
-- src/Layers/EditorLayer.h
-- src/Renderer/ (new files)
+## Working tree
+- Clean on branch task/05-editor-selection-gizmo at branch creation.
 
-## What is already implemented
-- OpenGL backend abstraction (IRenderBackend + OpenGLRendererBackend)
-- Shader loading from assets/shaders
-- Orbit camera in viewport
-- New camera controls:
-  - MMB orbit
-  - Shift+MMB pan
-  - Mouse wheel zoom
-- Camera sensitivity sliders, now relative:
-  - 1.0x == previous baseline behavior
-- Viewport diagnostics moved to separate "Viewport Info" panel
-- GLAD generation automated via uv environment in setup flow
+## What is implemented up to T04
+- OpenGL backend abstraction with viewport rendering
+- Orbit camera controls and sensitivity tuning UI
+- POSCAR/CONTCAR parsing (VASP5/6 symbols line, Direct/Cartesian, Selective Dynamics)
+- POSCAR/CONTCAR export with precision and coordinate mode selection
+- Native Windows file dialogs wired in File menu and Tools panel
+- Original-state restore after import
+- Structure preview rendering in viewport (instanced placeholder atom geometry)
+- Added samples:
+  - assets/samples/POSCAR_Si2.vasp
+  - assets/samples/POSCAR (larger diamond-like test)
 
 ## Build status
 - scripts/Verify-Build.bat passes Debug and Release
-- If LINK1168 appears, close running DefectsStudio.exe and rerun
+- Last verification after T04 completion: passed with 0 warnings and 0 errors
 
 ## Next suggested action
-1. Commit current T03 changes on task/03-renderer-opengl
-2. Start T04 on new branch task/04-vasp-io-structure
+1. Implement true sphere-like atom visuals (replace cube placeholder geometry)
+2. Start selection workflow for T05:
+   - click select + multi-select
+   - box select (B)
+   - context menu actions scaffolding
+3. Keep build green with scripts/Verify-Build.bat after each milestone chunk
 
 ## Ready-to-paste starter prompt for next chat
 I am continuing work in this repository from SESSION_HANDOFF.md.
 Please:
 1) read TODO.md and SESSION_HANDOFF.md,
 2) confirm current branch and git status,
-3) commit the pending T03 changes on task/03-renderer-opengl,
-4) create task/04-vasp-io-structure,
-5) begin T04 by implementing Structure/Atom data model and POSCAR/CONTCAR parser (VASP5/6 symbols line, Direct/Cartesian, Selective Dynamics),
+3) continue on task/05-editor-selection-gizmo,
+4) replace cube placeholder atoms with sphere-like rendering,
+5) implement initial click and box selection scaffolding,
 6) run scripts/Verify-Build.bat and report results.
