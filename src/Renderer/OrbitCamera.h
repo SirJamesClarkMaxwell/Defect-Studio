@@ -25,6 +25,7 @@ namespace ds
         void SetProjectionMode(ProjectionMode mode);
         void SetPerspectiveFovDegrees(float fovDegrees);
         void SetOrthographicSize(float orthographicSize);
+        void SetOrbitState(const glm::vec3 &target, float distance, float yaw, float pitch);
 
         const glm::mat4 &GetViewMatrix() const { return m_View; }
         const glm::mat4 &GetProjectionMatrix() const { return m_Projection; }
@@ -33,6 +34,10 @@ namespace ds
         ProjectionMode GetProjectionMode() const { return m_ProjectionMode; }
         float GetPerspectiveFovDegrees() const { return m_FovYDegrees; }
         float GetOrthographicSize() const { return m_OrthographicSize; }
+        const glm::vec3 &GetTarget() const { return m_Target; }
+        float GetDistance() const { return m_Distance; }
+        float GetYaw() const { return m_Yaw; }
+        float GetPitch() const { return m_Pitch; }
 
     private:
         void RecalculateProjection();

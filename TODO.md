@@ -36,13 +36,15 @@
 ### [ ] T05 - Atom rendering, selection, gizmo (`task/05-editor-selection-gizmo`)
 - [x] Instanced atom rendering
 - [ ] Click/multi-select (**next priority #1**)
-- [ ] Box select (`B`) and RMB context menu actions (**next priority #2**)
-- [ ] ImGuizmo transform for selected atoms (**next priority #3**)
+- [ ] Box select (`B`) and RMB context menu actions (**next priority #3**)
+- [ ] ImGuizmo transform for selected atoms (**next priority #4**)
 
 ### [ ] T06 - Bonds and measurements (`task/06-bonds-tools`)
+- [ ] Add atom tool (insert atom into structure) 
 - [ ] Auto bond generation and dynamic threshold updates
 - [ ] Global cutoff + per-element-pair mode
 - [ ] Distance/angle tools and labels
+- [ ] Collections system (Blender-like outliner groups, visibility/lock/select toggles)
 - [ ] Clean view + cell edge toggle
 
 ### [ ] T07 - Volumetrics MVP (`task/07-volumetrics-mvp`)

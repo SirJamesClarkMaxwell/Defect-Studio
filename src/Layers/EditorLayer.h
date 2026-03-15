@@ -7,11 +7,14 @@
 #include "Renderer/IRenderBackend.h"
 
 #include <array>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 namespace ds
 {
@@ -39,6 +42,12 @@ namespace ds
             WarmSlate = 4
         };
 
+        enum class InteractionMode
+        {
+            Navigate = 0,
+            Select = 1
+        };
+
         static constexpr const char *kSettingsPath = "config/editor_ui_settings.ini";
 
         void ApplyTheme(ThemePreset preset);
@@ -49,6 +58,11 @@ namespace ds
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
+        bool IsAtomSelected(std::size_t index) const;
+        void ToggleInteractionMode();
+        void HandleViewportSelection();
+        void AppendSelectionDebugLog(const std::string &message) const;
+        bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
 
         bool m_ShowDemoWindow = false;
         bool m_ShowLogPanel = true;
@@ -60,6 +74,8 @@ namespace ds
         bool m_ViewportHovered = false;
         bool m_ViewportFocused = false;
         glm::vec2 m_ViewportSize = glm::vec2(1.0f, 1.0f);
+        glm::vec2 m_ViewportRectMin = glm::vec2(0.0f, 0.0f);
+        glm::vec2 m_ViewportRectMax = glm::vec2(0.0f, 0.0f);
 
         float m_CameraOrbitSensitivity = 1.0f;
         float m_CameraPanSensitivity = 1.0f;
@@ -77,6 +93,17 @@ namespace ds
         int m_ExportCoordinateModeIndex = 0;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
+        std::vector<std::size_t> m_SelectedAtomIndices;
+        InteractionMode m_InteractionMode = InteractionMode::Navigate;
+        glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);
+        float m_SelectionOutlineThickness = 2.0f;
+        bool m_SelectionDebugToFile = true;
+
+        bool m_HasPersistedCameraState = false;
+        glm::vec3 m_CameraTargetPersisted = glm::vec3(0.0f, 0.0f, 0.0f);
+        float m_CameraDistancePersisted = 6.0f;
+        float m_CameraYawPersisted = 0.6f;
+        float m_CameraPitchPersisted = 0.5f;
 
         SceneRenderSettings m_SceneSettings;
         int m_ProjectionModeIndex = 0;

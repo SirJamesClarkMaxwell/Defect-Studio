@@ -7,15 +7,22 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include <glm/geometric.hpp>
+#include <glm/mat4x4.hpp>
+#include <glm/vec4.hpp>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -33,6 +40,24 @@ namespace ds
         constexpr float kBaseOrbitSensitivity = 0.01f;
         constexpr float kBasePanSensitivity = 0.18f;
         constexpr float kBaseZoomSensitivity = 0.17f;
+        constexpr const char *kSelectionDebugLogPath = "logs/selection_debug.log";
+
+        std::string BuildDebugTimestampNow()
+        {
+            const auto now = std::chrono::system_clock::now();
+            const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+
+            std::tm localTime{};
+#ifdef _WIN32
+            localtime_s(&localTime, &nowTime);
+#else
+            localtime_r(&nowTime, &localTime);
+#endif
+
+            std::ostringstream stream;
+            stream << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+            return stream.str();
+        }
 
         bool OpenNativeFileDialog(std::string &outPath)
         {
@@ -116,6 +141,7 @@ namespace ds
         std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", defaultExportPath);
 
         m_SceneSettings.clearColor = glm::vec3(0.16f, 0.18f, 0.22f);
+        m_SceneSettings.gridLineWidth = 1.0f;
         m_SceneSettings.gridColor = glm::vec3(0.38f, 0.42f, 0.50f);
         m_SceneSettings.ambientStrength = 0.58f;
         m_SceneSettings.diffuseStrength = 0.78f;
@@ -137,6 +163,10 @@ namespace ds
         m_Camera = std::make_unique<OrbitCamera>();
         m_Camera->SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
         m_Camera->SetProjectionMode(m_ProjectionModeIndex == 0 ? OrbitCamera::ProjectionMode::Perspective : OrbitCamera::ProjectionMode::Orthographic);
+        if (m_HasPersistedCameraState)
+        {
+            m_Camera->SetOrbitState(m_CameraTargetPersisted, m_CameraDistancePersisted, m_CameraYawPersisted, m_CameraPitchPersisted);
+        }
         ApplyCameraSensitivity();
 
         LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)));
@@ -144,6 +174,8 @@ namespace ds
 
     void EditorLayer::OnDetach()
     {
+        SaveSettings();
+
         if (m_RenderBackend)
         {
             m_RenderBackend->Shutdown();
@@ -174,8 +206,14 @@ namespace ds
             atomPositions.reserve(m_WorkingStructure.atoms.size());
             atomColors.reserve(m_WorkingStructure.atoms.size());
 
-            for (const Atom &atom : m_WorkingStructure.atoms)
+            std::vector<glm::vec3> selectedPositions;
+            selectedPositions.reserve(m_SelectedAtomIndices.size());
+            std::vector<glm::vec3> selectedColors;
+            selectedColors.reserve(m_SelectedAtomIndices.size());
+
+            for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
             {
+                const Atom &atom = m_WorkingStructure.atoms[i];
                 glm::vec3 position = atom.position;
                 if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
                 {
@@ -184,15 +222,236 @@ namespace ds
 
                 atomPositions.push_back(position);
                 atomColors.push_back(ColorFromElement(atom.element));
+
+                if (IsAtomSelected(i))
+                {
+                    selectedPositions.push_back(position);
+                    selectedColors.push_back(m_SelectionColor);
+                }
             }
 
             m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), atomPositions, atomColors, m_SceneSettings);
+
+            if (!selectedPositions.empty())
+            {
+                SceneRenderSettings highlightSettings = m_SceneSettings;
+                highlightSettings.drawGrid = false;
+                highlightSettings.overrideAtomColor = true;
+                highlightSettings.atomOverrideColor = m_SelectionColor;
+                highlightSettings.atomScale = m_SceneSettings.atomScale * 1.02f;
+                highlightSettings.atomBrightness = std::max(1.0f, m_SceneSettings.atomBrightness);
+                highlightSettings.atomWireframe = true;
+                highlightSettings.atomWireframeWidth = m_SelectionOutlineThickness;
+                m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), selectedPositions, selectedColors, highlightSettings);
+            }
         }
         else
         {
             m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix(), m_SceneSettings);
         }
         m_RenderBackend->EndFrame();
+    }
+
+    bool EditorLayer::IsAtomSelected(std::size_t index) const
+    {
+        return std::find(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), index) != m_SelectedAtomIndices.end();
+    }
+
+    void EditorLayer::ToggleInteractionMode()
+    {
+        if (m_InteractionMode == InteractionMode::Navigate)
+        {
+            if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+            {
+                m_LastStructureOperationFailed = true;
+                m_LastStructureMessage = "Selection mode unavailable: load POSCAR/CONTCAR first.";
+                LogWarn(m_LastStructureMessage);
+                AppendSelectionDebugLog("Mode switch denied: no loaded structure");
+                return;
+            }
+
+            m_InteractionMode = InteractionMode::Select;
+            LogInfo("Interaction mode: Select");
+            AppendSelectionDebugLog("Mode switched to Select");
+            return;
+        }
+
+        m_InteractionMode = InteractionMode::Navigate;
+        LogInfo("Interaction mode: Navigate");
+        AppendSelectionDebugLog("Mode switched to Navigate");
+    }
+
+    void EditorLayer::AppendSelectionDebugLog(const std::string &message) const
+    {
+        if (!m_SelectionDebugToFile)
+        {
+            return;
+        }
+
+        std::filesystem::create_directories("logs");
+        std::ofstream out(kSelectionDebugLogPath, std::ios::app);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        out << '[' << BuildDebugTimestampNow() << "] " << message << '\n';
+    }
+
+    bool EditorLayer::PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const
+    {
+        if (!m_Camera || !m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            return false;
+        }
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return false;
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        bool found = false;
+        float bestDepth = std::numeric_limits<float>::max();
+        float bestDistancePixels = std::numeric_limits<float>::max();
+        const float pickRadiusPixels = 14.0f + m_SceneSettings.atomScale * 20.0f;
+        const float pickRadiusPixelsSq = pickRadiusPixels * pickRadiusPixels;
+
+        for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
+        {
+            glm::vec3 center = m_WorkingStructure.atoms[i].position;
+            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+            {
+                center = m_WorkingStructure.DirectToCartesian(center);
+            }
+
+            const glm::vec4 clip = viewProjection * glm::vec4(center, 1.0f);
+            if (clip.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.05f || ndc.x > 1.05f || ndc.y < -1.05f || ndc.y > 1.05f || ndc.z < -1.0f || ndc.z > 1.0f)
+            {
+                continue;
+            }
+
+            const float screenX = m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width;
+            const float screenY = m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height;
+            const float dx = mousePos.x - screenX;
+            const float dy = mousePos.y - screenY;
+            const float distSq = dx * dx + dy * dy;
+            if (distSq > pickRadiusPixelsSq)
+            {
+                continue;
+            }
+
+            const float distPixels = std::sqrt(distSq);
+            if (!found || ndc.z < bestDepth - 1e-4f || (std::abs(ndc.z - bestDepth) <= 1e-4f && distPixels < bestDistancePixels))
+            {
+                bestDepth = ndc.z;
+                bestDistancePixels = distPixels;
+                outAtomIndex = i;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    void EditorLayer::HandleViewportSelection()
+    {
+        const ImGuiIO &io = ImGui::GetIO();
+        if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            return;
+        }
+
+        std::ostringstream clickLog;
+        clickLog << "LMB click: mode=" << (m_InteractionMode == InteractionMode::Select ? "Select" : "Navigate")
+                 << " focused=" << (m_ViewportFocused ? "1" : "0")
+                 << " hovered=" << (m_ViewportHovered ? "1" : "0")
+                 << " hasStructure=" << (m_HasStructureLoaded ? "1" : "0")
+                 << " atomCount=" << m_WorkingStructure.atoms.size()
+                 << " mouse=(" << io.MousePos.x << "," << io.MousePos.y << ")"
+                 << " viewportMin=(" << m_ViewportRectMin.x << "," << m_ViewportRectMin.y << ")"
+                 << " viewportMax=(" << m_ViewportRectMax.x << "," << m_ViewportRectMax.y << ")";
+        AppendSelectionDebugLog(clickLog.str());
+
+        if (m_InteractionMode != InteractionMode::Select)
+        {
+            AppendSelectionDebugLog("Ignored click: not in Select mode");
+            return;
+        }
+
+        if (!m_ViewportFocused || !m_ViewportHovered)
+        {
+            AppendSelectionDebugLog("Ignored click: viewport not focused/hovered");
+            return;
+        }
+
+        if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            AppendSelectionDebugLog("Ignored click: no structure or empty atoms");
+            return;
+        }
+
+        const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
+        const bool insideViewport =
+            mousePos.x >= m_ViewportRectMin.x && mousePos.x <= m_ViewportRectMax.x &&
+            mousePos.y >= m_ViewportRectMin.y && mousePos.y <= m_ViewportRectMax.y;
+        if (!insideViewport)
+        {
+            AppendSelectionDebugLog("Ignored click: outside viewport rect");
+            return;
+        }
+
+        std::size_t pickedAtomIndex = 0;
+        const bool hasHit = PickAtomAtScreenPoint(mousePos, pickedAtomIndex);
+        const bool multiSelect = io.KeyCtrl;
+
+        {
+            std::ostringstream pickLog;
+            pickLog << "Pick result: hasHit=" << (hasHit ? "1" : "0")
+                    << " pickedIndex=" << pickedAtomIndex
+                    << " ctrl=" << (multiSelect ? "1" : "0");
+            AppendSelectionDebugLog(pickLog.str());
+        }
+
+        if (!hasHit)
+        {
+            if (!multiSelect)
+            {
+                m_SelectedAtomIndices.clear();
+                AppendSelectionDebugLog("Selection cleared: no hit and Ctrl not pressed");
+            }
+            return;
+        }
+
+        if (!multiSelect)
+        {
+            m_SelectedAtomIndices.clear();
+            m_SelectedAtomIndices.push_back(pickedAtomIndex);
+            AppendSelectionDebugLog("Selection set to single atom index=" + std::to_string(pickedAtomIndex));
+            return;
+        }
+
+        auto it = std::find(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), pickedAtomIndex);
+        if (it == m_SelectedAtomIndices.end())
+        {
+            m_SelectedAtomIndices.push_back(pickedAtomIndex);
+            AppendSelectionDebugLog("Selection added atom index=" + std::to_string(pickedAtomIndex));
+        }
+        else
+        {
+            m_SelectedAtomIndices.erase(it);
+            AppendSelectionDebugLog("Selection removed atom index=" + std::to_string(pickedAtomIndex));
+        }
+
+        AppendSelectionDebugLog("Selection size now=" + std::to_string(m_SelectedAtomIndices.size()));
     }
 
     bool EditorLayer::LoadStructureFromPath(const std::string &path)
@@ -210,6 +469,7 @@ namespace ds
         m_WorkingStructure = parsed;
         m_OriginalStructure = parsed;
         m_HasStructureLoaded = true;
+        m_SelectedAtomIndices.clear();
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Imported structure from: " + path;
 
@@ -229,6 +489,13 @@ namespace ds
                 boundsMin = glm::min(boundsMin, position);
                 boundsMax = glm::max(boundsMax, position);
             }
+
+            const glm::vec3 center = 0.5f * (boundsMin + boundsMax);
+            m_SceneSettings.gridOrigin = glm::vec3(center.x, boundsMin.y, center.z);
+
+            const float halfSpanXZ = 0.5f * std::max(boundsMax.x - boundsMin.x, boundsMax.z - boundsMin.z);
+            const int recommendedHalfExtent = static_cast<int>(std::ceil(halfSpanXZ / std::max(0.1f, m_SceneSettings.gridSpacing))) + 2;
+            m_SceneSettings.gridHalfExtent = std::max(m_SceneSettings.gridHalfExtent, recommendedHalfExtent);
 
             m_Camera->FrameBounds(boundsMin, boundsMax);
         }
@@ -485,6 +752,72 @@ namespace ds
                     m_CameraZoomSensitivity = 1.0f;
                 }
             }
+            else if (key == "camera_target_x")
+            {
+                try
+                {
+                    m_CameraTargetPersisted.x = std::stof(value);
+                    m_HasPersistedCameraState = true;
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "camera_target_y")
+            {
+                try
+                {
+                    m_CameraTargetPersisted.y = std::stof(value);
+                    m_HasPersistedCameraState = true;
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "camera_target_z")
+            {
+                try
+                {
+                    m_CameraTargetPersisted.z = std::stof(value);
+                    m_HasPersistedCameraState = true;
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "camera_distance")
+            {
+                try
+                {
+                    m_CameraDistancePersisted = std::stof(value);
+                    m_HasPersistedCameraState = true;
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "camera_yaw")
+            {
+                try
+                {
+                    m_CameraYawPersisted = std::stof(value);
+                    m_HasPersistedCameraState = true;
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "camera_pitch")
+            {
+                try
+                {
+                    m_CameraPitchPersisted = std::stof(value);
+                    m_HasPersistedCameraState = true;
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "camera_sensitivity_mode")
             {
                 hasSensitivityMode = true;
@@ -539,6 +872,46 @@ namespace ds
                 try
                 {
                     m_SceneSettings.gridSpacing = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_line_width")
+            {
+                try
+                {
+                    m_SceneSettings.gridLineWidth = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_origin_x")
+            {
+                try
+                {
+                    m_SceneSettings.gridOrigin.x = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_origin_y")
+            {
+                try
+                {
+                    m_SceneSettings.gridOrigin.y = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_origin_z")
+            {
+                try
+                {
+                    m_SceneSettings.gridOrigin.z = std::stof(value);
                 }
                 catch (...)
                 {
@@ -688,6 +1061,50 @@ namespace ds
                 {
                 }
             }
+            else if (key == "selection_color_r")
+            {
+                try
+                {
+                    m_SelectionColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "selection_color_g")
+            {
+                try
+                {
+                    m_SelectionColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "selection_color_b")
+            {
+                try
+                {
+                    m_SelectionColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "selection_outline_thickness")
+            {
+                try
+                {
+                    m_SelectionOutlineThickness = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "selection_debug_to_file")
+            {
+                m_SelectionDebugToFile = (value == "1");
+            }
             else if (key == "viewport_projection_mode")
             {
                 try
@@ -720,6 +1137,11 @@ namespace ds
             m_ProjectionModeIndex = 0;
         if (m_ProjectionModeIndex > 1)
             m_ProjectionModeIndex = 1;
+
+        if (m_SelectionOutlineThickness < 1.0f)
+            m_SelectionOutlineThickness = 1.0f;
+        if (m_SelectionOutlineThickness > 8.0f)
+            m_SelectionOutlineThickness = 8.0f;
     }
 
     void EditorLayer::SaveSettings() const
@@ -742,12 +1164,34 @@ namespace ds
         out << "camera_pan_sensitivity=" << m_CameraPanSensitivity << '\n';
         out << "camera_zoom_sensitivity=" << m_CameraZoomSensitivity << '\n';
         out << "camera_sensitivity_mode=relative_v2" << '\n';
+        if (m_Camera)
+        {
+            out << "camera_target_x=" << m_Camera->GetTarget().x << '\n';
+            out << "camera_target_y=" << m_Camera->GetTarget().y << '\n';
+            out << "camera_target_z=" << m_Camera->GetTarget().z << '\n';
+            out << "camera_distance=" << m_Camera->GetDistance() << '\n';
+            out << "camera_yaw=" << m_Camera->GetYaw() << '\n';
+            out << "camera_pitch=" << m_Camera->GetPitch() << '\n';
+        }
+        else
+        {
+            out << "camera_target_x=" << m_CameraTargetPersisted.x << '\n';
+            out << "camera_target_y=" << m_CameraTargetPersisted.y << '\n';
+            out << "camera_target_z=" << m_CameraTargetPersisted.z << '\n';
+            out << "camera_distance=" << m_CameraDistancePersisted << '\n';
+            out << "camera_yaw=" << m_CameraYawPersisted << '\n';
+            out << "camera_pitch=" << m_CameraPitchPersisted << '\n';
+        }
         out << "viewport_bg_r=" << m_SceneSettings.clearColor.r << '\n';
         out << "viewport_bg_g=" << m_SceneSettings.clearColor.g << '\n';
         out << "viewport_bg_b=" << m_SceneSettings.clearColor.b << '\n';
         out << "viewport_grid_enabled=" << (m_SceneSettings.drawGrid ? "1" : "0") << '\n';
         out << "viewport_grid_extent=" << m_SceneSettings.gridHalfExtent << '\n';
         out << "viewport_grid_spacing=" << m_SceneSettings.gridSpacing << '\n';
+        out << "viewport_grid_line_width=" << m_SceneSettings.gridLineWidth << '\n';
+        out << "viewport_grid_origin_x=" << m_SceneSettings.gridOrigin.x << '\n';
+        out << "viewport_grid_origin_y=" << m_SceneSettings.gridOrigin.y << '\n';
+        out << "viewport_grid_origin_z=" << m_SceneSettings.gridOrigin.z << '\n';
         out << "viewport_grid_color_r=" << m_SceneSettings.gridColor.r << '\n';
         out << "viewport_grid_color_g=" << m_SceneSettings.gridColor.g << '\n';
         out << "viewport_grid_color_b=" << m_SceneSettings.gridColor.b << '\n';
@@ -763,12 +1207,18 @@ namespace ds
         out << "viewport_atom_override_g=" << m_SceneSettings.atomOverrideColor.g << '\n';
         out << "viewport_atom_override_b=" << m_SceneSettings.atomOverrideColor.b << '\n';
         out << "viewport_atom_brightness=" << m_SceneSettings.atomBrightness << '\n';
+        out << "selection_color_r=" << m_SelectionColor.r << '\n';
+        out << "selection_color_g=" << m_SelectionColor.g << '\n';
+        out << "selection_color_b=" << m_SelectionColor.b << '\n';
+        out << "selection_outline_thickness=" << m_SelectionOutlineThickness << '\n';
+        out << "selection_debug_to_file=" << (m_SelectionDebugToFile ? "1" : "0") << '\n';
         out << "viewport_projection_mode=" << m_ProjectionModeIndex << '\n';
     }
 
     void EditorLayer::OnImGuiRender()
     {
         bool settingsChanged = false;
+        const ImGuiIO &io = ImGui::GetIO();
 
         ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
 
@@ -845,6 +1295,11 @@ namespace ds
         m_ViewportFocused = ImGui::IsWindowFocused();
         m_ViewportHovered = ImGui::IsWindowHovered();
 
+        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Tab, false))
+        {
+            ToggleInteractionMode();
+        }
+
         ImVec2 size = ImGui::GetContentRegionAvail();
         if (size.x < 1.0f)
             size.x = 1.0f;
@@ -859,20 +1314,29 @@ namespace ds
             {
                 ImTextureID textureID = (ImTextureID)(std::uintptr_t)texture;
                 ImGui::Image(textureID, size, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+                const ImVec2 rectMin = ImGui::GetItemRectMin();
+                const ImVec2 rectMax = ImGui::GetItemRectMax();
+                m_ViewportRectMin = glm::vec2(rectMin.x, rectMin.y);
+                m_ViewportRectMax = glm::vec2(rectMax.x, rectMax.y);
             }
             else
             {
                 ImGui::TextUnformatted("Viewport render target not ready.");
+                m_ViewportRectMin = glm::vec2(0.0f, 0.0f);
+                m_ViewportRectMax = glm::vec2(0.0f, 0.0f);
             }
         }
         else
         {
             ImGui::TextUnformatted("OpenGL backend unavailable.");
+            m_ViewportRectMin = glm::vec2(0.0f, 0.0f);
+            m_ViewportRectMax = glm::vec2(0.0f, 0.0f);
         }
+
+        HandleViewportSelection();
         ImGui::End();
 
         ImGui::Begin("Viewport Info");
-        const ImGuiIO &io = ImGui::GetIO();
         ImGui::Text("Size: %.0f x %.0f", size.x, size.y);
         ImGui::Text("Focused: %s | Hovered: %s", m_ViewportFocused ? "yes" : "no", m_ViewportHovered ? "yes" : "no");
         ImGui::Text("ImGui capture: mouse=%s keyboard=%s", io.WantCaptureMouse ? "yes" : "no", io.WantCaptureKeyboard ? "yes" : "no");
@@ -903,6 +1367,11 @@ namespace ds
             }
 
             if (ImGui::SliderFloat("Grid spacing", &m_SceneSettings.gridSpacing, 0.1f, 5.0f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Grid line width", &m_SceneSettings.gridLineWidth, 1.0f, 4.0f, "%.1f"))
             {
                 settingsChanged = true;
             }
@@ -989,6 +1458,17 @@ namespace ds
                 settingsChanged = true;
             }
 
+            ImGui::Separator();
+            ImGui::TextUnformatted("Selection highlight");
+            if (ImGui::ColorEdit3("Selection color", &m_SelectionColor.x))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("Selection outline", &m_SelectionOutlineThickness, 1.0f, 8.0f, "%.1f"))
+            {
+                settingsChanged = true;
+            }
+
             ImGui::End();
         }
 
@@ -1013,9 +1493,51 @@ namespace ds
         ImGui::SameLine();
         if (ImGui::Button("Load sample"))
         {
-            const char *samplePath = "assets/samples/POSCAR_Si2.vasp";
+            const char *samplePath = "assets/samples/POSCAR";
             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
             LoadStructureFromPath(samplePath);
+        }
+
+        ImGui::Separator();
+        const char *interactionModeLabel = (m_InteractionMode == InteractionMode::Navigate) ? "Navigate" : "Select";
+        ImGui::Text("Mode: %s", interactionModeLabel);
+        ImGui::TextUnformatted("Tab: toggle mode (when viewport focused)");
+
+        if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.77f, 0.36f, 1.0f));
+            ImGui::TextUnformatted("Select mode requires loaded structure.");
+            ImGui::PopStyleColor();
+        }
+
+        if (ImGui::Button("Toggle mode (Tab)"))
+        {
+            ToggleInteractionMode();
+        }
+
+        if (ImGui::Checkbox("Selection debug log to file", &m_SelectionDebugToFile))
+        {
+            settingsChanged = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear selection log file"))
+        {
+            std::filesystem::create_directories("logs");
+            std::ofstream clearOut("logs/selection_debug.log", std::ios::trunc);
+            if (clearOut.is_open())
+            {
+                clearOut << "";
+            }
+            AppendSelectionDebugLog("Selection debug log file cleared");
+        }
+        ImGui::TextUnformatted("Log path: logs/selection_debug.log");
+
+        ImGui::Separator();
+        ImGui::Text("Selection: %zu atoms", m_SelectedAtomIndices.size());
+        ImGui::TextUnformatted("LMB: select | Ctrl+LMB: add/remove");
+        if (ImGui::Button("Clear selection"))
+        {
+            m_SelectedAtomIndices.clear();
         }
 
         ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());

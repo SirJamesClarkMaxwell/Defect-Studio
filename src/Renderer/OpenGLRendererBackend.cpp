@@ -363,6 +363,17 @@ namespace ds
         m_Shader.SetFloat3("u_LightDirection", glm::normalize(settings.lightDirection));
         m_Shader.SetFloat3("u_LightFactors", glm::vec3(settings.ambientStrength, settings.diffuseStrength, settings.atomBrightness));
 
+        bool wireframeEnabled = false;
+        if (settings.atomWireframe)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            float widthRange[2] = {1.0f, 1.0f};
+            glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, widthRange);
+            const float requestedWidth = std::clamp(settings.atomWireframeWidth, widthRange[0], widthRange[1]);
+            glLineWidth(requestedWidth);
+            wireframeEnabled = true;
+        }
+
         glBindVertexArray(m_VAO);
 
         glBindBuffer(GL_ARRAY_BUFFER, m_InstanceVBO);
@@ -387,6 +398,12 @@ namespace ds
             static_cast<GLsizei>(instanceCount));
 
         glBindVertexArray(0);
+
+        if (wireframeEnabled)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glLineWidth(1.0f);
+        }
     }
 
     void OpenGLRendererBackend::RenderGrid(const glm::mat4 &viewProjection, const SceneRenderSettings &settings)
@@ -398,6 +415,7 @@ namespace ds
 
         const int halfExtent = std::clamp(settings.gridHalfExtent, 1, 128);
         const float spacing = settings.gridSpacing;
+        const glm::vec3 origin = settings.gridOrigin;
 
         std::vector<glm::vec3> lineVertices;
         lineVertices.reserve(static_cast<std::size_t>((halfExtent * 2 + 1) * 4));
@@ -407,11 +425,11 @@ namespace ds
         {
             const float p = static_cast<float>(i) * spacing;
 
-            lineVertices.push_back(glm::vec3(-span, 0.0f, p));
-            lineVertices.push_back(glm::vec3(span, 0.0f, p));
+            lineVertices.push_back(glm::vec3(origin.x - span, origin.y, origin.z + p));
+            lineVertices.push_back(glm::vec3(origin.x + span, origin.y, origin.z + p));
 
-            lineVertices.push_back(glm::vec3(p, 0.0f, -span));
-            lineVertices.push_back(glm::vec3(p, 0.0f, span));
+            lineVertices.push_back(glm::vec3(origin.x + p, origin.y, origin.z - span));
+            lineVertices.push_back(glm::vec3(origin.x + p, origin.y, origin.z + span));
         }
 
         if (lineVertices.empty())
@@ -431,7 +449,10 @@ namespace ds
             lineVertices.data(),
             GL_DYNAMIC_DRAW);
 
-        glLineWidth(1.0f);
+        float widthRange[2] = {1.0f, 1.0f};
+        glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, widthRange);
+        const float requestedLineWidth = std::clamp(settings.gridLineWidth, widthRange[0], widthRange[1]);
+        glLineWidth(requestedLineWidth);
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
 
         glBindVertexArray(0);

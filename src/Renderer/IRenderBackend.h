@@ -16,6 +16,8 @@ namespace ds
         bool drawGrid = true;
         int gridHalfExtent = 12;
         float gridSpacing = 1.0f;
+        float gridLineWidth = 1.0f;
+        glm::vec3 gridOrigin = glm::vec3(0.0f, 0.0f, 0.0f);
         glm::vec3 gridColor = glm::vec3(0.36f, 0.39f, 0.45f);
         float gridOpacity = 0.50f;
 
@@ -27,6 +29,8 @@ namespace ds
         bool overrideAtomColor = false;
         glm::vec3 atomOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
         float atomBrightness = 1.0f;
+        bool atomWireframe = false;
+        float atomWireframeWidth = 1.0f;
     };
 
     class IRenderBackend

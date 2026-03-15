@@ -177,6 +177,27 @@ namespace ds
         RecalculateProjection();
     }
 
+    void OrbitCamera::SetOrbitState(const glm::vec3 &target, float distance, float yaw, float pitch)
+    {
+        m_Target = target;
+
+        if (distance < 0.5f)
+            distance = 0.5f;
+        if (distance > 250.0f)
+            distance = 250.0f;
+        m_Distance = distance;
+
+        m_Yaw = yaw;
+        m_Pitch = pitch;
+        const float limit = glm::half_pi<float>() - 0.05f;
+        if (m_Pitch > limit)
+            m_Pitch = limit;
+        if (m_Pitch < -limit)
+            m_Pitch = -limit;
+
+        RecalculateView();
+    }
+
     void OrbitCamera::RecalculateProjection()
     {
         const float aspect = m_ViewportWidth / m_ViewportHeight;
