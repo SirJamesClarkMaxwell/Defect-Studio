@@ -28,8 +28,8 @@
 - [x] 3D viewport and camera controls (Blender-like baseline)
 
 ### [ ] T04 - Data model + POSCAR/CONTCAR import/export (`task/04-vasp-io-structure`)
-- [ ] Structure/Atom/Bond data model
-- [ ] POSCAR/CONTCAR parser (VASP5/6 symbols line, selective dynamics)
+- [ ] Structure/Atom/Bond data model (Structure/Atom skeleton started)
+- [ ] POSCAR/CONTCAR parser (VASP5/6 symbols line, selective dynamics) (POSCAR parser skeleton started)
 - [ ] Export with precision and Direct/Cartesian options
 - [ ] Original-state restore support
 
@@ -66,4 +66,4 @@
 
 ## Current focus
 - Active task: **T04 - Data model + POSCAR/CONTCAR import/export**
-- Active branch: **task/03-renderer-opengl**
+- Active branch: **task/04-vasp-io-structure**
