@@ -362,8 +362,81 @@ namespace ds
         return found;
     }
 
+    void EditorLayer::SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection)
+    {
+        if (!m_Camera || !m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            return;
+        }
+
+        const float left = std::min(screenStart.x, screenEnd.x);
+        const float right = std::max(screenStart.x, screenEnd.x);
+        const float top = std::min(screenStart.y, screenEnd.y);
+        const float bottom = std::max(screenStart.y, screenEnd.y);
+
+        if (!additiveSelection)
+        {
+            m_SelectedAtomIndices.clear();
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        std::size_t addedCount = 0;
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return;
+        }
+
+        for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
+        {
+            glm::vec3 center = m_WorkingStructure.atoms[i].position;
+            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+            {
+                center = m_WorkingStructure.DirectToCartesian(center);
+            }
+
+            const glm::vec4 clip = viewProjection * glm::vec4(center, 1.0f);
+            if (clip.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f || ndc.z < -1.0f || ndc.z > 1.0f)
+            {
+                continue;
+            }
+
+            const float screenX = m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width;
+            const float screenY = m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height;
+
+            if (screenX >= left && screenX <= right && screenY >= top && screenY <= bottom)
+            {
+                if (!IsAtomSelected(i))
+                {
+                    m_SelectedAtomIndices.push_back(i);
+                    ++addedCount;
+                }
+            }
+        }
+
+        AppendSelectionDebugLog(
+            "Box selection: rect=(" + std::to_string(left) + "," + std::to_string(top) + ")-" +
+            "(" + std::to_string(right) + "," + std::to_string(bottom) + ")" +
+            " additive=" + (additiveSelection ? std::string("1") : std::string("0")) +
+            " selected=" + std::to_string(m_SelectedAtomIndices.size()) +
+            " added=" + std::to_string(addedCount));
+    }
+
     void EditorLayer::HandleViewportSelection()
     {
+        if (m_BoxSelectArmed)
+        {
+            return;
+        }
+
         const ImGuiIO &io = ImGui::GetIO();
         if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
@@ -1300,6 +1373,20 @@ namespace ds
             ToggleInteractionMode();
         }
 
+        if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_B, false))
+        {
+            m_BoxSelectArmed = true;
+            m_BoxSelecting = false;
+            AppendSelectionDebugLog("Box select armed (press LMB and drag)");
+        }
+
+        if (m_BoxSelectArmed && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        {
+            m_BoxSelectArmed = false;
+            m_BoxSelecting = false;
+            AppendSelectionDebugLog("Box select canceled with Escape");
+        }
+
         ImVec2 size = ImGui::GetContentRegionAvail();
         if (size.x < 1.0f)
             size.x = 1.0f;
@@ -1318,6 +1405,123 @@ namespace ds
                 const ImVec2 rectMax = ImGui::GetItemRectMax();
                 m_ViewportRectMin = glm::vec2(rectMin.x, rectMin.y);
                 m_ViewportRectMax = glm::vec2(rectMax.x, rectMax.y);
+
+                if (ImGui::BeginPopupContextItem("ViewportSelectionContext", ImGuiPopupFlags_MouseButtonRight))
+                {
+                    const bool hasLoadedAtoms = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
+
+                    if (ImGui::MenuItem("Select All", nullptr, false, hasLoadedAtoms))
+                    {
+                        m_SelectedAtomIndices.clear();
+                        m_SelectedAtomIndices.reserve(m_WorkingStructure.atoms.size());
+                        for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
+                        {
+                            m_SelectedAtomIndices.push_back(i);
+                        }
+                        AppendSelectionDebugLog("Context menu: Select All");
+                    }
+
+                    if (ImGui::MenuItem("Clear Selection", nullptr, false, !m_SelectedAtomIndices.empty()))
+                    {
+                        m_SelectedAtomIndices.clear();
+                        AppendSelectionDebugLog("Context menu: Clear Selection");
+                    }
+
+                    if (ImGui::MenuItem("Invert Selection", nullptr, false, hasLoadedAtoms))
+                    {
+                        std::vector<std::size_t> inverted;
+                        inverted.reserve(m_WorkingStructure.atoms.size());
+                        for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
+                        {
+                            if (!IsAtomSelected(i))
+                            {
+                                inverted.push_back(i);
+                            }
+                        }
+                        m_SelectedAtomIndices = std::move(inverted);
+                        AppendSelectionDebugLog("Context menu: Invert Selection");
+                    }
+
+                    if (ImGui::MenuItem("Frame Selected", nullptr, false, !m_SelectedAtomIndices.empty() && m_Camera))
+                    {
+                        glm::vec3 boundsMin(std::numeric_limits<float>::max());
+                        glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+
+                        for (std::size_t atomIndex : m_SelectedAtomIndices)
+                        {
+                            if (atomIndex >= m_WorkingStructure.atoms.size())
+                            {
+                                continue;
+                            }
+
+                            glm::vec3 position = m_WorkingStructure.atoms[atomIndex].position;
+                            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+                            {
+                                position = m_WorkingStructure.DirectToCartesian(position);
+                            }
+
+                            boundsMin = glm::min(boundsMin, position);
+                            boundsMax = glm::max(boundsMax, position);
+                        }
+
+                        m_Camera->FrameBounds(boundsMin, boundsMax);
+                        AppendSelectionDebugLog("Context menu: Frame Selected");
+                    }
+
+                    ImGui::EndPopup();
+                }
+
+                if (m_BoxSelectArmed && m_InteractionMode == InteractionMode::Select && m_ViewportFocused)
+                {
+                    const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
+                    const bool insideViewport =
+                        mousePos.x >= m_ViewportRectMin.x && mousePos.x <= m_ViewportRectMax.x &&
+                        mousePos.y >= m_ViewportRectMin.y && mousePos.y <= m_ViewportRectMax.y;
+
+                    if (!m_BoxSelecting && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && insideViewport)
+                    {
+                        m_BoxSelecting = true;
+                        m_BoxSelectStart = mousePos;
+                        m_BoxSelectEnd = mousePos;
+                        AppendSelectionDebugLog("Box select drag started");
+                    }
+
+                    if (m_BoxSelecting)
+                    {
+                        if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                        {
+                            m_BoxSelectEnd = mousePos;
+                        }
+                        else
+                        {
+                            m_BoxSelectEnd = mousePos;
+                            SelectAtomsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, io.KeyCtrl);
+                            m_BoxSelecting = false;
+                            m_BoxSelectArmed = false;
+                            AppendSelectionDebugLog("Box select drag finished");
+                        }
+                    }
+
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                    {
+                        m_BoxSelecting = false;
+                        m_BoxSelectArmed = false;
+                        AppendSelectionDebugLog("Box select canceled with RMB");
+                    }
+                }
+
+                if (m_BoxSelecting)
+                {
+                    ImDrawList *drawList = ImGui::GetWindowDrawList();
+                    const ImVec2 rectA(
+                        std::min(m_BoxSelectStart.x, m_BoxSelectEnd.x),
+                        std::min(m_BoxSelectStart.y, m_BoxSelectEnd.y));
+                    const ImVec2 rectB(
+                        std::max(m_BoxSelectStart.x, m_BoxSelectEnd.x),
+                        std::max(m_BoxSelectStart.y, m_BoxSelectEnd.y));
+                    drawList->AddRectFilled(rectA, rectB, IM_COL32(85, 160, 255, 40));
+                    drawList->AddRect(rectA, rectB, IM_COL32(95, 185, 255, 220), 0.0f, 0, 1.5f);
+                }
             }
             else
             {
@@ -1334,6 +1538,7 @@ namespace ds
         }
 
         HandleViewportSelection();
+
         ImGui::End();
 
         ImGui::Begin("Viewport Info");
@@ -1534,7 +1739,8 @@ namespace ds
 
         ImGui::Separator();
         ImGui::Text("Selection: %zu atoms", m_SelectedAtomIndices.size());
-        ImGui::TextUnformatted("LMB: select | Ctrl+LMB: add/remove");
+        ImGui::TextUnformatted("LMB: select | Ctrl+LMB: add/remove | B+LMB drag: box select");
+        ImGui::TextUnformatted("RMB on viewport: selection context menu");
         if (ImGui::Button("Clear selection"))
         {
             m_SelectedAtomIndices.clear();

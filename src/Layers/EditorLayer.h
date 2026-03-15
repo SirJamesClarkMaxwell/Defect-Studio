@@ -61,6 +61,7 @@ namespace ds
         bool IsAtomSelected(std::size_t index) const;
         void ToggleInteractionMode();
         void HandleViewportSelection();
+        void SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
         void AppendSelectionDebugLog(const std::string &message) const;
         bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
 
@@ -98,6 +99,10 @@ namespace ds
         glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);
         float m_SelectionOutlineThickness = 2.0f;
         bool m_SelectionDebugToFile = true;
+        bool m_BoxSelectArmed = false;
+        bool m_BoxSelecting = false;
+        glm::vec2 m_BoxSelectStart = glm::vec2(0.0f, 0.0f);
+        glm::vec2 m_BoxSelectEnd = glm::vec2(0.0f, 0.0f);
 
         bool m_HasPersistedCameraState = false;
         glm::vec3 m_CameraTargetPersisted = glm::vec3(0.0f, 0.0f, 0.0f);

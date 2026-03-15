@@ -47,12 +47,7 @@
 - [ ] Collections system (Blender-like outliner groups, visibility/lock/select toggles)
 - [ ] Clean view + cell edge toggle
 
-### [ ] T07 - Volumetrics MVP (`task/07-volumetrics-mvp`)
-- [ ] CHG/CHGCAR/PARCHG parser (FFT ordering)
-- [ ] Multi-block support
-- [ ] Iso-surface controls incl. dual iso mode
-
-### [ ] T08 - UI panels and UX polishing (`task/08-ui-panels-ux`)
+### [ ] T07 - UI panels and UX polishing (`task/08-ui-panels-ux`)
 - [ ] Dockspace + tool panels
 - [x] Viewport settings panel: background, grid, lighting, projection mode, atom color override
 - [x] File dialogs with fallback path
@@ -61,9 +56,15 @@
 - [x] Persist ImGui dock/panel layout across runs
 - [ ] Toggles, profiler integration, config defaults
 
-### [ ] T09 - Offscreen render and F12 pipeline (`task/09-offscreen-render`)
+### [ ] T08 - Offscreen render and F12 pipeline (`task/09-offscreen-render`)
 - [ ] Render dialog and camera frame preview
 - [ ] Offscreen render to PNG/JPG at chosen resolution
+
+### [ ] T09 - Volumetrics MVP (`task/07-volumetrics-mvp`)
+- [ ] CHG/CHGCAR/PARCHG parser (FFT ordering)
+- [ ] Multi-block support
+- [ ] Iso-surface controls incl. dual iso mode
+
 
 ### [ ] T10 - Tests, samples, docs (`task/10-tests-docs`)
 - [ ] Parser unit tests + POSCAR round-trip
