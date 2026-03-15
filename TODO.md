@@ -27,11 +27,11 @@
 - [x] Shader system with per-file shaders in `assets/shaders`
 - [x] 3D viewport and camera controls (Blender-like baseline)
 
-### [ ] T04 - Data model + POSCAR/CONTCAR import/export (`task/04-vasp-io-structure`)
-- [ ] Structure/Atom/Bond data model (Structure/Atom skeleton started)
-- [ ] POSCAR/CONTCAR parser (VASP5/6 symbols line, selective dynamics) (POSCAR parser skeleton started)
-- [ ] Export with precision and Direct/Cartesian options
-- [ ] Original-state restore support
+### [x] T04 - Data model + POSCAR/CONTCAR import/export (`task/04-vasp-io-structure`)
+- [x] Structure/Atom/Bond data model (Structure/Atom skeleton started)
+- [x] POSCAR/CONTCAR parser (VASP5/6 symbols line, selective dynamics) (POSCAR parser skeleton started)
+- [x] Export with precision and Direct/Cartesian options
+- [x] Original-state restore support
 
 ### [ ] T05 - Atom rendering, selection, gizmo (`task/05-editor-selection-gizmo`)
 - [ ] Instanced atom rendering
@@ -65,5 +65,5 @@
 - [ ] README (build/run/controls)
 
 ## Current focus
-- Active task: **T04 - Data model + POSCAR/CONTCAR import/export**
+- Active task: **T04 - Data model + POSCAR/CONTCAR import/export (ready for review/commit)**
 - Active branch: **task/04-vasp-io-structure**

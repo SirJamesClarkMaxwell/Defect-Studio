@@ -2,9 +2,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <utility>
+
+#include <glm/gtc/matrix_inverse.hpp>
 
 namespace ds
 {
@@ -90,13 +94,20 @@ namespace ds
             return false;
         }
 
+        float rawScale = 1.0f;
         {
             std::istringstream scaleStream(line);
-            if (!(scaleStream >> structure.scale))
+            if (!(scaleStream >> rawScale))
             {
                 error = "Invalid scale factor line";
                 return false;
             }
+        }
+
+        if (std::abs(rawScale) <= std::numeric_limits<float>::epsilon())
+        {
+            error = "Scale factor cannot be zero";
+            return false;
         }
 
         for (int i = 0; i < 3; ++i)
@@ -107,6 +118,28 @@ namespace ds
                 return false;
             }
         }
+
+        float latticeScaleFactor = rawScale;
+        if (rawScale < 0.0f)
+        {
+            const glm::mat3 unscaledLattice(structure.lattice[0], structure.lattice[1], structure.lattice[2]);
+            const float unscaledVolume = std::abs(glm::determinant(unscaledLattice));
+            if (unscaledVolume <= std::numeric_limits<float>::epsilon())
+            {
+                error = "Lattice volume is zero, cannot apply negative scale factor";
+                return false;
+            }
+
+            const float targetVolume = -rawScale;
+            latticeScaleFactor = std::cbrt(targetVolume / unscaledVolume);
+        }
+
+        for (glm::vec3 &vector : structure.lattice)
+        {
+            vector *= latticeScaleFactor;
+        }
+
+        structure.scale = 1.0f;
 
         if (!std::getline(stream, line))
         {
@@ -138,7 +171,14 @@ namespace ds
             {
                 try
                 {
-                    structure.counts.push_back(std::stoi(token));
+                    const int count = std::stoi(token);
+                    if (count < 0)
+                    {
+                        error = "Element count cannot be negative: " + token;
+                        return false;
+                    }
+
+                    structure.counts.push_back(count);
                 }
                 catch (...)
                 {
@@ -233,6 +273,11 @@ namespace ds
                 {
                     error = "Invalid atom coordinates";
                     return false;
+                }
+
+                if (structure.coordinateMode == CoordinateMode::Cartesian)
+                {
+                    atom.position *= latticeScaleFactor;
                 }
 
                 if (hasSelectiveDynamics && tokens.size() >= 6)

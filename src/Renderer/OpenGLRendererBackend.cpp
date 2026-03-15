@@ -5,7 +5,11 @@
 #include <glad/gl.h>
 
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
+
+#include <algorithm>
+#include <vector>
 
 namespace ds
 {
@@ -145,12 +149,30 @@ namespace ds
 
         glGenVertexArrays(1, &m_VAO);
         glGenBuffers(1, &m_VBO);
+        glGenBuffers(1, &m_InstanceVBO);
+        glGenBuffers(1, &m_InstanceColorVBO);
 
         glBindVertexArray(m_VAO);
         glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
         glBufferData(GL_ARRAY_BUFFER, sizeof(kDemoGeometry), kDemoGeometry, GL_STATIC_DRAW);
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), reinterpret_cast<void *>(0));
+
+        glBindBuffer(GL_ARRAY_BUFFER, m_InstanceVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::mat4), nullptr, GL_DYNAMIC_DRAW);
+        const std::size_t matrixVectorSize = sizeof(glm::vec4);
+        for (int i = 0; i < 4; ++i)
+        {
+            glEnableVertexAttribArray(1 + i);
+            glVertexAttribPointer(1 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), reinterpret_cast<void *>(i * matrixVectorSize));
+            glVertexAttribDivisor(1 + i, 1);
+        }
+
+        glBindBuffer(GL_ARRAY_BUFFER, m_InstanceColorVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(5);
+        glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), reinterpret_cast<void *>(0));
+        glVertexAttribDivisor(5, 1);
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
@@ -168,6 +190,18 @@ namespace ds
         {
             glDeleteBuffers(1, &m_VBO);
             m_VBO = 0;
+        }
+
+        if (m_InstanceVBO != 0)
+        {
+            glDeleteBuffers(1, &m_InstanceVBO);
+            m_InstanceVBO = 0;
+        }
+
+        if (m_InstanceColorVBO != 0)
+        {
+            glDeleteBuffers(1, &m_InstanceColorVBO);
+            m_InstanceColorVBO = 0;
         }
 
         if (m_VAO != 0)
@@ -255,11 +289,6 @@ namespace ds
 
     void OpenGLRendererBackend::RenderDemoScene(const glm::mat4 &viewProjection)
     {
-        m_Shader.Bind();
-        m_Shader.SetMat4("u_ViewProjection", viewProjection);
-
-        glBindVertexArray(m_VAO);
-
         const glm::vec3 colors[] = {
             glm::vec3(0.44f, 0.76f, 0.97f),
             glm::vec3(0.98f, 0.66f, 0.35f),
@@ -270,15 +299,62 @@ namespace ds
             glm::vec3(0.0f, 0.0f, 0.0f),
             glm::vec3(2.2f, 0.0f, 0.0f)};
 
+        std::vector<glm::vec3> demoPositions;
+        std::vector<glm::vec3> demoColors;
+        demoPositions.reserve(3);
+        demoColors.reserve(3);
+
         for (int i = 0; i < 3; ++i)
         {
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), positions[i]);
-            model = glm::scale(model, glm::vec3(0.6f));
-
-            m_Shader.SetMat4("u_Model", model);
-            m_Shader.SetFloat3("u_AtomColor", colors[i]);
-            glDrawArrays(GL_TRIANGLES, 0, 36);
+            demoPositions.push_back(positions[i]);
+            demoColors.push_back(colors[i]);
         }
+
+        RenderAtomsScene(viewProjection, demoPositions, demoColors, 0.6f);
+    }
+
+    void OpenGLRendererBackend::RenderAtomsScene(
+        const glm::mat4 &viewProjection,
+        const std::vector<glm::vec3> &atomPositions,
+        const std::vector<glm::vec3> &atomColors,
+        float atomScale)
+    {
+        const std::size_t instanceCount = std::min(atomPositions.size(), atomColors.size());
+        if (instanceCount == 0)
+        {
+            return;
+        }
+
+        std::vector<glm::mat4> instanceModels;
+        instanceModels.reserve(instanceCount);
+
+        for (std::size_t i = 0; i < instanceCount; ++i)
+        {
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), atomPositions[i]);
+            model = glm::scale(model, glm::vec3(atomScale));
+            instanceModels.push_back(model);
+        }
+
+        m_Shader.Bind();
+        m_Shader.SetMat4("u_ViewProjection", viewProjection);
+
+        glBindVertexArray(m_VAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, m_InstanceVBO);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(instanceModels.size() * sizeof(glm::mat4)),
+            instanceModels.data(),
+            GL_DYNAMIC_DRAW);
+
+        glBindBuffer(GL_ARRAY_BUFFER, m_InstanceColorVBO);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(instanceCount * sizeof(glm::vec3)),
+            atomColors.data(),
+            GL_DYNAMIC_DRAW);
+
+        glDrawArraysInstanced(GL_TRIANGLES, 0, 36, static_cast<GLsizei>(instanceCount));
 
         glBindVertexArray(0);
     }

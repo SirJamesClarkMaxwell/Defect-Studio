@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include <glm/mat3x3.hpp>
 #include <glm/vec3.hpp>
 
 namespace ds
@@ -39,6 +40,16 @@ namespace ds
 
         CoordinateMode coordinateMode = CoordinateMode::Direct;
         std::vector<Atom> atoms;
+
+        int GetAtomCount() const;
+        bool HasSelectiveDynamics() const;
+
+        glm::mat3 LatticeMatrix() const;
+        glm::vec3 DirectToCartesian(const glm::vec3 &directPosition) const;
+        glm::vec3 CartesianToDirect(const glm::vec3 &cartesianPosition) const;
+
+        bool ConvertAtomsTo(CoordinateMode targetMode, std::string &error);
+        void RebuildSpeciesFromAtoms();
     };
 
 } // namespace ds

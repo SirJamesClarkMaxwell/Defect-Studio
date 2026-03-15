@@ -4,6 +4,9 @@
 #include "Renderer/Shader.h"
 
 #include <cstdint>
+#include <vector>
+
+#include <glm/vec3.hpp>
 
 namespace ds
 {
@@ -20,6 +23,11 @@ namespace ds
         void ResizeViewport(std::uint32_t width, std::uint32_t height) override;
         void BeginFrame() override;
         void RenderDemoScene(const glm::mat4 &viewProjection) override;
+        void RenderAtomsScene(
+            const glm::mat4 &viewProjection,
+            const std::vector<glm::vec3> &atomPositions,
+            const std::vector<glm::vec3> &atomColors,
+            float atomScale) override;
         void EndFrame() override;
 
         std::uint32_t GetColorAttachmentRendererID() const override { return m_ColorTexture; }
@@ -36,6 +44,8 @@ namespace ds
 
         std::uint32_t m_VAO = 0;
         std::uint32_t m_VBO = 0;
+        std::uint32_t m_InstanceVBO = 0;
+        std::uint32_t m_InstanceColorVBO = 0;
 
         std::uint32_t m_ViewportWidth = 1;
         std::uint32_t m_ViewportHeight = 1;
