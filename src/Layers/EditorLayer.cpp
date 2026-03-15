@@ -109,7 +109,7 @@ namespace ds
     EditorLayer::EditorLayer()
         : Layer("EditorLayer")
     {
-        const char *defaultImportPath = "assets/samples/POSCAR_Si2.vasp";
+        const char *defaultImportPath = "assets/samples/POSCAR";
         const char *defaultExportPath = "exports/CONTCAR.vasp";
 
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultImportPath);

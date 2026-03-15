@@ -9,6 +9,8 @@
 
 #include <GLFW/glfw3.h>
 
+#include <filesystem>
+
 namespace ds
 {
 
@@ -24,6 +26,9 @@ namespace ds
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
+        std::filesystem::create_directories("config");
+        io.IniFilename = "config/imgui_layout.ini";
+
         ImGui::StyleColorsDark();
 
         GLFWwindow *window = ApplicationContext::Get().GetWindow();
@@ -36,6 +41,7 @@ namespace ds
     void ImGuiLayer::OnDetach()
     {
         LogInfo("ImGui layer shutdown");
+        ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
