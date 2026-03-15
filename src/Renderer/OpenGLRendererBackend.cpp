@@ -5,10 +5,14 @@
 #include <glad/gl.h>
 
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace ds
@@ -16,122 +20,65 @@ namespace ds
 
     namespace
     {
-        constexpr float kDemoGeometry[] = {
-            // back
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            // front
-            -1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            // left
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            // right
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            // bottom
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
-            -1.0f,
-            -1.0f,
-            // top
-            -1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            1.0f,
-            -1.0f,
-            1.0f,
-            -1.0f,
+        struct SphereVertex
+        {
+            glm::vec3 position;
+            glm::vec3 normal;
         };
+
+        void BuildSphereMesh(std::vector<SphereVertex> &outVertices, std::vector<std::uint32_t> &outIndices)
+        {
+            constexpr int stacks = 20;
+            constexpr int slices = 28;
+
+            outVertices.clear();
+            outIndices.clear();
+            outVertices.reserve(static_cast<std::size_t>((stacks + 1) * (slices + 1)));
+            outIndices.reserve(static_cast<std::size_t>(stacks * slices * 6));
+
+            constexpr float pi = 3.1415926535f;
+
+            for (int stack = 0; stack <= stacks; ++stack)
+            {
+                const float v = static_cast<float>(stack) / static_cast<float>(stacks);
+                const float phi = v * pi;
+                const float y = std::cos(phi);
+                const float ringRadius = std::sin(phi);
+
+                for (int slice = 0; slice <= slices; ++slice)
+                {
+                    const float u = static_cast<float>(slice) / static_cast<float>(slices);
+                    const float theta = u * 2.0f * pi;
+
+                    glm::vec3 position(
+                        ringRadius * std::cos(theta),
+                        y,
+                        ringRadius * std::sin(theta));
+
+                    outVertices.push_back({position, glm::normalize(position)});
+                }
+            }
+
+            const int stride = slices + 1;
+            for (int stack = 0; stack < stacks; ++stack)
+            {
+                for (int slice = 0; slice < slices; ++slice)
+                {
+                    const std::uint32_t i0 = static_cast<std::uint32_t>(stack * stride + slice);
+                    const std::uint32_t i1 = static_cast<std::uint32_t>(i0 + 1);
+                    const std::uint32_t i2 = static_cast<std::uint32_t>(i0 + stride);
+                    const std::uint32_t i3 = static_cast<std::uint32_t>(i2 + 1);
+
+                    outIndices.push_back(i0);
+                    outIndices.push_back(i2);
+                    outIndices.push_back(i1);
+
+                    outIndices.push_back(i1);
+                    outIndices.push_back(i2);
+                    outIndices.push_back(i3);
+                }
+            }
+        }
     }
 
     OpenGLRendererBackend::~OpenGLRendererBackend()
@@ -149,14 +96,34 @@ namespace ds
 
         glGenVertexArrays(1, &m_VAO);
         glGenBuffers(1, &m_VBO);
+        glGenBuffers(1, &m_EBO);
         glGenBuffers(1, &m_InstanceVBO);
         glGenBuffers(1, &m_InstanceColorVBO);
 
+        std::vector<SphereVertex> sphereVertices;
+        std::vector<std::uint32_t> sphereIndices;
+        BuildSphereMesh(sphereVertices, sphereIndices);
+        m_IndexCount = static_cast<std::uint32_t>(sphereIndices.size());
+
         glBindVertexArray(m_VAO);
         glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(kDemoGeometry), kDemoGeometry, GL_STATIC_DRAW);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(sphereVertices.size() * sizeof(SphereVertex)),
+            sphereVertices.data(),
+            GL_STATIC_DRAW);
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), reinterpret_cast<void *>(0));
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), reinterpret_cast<void *>(offsetof(SphereVertex, position)));
+
+        glEnableVertexAttribArray(6);
+        glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), reinterpret_cast<void *>(offsetof(SphereVertex, normal)));
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO);
+        glBufferData(
+            GL_ELEMENT_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(sphereIndices.size() * sizeof(std::uint32_t)),
+            sphereIndices.data(),
+            GL_STATIC_DRAW);
 
         glBindBuffer(GL_ARRAY_BUFFER, m_InstanceVBO);
         glBufferData(GL_ARRAY_BUFFER, sizeof(glm::mat4), nullptr, GL_DYNAMIC_DRAW);
@@ -190,6 +157,12 @@ namespace ds
         {
             glDeleteBuffers(1, &m_VBO);
             m_VBO = 0;
+        }
+
+        if (m_EBO != 0)
+        {
+            glDeleteBuffers(1, &m_EBO);
+            m_EBO = 0;
         }
 
         if (m_InstanceVBO != 0)
@@ -320,7 +293,7 @@ namespace ds
         float atomScale)
     {
         const std::size_t instanceCount = std::min(atomPositions.size(), atomColors.size());
-        if (instanceCount == 0)
+        if (instanceCount == 0 || m_IndexCount == 0)
         {
             return;
         }
@@ -337,6 +310,7 @@ namespace ds
 
         m_Shader.Bind();
         m_Shader.SetMat4("u_ViewProjection", viewProjection);
+        m_Shader.SetFloat3("u_LightDirection", glm::normalize(glm::vec3(-0.6f, -1.0f, -0.45f)));
 
         glBindVertexArray(m_VAO);
 
@@ -354,7 +328,12 @@ namespace ds
             atomColors.data(),
             GL_DYNAMIC_DRAW);
 
-        glDrawArraysInstanced(GL_TRIANGLES, 0, 36, static_cast<GLsizei>(instanceCount));
+        glDrawElementsInstanced(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(m_IndexCount),
+            GL_UNSIGNED_INT,
+            nullptr,
+            static_cast<GLsizei>(instanceCount));
 
         glBindVertexArray(0);
     }

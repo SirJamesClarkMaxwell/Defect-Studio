@@ -44,8 +44,10 @@ namespace ds
 
         std::uint32_t m_VAO = 0;
         std::uint32_t m_VBO = 0;
+        std::uint32_t m_EBO = 0;
         std::uint32_t m_InstanceVBO = 0;
         std::uint32_t m_InstanceColorVBO = 0;
+        std::uint32_t m_IndexCount = 0;
 
         std::uint32_t m_ViewportWidth = 1;
         std::uint32_t m_ViewportHeight = 1;

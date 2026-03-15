@@ -34,7 +34,7 @@
 - [x] Original-state restore support
 
 ### [ ] T05 - Atom rendering, selection, gizmo (`task/05-editor-selection-gizmo`)
-- [ ] Instanced atom rendering
+- [x] Instanced atom rendering
 - [ ] Click/multi-select
 - [ ] Box select (`B`) and RMB context menu actions
 - [ ] ImGuizmo transform for selected atoms
