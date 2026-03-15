@@ -114,6 +114,12 @@ namespace ds
 
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultImportPath);
         std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", defaultExportPath);
+
+        m_SceneSettings.clearColor = glm::vec3(0.16f, 0.18f, 0.22f);
+        m_SceneSettings.gridColor = glm::vec3(0.38f, 0.42f, 0.50f);
+        m_SceneSettings.ambientStrength = 0.58f;
+        m_SceneSettings.diffuseStrength = 0.78f;
+        m_SceneSettings.atomBrightness = 1.15f;
     }
 
     void EditorLayer::OnAttach()
@@ -130,6 +136,7 @@ namespace ds
 
         m_Camera = std::make_unique<OrbitCamera>();
         m_Camera->SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
+        m_Camera->SetProjectionMode(m_ProjectionModeIndex == 0 ? OrbitCamera::ProjectionMode::Perspective : OrbitCamera::ProjectionMode::Orthographic);
         ApplyCameraSensitivity();
 
         LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)));
@@ -159,7 +166,7 @@ namespace ds
         m_Camera->OnUpdate(deltaTime, allowCameraInput, allowCameraInput ? scrollDelta : 0.0f);
 
         m_RenderBackend->ResizeViewport(static_cast<std::uint32_t>(m_ViewportSize.x), static_cast<std::uint32_t>(m_ViewportSize.y));
-        m_RenderBackend->BeginFrame();
+        m_RenderBackend->BeginFrame(m_SceneSettings);
         if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
         {
             std::vector<glm::vec3> atomPositions;
@@ -179,11 +186,11 @@ namespace ds
                 atomColors.push_back(ColorFromElement(atom.element));
             }
 
-            m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), atomPositions, atomColors, 0.30f);
+            m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), atomPositions, atomColors, m_SceneSettings);
         }
         else
         {
-            m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix());
+            m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix(), m_SceneSettings);
         }
         m_RenderBackend->EndFrame();
     }
@@ -483,6 +490,215 @@ namespace ds
                 hasSensitivityMode = true;
                 relativeSensitivity = (value == "relative_v2");
             }
+            else if (key == "viewport_bg_r")
+            {
+                try
+                {
+                    m_SceneSettings.clearColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bg_g")
+            {
+                try
+                {
+                    m_SceneSettings.clearColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bg_b")
+            {
+                try
+                {
+                    m_SceneSettings.clearColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_enabled")
+            {
+                m_SceneSettings.drawGrid = (value == "1");
+            }
+            else if (key == "viewport_grid_extent")
+            {
+                try
+                {
+                    m_SceneSettings.gridHalfExtent = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_spacing")
+            {
+                try
+                {
+                    m_SceneSettings.gridSpacing = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_color_r")
+            {
+                try
+                {
+                    m_SceneSettings.gridColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_color_g")
+            {
+                try
+                {
+                    m_SceneSettings.gridColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_color_b")
+            {
+                try
+                {
+                    m_SceneSettings.gridColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_grid_opacity")
+            {
+                try
+                {
+                    m_SceneSettings.gridOpacity = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_dir_x")
+            {
+                try
+                {
+                    m_SceneSettings.lightDirection.x = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_dir_y")
+            {
+                try
+                {
+                    m_SceneSettings.lightDirection.y = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_dir_z")
+            {
+                try
+                {
+                    m_SceneSettings.lightDirection.z = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_ambient")
+            {
+                try
+                {
+                    m_SceneSettings.ambientStrength = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_diffuse")
+            {
+                try
+                {
+                    m_SceneSettings.diffuseStrength = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_atom_scale")
+            {
+                try
+                {
+                    m_SceneSettings.atomScale = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_atom_override")
+            {
+                m_SceneSettings.overrideAtomColor = (value == "1");
+            }
+            else if (key == "viewport_atom_override_r")
+            {
+                try
+                {
+                    m_SceneSettings.atomOverrideColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_atom_override_g")
+            {
+                try
+                {
+                    m_SceneSettings.atomOverrideColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_atom_override_b")
+            {
+                try
+                {
+                    m_SceneSettings.atomOverrideColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_atom_brightness")
+            {
+                try
+                {
+                    m_SceneSettings.atomBrightness = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_projection_mode")
+            {
+                try
+                {
+                    m_ProjectionModeIndex = std::stoi(value);
+                }
+                catch (...)
+                {
+                    m_ProjectionModeIndex = 0;
+                }
+            }
         }
 
         if (!hasSensitivityMode || !relativeSensitivity)
@@ -499,6 +715,11 @@ namespace ds
             m_CameraPanSensitivity = 0.05f;
         if (m_CameraZoomSensitivity < 0.05f)
             m_CameraZoomSensitivity = 0.05f;
+
+        if (m_ProjectionModeIndex < 0)
+            m_ProjectionModeIndex = 0;
+        if (m_ProjectionModeIndex > 1)
+            m_ProjectionModeIndex = 1;
     }
 
     void EditorLayer::SaveSettings() const
@@ -521,6 +742,28 @@ namespace ds
         out << "camera_pan_sensitivity=" << m_CameraPanSensitivity << '\n';
         out << "camera_zoom_sensitivity=" << m_CameraZoomSensitivity << '\n';
         out << "camera_sensitivity_mode=relative_v2" << '\n';
+        out << "viewport_bg_r=" << m_SceneSettings.clearColor.r << '\n';
+        out << "viewport_bg_g=" << m_SceneSettings.clearColor.g << '\n';
+        out << "viewport_bg_b=" << m_SceneSettings.clearColor.b << '\n';
+        out << "viewport_grid_enabled=" << (m_SceneSettings.drawGrid ? "1" : "0") << '\n';
+        out << "viewport_grid_extent=" << m_SceneSettings.gridHalfExtent << '\n';
+        out << "viewport_grid_spacing=" << m_SceneSettings.gridSpacing << '\n';
+        out << "viewport_grid_color_r=" << m_SceneSettings.gridColor.r << '\n';
+        out << "viewport_grid_color_g=" << m_SceneSettings.gridColor.g << '\n';
+        out << "viewport_grid_color_b=" << m_SceneSettings.gridColor.b << '\n';
+        out << "viewport_grid_opacity=" << m_SceneSettings.gridOpacity << '\n';
+        out << "viewport_light_dir_x=" << m_SceneSettings.lightDirection.x << '\n';
+        out << "viewport_light_dir_y=" << m_SceneSettings.lightDirection.y << '\n';
+        out << "viewport_light_dir_z=" << m_SceneSettings.lightDirection.z << '\n';
+        out << "viewport_light_ambient=" << m_SceneSettings.ambientStrength << '\n';
+        out << "viewport_light_diffuse=" << m_SceneSettings.diffuseStrength << '\n';
+        out << "viewport_atom_scale=" << m_SceneSettings.atomScale << '\n';
+        out << "viewport_atom_override=" << (m_SceneSettings.overrideAtomColor ? "1" : "0") << '\n';
+        out << "viewport_atom_override_r=" << m_SceneSettings.atomOverrideColor.r << '\n';
+        out << "viewport_atom_override_g=" << m_SceneSettings.atomOverrideColor.g << '\n';
+        out << "viewport_atom_override_b=" << m_SceneSettings.atomOverrideColor.b << '\n';
+        out << "viewport_atom_brightness=" << m_SceneSettings.atomBrightness << '\n';
+        out << "viewport_projection_mode=" << m_ProjectionModeIndex << '\n';
     }
 
     void EditorLayer::OnImGuiRender()
@@ -588,6 +831,10 @@ namespace ds
                 {
                     settingsChanged = true;
                 }
+                if (ImGui::MenuItem("Viewport Settings", nullptr, &m_ViewportSettingsOpen))
+                {
+                    settingsChanged = true;
+                }
                 ImGui::EndMenu();
             }
 
@@ -635,6 +882,115 @@ namespace ds
         ImGui::BulletText("Shift + MMB pan");
         ImGui::BulletText("Mouse Wheel zoom");
         ImGui::End();
+
+        if (m_ViewportSettingsOpen)
+        {
+            ImGui::Begin("Viewport Settings", &m_ViewportSettingsOpen);
+
+            if (ImGui::ColorEdit3("Background", &m_SceneSettings.clearColor.x))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::Checkbox("Draw grid", &m_SceneSettings.drawGrid))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderInt("Grid half extent", &m_SceneSettings.gridHalfExtent, 1, 64))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Grid spacing", &m_SceneSettings.gridSpacing, 0.1f, 5.0f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::ColorEdit3("Grid color", &m_SceneSettings.gridColor.x))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Grid opacity", &m_SceneSettings.gridOpacity, 0.05f, 1.0f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("Lighting");
+
+            if (ImGui::SliderFloat3("Light direction", &m_SceneSettings.lightDirection.x, -1.0f, 1.0f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Ambient", &m_SceneSettings.ambientStrength, 0.0f, 1.5f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Diffuse", &m_SceneSettings.diffuseStrength, 0.0f, 2.0f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("Projection");
+
+            const char *projectionModes[] = {"Perspective", "Orthographic"};
+            if (ImGui::Combo("Mode", &m_ProjectionModeIndex, projectionModes, IM_ARRAYSIZE(projectionModes)))
+            {
+                if (m_Camera)
+                {
+                    m_Camera->SetProjectionMode(m_ProjectionModeIndex == 0 ? OrbitCamera::ProjectionMode::Perspective : OrbitCamera::ProjectionMode::Orthographic);
+                }
+                settingsChanged = true;
+            }
+
+            if (m_Camera && m_ProjectionModeIndex == 0)
+            {
+                float fov = m_Camera->GetPerspectiveFovDegrees();
+                if (ImGui::SliderFloat("FOV", &fov, 10.0f, 100.0f, "%.1f deg"))
+                {
+                    m_Camera->SetPerspectiveFovDegrees(fov);
+                }
+            }
+
+            if (m_Camera && m_ProjectionModeIndex == 1)
+            {
+                float orthoSize = m_Camera->GetOrthographicSize();
+                if (ImGui::SliderFloat("Ortho size", &orthoSize, 0.1f, 40.0f, "%.2f"))
+                {
+                    m_Camera->SetOrthographicSize(orthoSize);
+                }
+            }
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("Atoms");
+
+            if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, 0.05f, 1.25f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, 0.3f, 2.2f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
+            {
+                settingsChanged = true;
+            }
+
+            if (m_SceneSettings.overrideAtomColor && ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::End();
+        }
 
         ImGui::Begin("Tools");
         ImGui::TextUnformatted("Structure I/O (T04)");

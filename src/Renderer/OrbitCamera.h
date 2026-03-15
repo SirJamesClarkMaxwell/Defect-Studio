@@ -10,16 +10,29 @@ namespace ds
     class OrbitCamera
     {
     public:
+        enum class ProjectionMode
+        {
+            Perspective = 0,
+            Orthographic = 1
+        };
+
         OrbitCamera();
 
         void SetViewportSize(float width, float height);
         void SetSensitivity(float orbit, float pan, float zoom);
         void OnUpdate(float deltaTime, bool allowInput, float scrollDelta);
         void FrameBounds(const glm::vec3 &boundsMin, const glm::vec3 &boundsMax);
+        void SetProjectionMode(ProjectionMode mode);
+        void SetPerspectiveFovDegrees(float fovDegrees);
+        void SetOrthographicSize(float orthographicSize);
 
         const glm::mat4 &GetViewMatrix() const { return m_View; }
         const glm::mat4 &GetProjectionMatrix() const { return m_Projection; }
         glm::mat4 GetViewProjectionMatrix() const;
+
+        ProjectionMode GetProjectionMode() const { return m_ProjectionMode; }
+        float GetPerspectiveFovDegrees() const { return m_FovYDegrees; }
+        float GetOrthographicSize() const { return m_OrthographicSize; }
 
     private:
         void RecalculateProjection();
@@ -34,8 +47,10 @@ namespace ds
         float m_Pitch = 0.5f;
 
         float m_FovYDegrees = 45.0f;
+        float m_OrthographicSize = 5.0f;
         float m_NearClip = 0.01f;
         float m_FarClip = 100.0f;
+        ProjectionMode m_ProjectionMode = ProjectionMode::Perspective;
 
         float m_OrbitSensitivity = 1.0f;
         float m_PanSensitivity = 1.0f;

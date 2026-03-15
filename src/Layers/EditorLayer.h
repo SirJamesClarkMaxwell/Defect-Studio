@@ -4,6 +4,7 @@
 #include "DataModel/Structure.h"
 #include "IO/PoscarParser.h"
 #include "IO/PoscarSerializer.h"
+#include "Renderer/IRenderBackend.h"
 
 #include <array>
 #include <memory>
@@ -76,6 +77,10 @@ namespace ds
         int m_ExportCoordinateModeIndex = 0;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
+
+        SceneRenderSettings m_SceneSettings;
+        int m_ProjectionModeIndex = 0;
+        bool m_ViewportSettingsOpen = true;
 
         std::unique_ptr<IRenderBackend> m_RenderBackend;
         std::unique_ptr<OrbitCamera> m_Camera;

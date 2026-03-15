@@ -144,9 +144,50 @@ namespace ds
         RecalculateView();
     }
 
+    void OrbitCamera::SetProjectionMode(ProjectionMode mode)
+    {
+        if (m_ProjectionMode == mode)
+        {
+            return;
+        }
+
+        m_ProjectionMode = mode;
+        RecalculateProjection();
+    }
+
+    void OrbitCamera::SetPerspectiveFovDegrees(float fovDegrees)
+    {
+        if (fovDegrees < 10.0f)
+            fovDegrees = 10.0f;
+        if (fovDegrees > 100.0f)
+            fovDegrees = 100.0f;
+
+        m_FovYDegrees = fovDegrees;
+        RecalculateProjection();
+    }
+
+    void OrbitCamera::SetOrthographicSize(float orthographicSize)
+    {
+        if (orthographicSize < 0.1f)
+            orthographicSize = 0.1f;
+        if (orthographicSize > 100.0f)
+            orthographicSize = 100.0f;
+
+        m_OrthographicSize = orthographicSize;
+        RecalculateProjection();
+    }
+
     void OrbitCamera::RecalculateProjection()
     {
         const float aspect = m_ViewportWidth / m_ViewportHeight;
+        if (m_ProjectionMode == ProjectionMode::Orthographic)
+        {
+            const float halfHeight = m_OrthographicSize;
+            const float halfWidth = m_OrthographicSize * aspect;
+            m_Projection = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, m_NearClip, m_FarClip);
+            return;
+        }
+
         m_Projection = glm::perspective(glm::radians(m_FovYDegrees), aspect, m_NearClip, m_FarClip);
     }
 

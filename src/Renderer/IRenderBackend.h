@@ -9,6 +9,26 @@
 namespace ds
 {
 
+    struct SceneRenderSettings
+    {
+        glm::vec3 clearColor = glm::vec3(0.14f, 0.16f, 0.20f);
+
+        bool drawGrid = true;
+        int gridHalfExtent = 12;
+        float gridSpacing = 1.0f;
+        glm::vec3 gridColor = glm::vec3(0.36f, 0.39f, 0.45f);
+        float gridOpacity = 0.50f;
+
+        glm::vec3 lightDirection = glm::vec3(-0.5f, -1.0f, -0.4f);
+        float ambientStrength = 0.45f;
+        float diffuseStrength = 0.85f;
+
+        float atomScale = 0.30f;
+        bool overrideAtomColor = false;
+        glm::vec3 atomOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
+        float atomBrightness = 1.0f;
+    };
+
     class IRenderBackend
     {
     public:
@@ -18,13 +38,13 @@ namespace ds
         virtual void Shutdown() = 0;
 
         virtual void ResizeViewport(std::uint32_t width, std::uint32_t height) = 0;
-        virtual void BeginFrame() = 0;
-        virtual void RenderDemoScene(const glm::mat4 &viewProjection) = 0;
+        virtual void BeginFrame(const SceneRenderSettings &settings) = 0;
+        virtual void RenderDemoScene(const glm::mat4 &viewProjection, const SceneRenderSettings &settings) = 0;
         virtual void RenderAtomsScene(
             const glm::mat4 &viewProjection,
             const std::vector<glm::vec3> &atomPositions,
             const std::vector<glm::vec3> &atomColors,
-            float atomScale) = 0;
+            const SceneRenderSettings &settings) = 0;
         virtual void EndFrame() = 0;
 
         virtual std::uint32_t GetColorAttachmentRendererID() const = 0;

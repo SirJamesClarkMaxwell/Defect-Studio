@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace ds
@@ -94,11 +95,19 @@ namespace ds
             return false;
         }
 
+        if (!m_GridShader.LoadFromFiles("assets/shaders/grid_lines.vert", "assets/shaders/grid_lines.frag"))
+        {
+            LogError("OpenGL renderer failed to load grid shader files.");
+            return false;
+        }
+
         glGenVertexArrays(1, &m_VAO);
         glGenBuffers(1, &m_VBO);
         glGenBuffers(1, &m_EBO);
         glGenBuffers(1, &m_InstanceVBO);
         glGenBuffers(1, &m_InstanceColorVBO);
+        glGenVertexArrays(1, &m_GridVAO);
+        glGenBuffers(1, &m_GridVBO);
 
         std::vector<SphereVertex> sphereVertices;
         std::vector<std::uint32_t> sphereIndices;
@@ -144,6 +153,14 @@ namespace ds
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
+        glBindVertexArray(m_GridVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), reinterpret_cast<void *>(0));
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
         CreateFramebuffer(m_ViewportWidth, m_ViewportHeight);
         LogInfo("OpenGL renderer backend initialized");
         return true;
@@ -183,7 +200,20 @@ namespace ds
             m_VAO = 0;
         }
 
+        if (m_GridVBO != 0)
+        {
+            glDeleteBuffers(1, &m_GridVBO);
+            m_GridVBO = 0;
+        }
+
+        if (m_GridVAO != 0)
+        {
+            glDeleteVertexArrays(1, &m_GridVAO);
+            m_GridVAO = 0;
+        }
+
         m_Shader.Destroy();
+        m_GridShader.Destroy();
     }
 
     void OpenGLRendererBackend::ResizeViewport(std::uint32_t width, std::uint32_t height)
@@ -251,16 +281,16 @@ namespace ds
         }
     }
 
-    void OpenGLRendererBackend::BeginFrame()
+    void OpenGLRendererBackend::BeginFrame(const SceneRenderSettings &settings)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, m_Framebuffer);
         glViewport(0, 0, static_cast<int>(m_ViewportWidth), static_cast<int>(m_ViewportHeight));
         glEnable(GL_DEPTH_TEST);
-        glClearColor(0.10f, 0.11f, 0.13f, 1.0f);
+        glClearColor(settings.clearColor.r, settings.clearColor.g, settings.clearColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
 
-    void OpenGLRendererBackend::RenderDemoScene(const glm::mat4 &viewProjection)
+    void OpenGLRendererBackend::RenderDemoScene(const glm::mat4 &viewProjection, const SceneRenderSettings &settings)
     {
         const glm::vec3 colors[] = {
             glm::vec3(0.44f, 0.76f, 0.97f),
@@ -283,15 +313,17 @@ namespace ds
             demoColors.push_back(colors[i]);
         }
 
-        RenderAtomsScene(viewProjection, demoPositions, demoColors, 0.6f);
+        RenderAtomsScene(viewProjection, demoPositions, demoColors, settings);
     }
 
     void OpenGLRendererBackend::RenderAtomsScene(
         const glm::mat4 &viewProjection,
         const std::vector<glm::vec3> &atomPositions,
         const std::vector<glm::vec3> &atomColors,
-        float atomScale)
+        const SceneRenderSettings &settings)
     {
+        RenderGrid(viewProjection, settings);
+
         const std::size_t instanceCount = std::min(atomPositions.size(), atomColors.size());
         if (instanceCount == 0 || m_IndexCount == 0)
         {
@@ -304,13 +336,32 @@ namespace ds
         for (std::size_t i = 0; i < instanceCount; ++i)
         {
             glm::mat4 model = glm::translate(glm::mat4(1.0f), atomPositions[i]);
-            model = glm::scale(model, glm::vec3(atomScale));
+            model = glm::scale(model, glm::vec3(settings.atomScale));
             instanceModels.push_back(model);
+        }
+
+        std::vector<glm::vec3> effectiveColors;
+        effectiveColors.reserve(instanceCount);
+        if (settings.overrideAtomColor)
+        {
+            const glm::vec3 overrideColor = settings.atomOverrideColor * settings.atomBrightness;
+            for (std::size_t i = 0; i < instanceCount; ++i)
+            {
+                effectiveColors.push_back(overrideColor);
+            }
+        }
+        else
+        {
+            for (std::size_t i = 0; i < instanceCount; ++i)
+            {
+                effectiveColors.push_back(atomColors[i] * settings.atomBrightness);
+            }
         }
 
         m_Shader.Bind();
         m_Shader.SetMat4("u_ViewProjection", viewProjection);
-        m_Shader.SetFloat3("u_LightDirection", glm::normalize(glm::vec3(-0.6f, -1.0f, -0.45f)));
+        m_Shader.SetFloat3("u_LightDirection", glm::normalize(settings.lightDirection));
+        m_Shader.SetFloat3("u_LightFactors", glm::vec3(settings.ambientStrength, settings.diffuseStrength, settings.atomBrightness));
 
         glBindVertexArray(m_VAO);
 
@@ -325,7 +376,7 @@ namespace ds
         glBufferData(
             GL_ARRAY_BUFFER,
             static_cast<GLsizeiptr>(instanceCount * sizeof(glm::vec3)),
-            atomColors.data(),
+            effectiveColors.data(),
             GL_DYNAMIC_DRAW);
 
         glDrawElementsInstanced(
@@ -334,6 +385,54 @@ namespace ds
             GL_UNSIGNED_INT,
             nullptr,
             static_cast<GLsizei>(instanceCount));
+
+        glBindVertexArray(0);
+    }
+
+    void OpenGLRendererBackend::RenderGrid(const glm::mat4 &viewProjection, const SceneRenderSettings &settings)
+    {
+        if (!settings.drawGrid || settings.gridSpacing <= 0.0f)
+        {
+            return;
+        }
+
+        const int halfExtent = std::clamp(settings.gridHalfExtent, 1, 128);
+        const float spacing = settings.gridSpacing;
+
+        std::vector<glm::vec3> lineVertices;
+        lineVertices.reserve(static_cast<std::size_t>((halfExtent * 2 + 1) * 4));
+
+        const float span = static_cast<float>(halfExtent) * spacing;
+        for (int i = -halfExtent; i <= halfExtent; ++i)
+        {
+            const float p = static_cast<float>(i) * spacing;
+
+            lineVertices.push_back(glm::vec3(-span, 0.0f, p));
+            lineVertices.push_back(glm::vec3(span, 0.0f, p));
+
+            lineVertices.push_back(glm::vec3(p, 0.0f, -span));
+            lineVertices.push_back(glm::vec3(p, 0.0f, span));
+        }
+
+        if (lineVertices.empty())
+        {
+            return;
+        }
+
+        m_GridShader.Bind();
+        m_GridShader.SetMat4("u_ViewProjection", viewProjection);
+        m_GridShader.SetFloat3("u_GridColor", settings.gridColor * std::clamp(settings.gridOpacity, 0.0f, 1.0f));
+
+        glBindVertexArray(m_GridVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(lineVertices.size() * sizeof(glm::vec3)),
+            lineVertices.data(),
+            GL_DYNAMIC_DRAW);
+
+        glLineWidth(1.0f);
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
 
         glBindVertexArray(0);
     }
