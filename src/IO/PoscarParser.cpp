@@ -18,13 +18,16 @@ namespace ds
 
         std::string Trim(const std::string &value)
         {
-            const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) { return std::isspace(c) != 0; });
+            const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c)
+                                                { return std::isspace(c) != 0; });
             if (first == value.end())
             {
                 return {};
             }
 
-            const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) { return std::isspace(c) != 0; }).base();
+            const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c)
+                                               { return std::isspace(c) != 0; })
+                                  .base();
             return std::string(first, last);
         }
 
