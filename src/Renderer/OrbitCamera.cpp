@@ -73,14 +73,33 @@ namespace ds
 
         if (scrollDelta != 0.0f)
         {
-            const float zoomFromWheel = 0.9f * m_Distance * m_ZoomSensitivity;
-            m_Distance -= scrollDelta * zoomFromWheel;
-            if (m_Distance < 0.5f)
-                m_Distance = 0.5f;
-            if (m_Distance > 100.0f)
-                m_Distance = 100.0f;
+            if (m_ProjectionMode == ProjectionMode::Orthographic)
+            {
+                float zoomFactor = 1.0f - scrollDelta * 0.12f * m_ZoomSensitivity;
+                if (zoomFactor < 0.1f)
+                    zoomFactor = 0.1f;
+                if (zoomFactor > 4.0f)
+                    zoomFactor = 4.0f;
 
-            RecalculateView();
+                m_OrthographicSize *= zoomFactor;
+                if (m_OrthographicSize < 0.1f)
+                    m_OrthographicSize = 0.1f;
+                if (m_OrthographicSize > 100.0f)
+                    m_OrthographicSize = 100.0f;
+
+                RecalculateProjection();
+            }
+            else
+            {
+                const float zoomFromWheel = 0.9f * m_Distance * m_ZoomSensitivity;
+                m_Distance -= scrollDelta * zoomFromWheel;
+                if (m_Distance < 0.5f)
+                    m_Distance = 0.5f;
+                if (m_Distance > 100.0f)
+                    m_Distance = 100.0f;
+
+                RecalculateView();
+            }
         }
 
         if (!mmb)
