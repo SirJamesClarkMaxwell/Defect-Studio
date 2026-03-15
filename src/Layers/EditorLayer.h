@@ -58,12 +58,16 @@ namespace ds
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
+        bool AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode);
         bool IsAtomSelected(std::size_t index) const;
         void ToggleInteractionMode();
         void HandleViewportSelection();
         void SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
         void AppendSelectionDebugLog(const std::string &message) const;
         bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
+        bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
+        void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
+        void DrawPeriodicTableWindow();
 
         bool m_ShowDemoWindow = false;
         bool m_ShowLogPanel = true;
@@ -92,6 +96,10 @@ namespace ds
         std::array<char, 512> m_ExportPathBuffer = {};
         int m_ExportPrecision = 8;
         int m_ExportCoordinateModeIndex = 0;
+        std::array<char, 16> m_AddAtomElementBuffer = {'S', 'i', '\0'};
+        glm::vec3 m_AddAtomPosition = glm::vec3(0.0f);
+        int m_AddAtomCoordinateModeIndex = 1;
+        bool m_PeriodicTableOpen = false;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
         std::vector<std::size_t> m_SelectedAtomIndices;
@@ -103,6 +111,11 @@ namespace ds
         bool m_BoxSelecting = false;
         glm::vec2 m_BoxSelectStart = glm::vec2(0.0f, 0.0f);
         glm::vec2 m_BoxSelectEnd = glm::vec2(0.0f, 0.0f);
+        bool m_Show3DCursor = true;
+        glm::vec3 m_CursorPosition = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::vec3 m_CursorColor = glm::vec3(0.22f, 0.95f, 0.95f);
+        float m_CursorVisualScale = 0.20f;
+        bool m_CursorSnapToGrid = true;
 
         bool m_HasPersistedCameraState = false;
         glm::vec3 m_CameraTargetPersisted = glm::vec3(0.0f, 0.0f, 0.0f);

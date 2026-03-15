@@ -8,6 +8,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -22,6 +23,7 @@
 
 #include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/matrix.hpp>
 #include <glm/vec4.hpp>
 
 #ifdef _WIN32
@@ -169,6 +171,18 @@ namespace ds
         }
         ApplyCameraSensitivity();
 
+        const std::string startupImportPath = std::string(m_ImportPathBuffer.data());
+        if (!startupImportPath.empty() && std::filesystem::exists(startupImportPath))
+        {
+            LoadStructureFromPath(startupImportPath);
+        }
+        else if (!startupImportPath.empty())
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Startup import skipped: file not found: " + startupImportPath;
+            LogWarn(m_LastStructureMessage);
+        }
+
         LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)));
     }
 
@@ -249,6 +263,20 @@ namespace ds
         {
             m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix(), m_SceneSettings);
         }
+
+        if (m_Show3DCursor)
+        {
+            const std::vector<glm::vec3> cursorPosition = {m_CursorPosition};
+            const std::vector<glm::vec3> cursorColor = {m_CursorColor};
+            SceneRenderSettings cursorSettings = m_SceneSettings;
+            cursorSettings.drawGrid = false;
+            cursorSettings.overrideAtomColor = true;
+            cursorSettings.atomOverrideColor = m_CursorColor;
+            cursorSettings.atomScale = m_CursorVisualScale;
+            cursorSettings.atomBrightness = std::max(1.0f, m_SceneSettings.atomBrightness + 0.2f);
+            m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), cursorPosition, cursorColor, cursorSettings);
+        }
+
         m_RenderBackend->EndFrame();
     }
 
@@ -360,6 +388,198 @@ namespace ds
         }
 
         return found;
+    }
+
+    bool EditorLayer::PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const
+    {
+        if (!m_Camera)
+        {
+            return false;
+        }
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return false;
+        }
+
+        const float x = (mousePos.x - m_ViewportRectMin.x) / width;
+        const float y = (mousePos.y - m_ViewportRectMin.y) / height;
+        if (x < 0.0f || x > 1.0f || y < 0.0f || y > 1.0f)
+        {
+            return false;
+        }
+
+        const float ndcX = x * 2.0f - 1.0f;
+        const float ndcY = 1.0f - y * 2.0f;
+
+        const glm::mat4 inverseViewProjection = glm::inverse(m_Camera->GetViewProjectionMatrix());
+        glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+        glm::vec4 farPoint = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+
+        if (std::abs(nearPoint.w) < 1e-6f || std::abs(farPoint.w) < 1e-6f)
+        {
+            return false;
+        }
+
+        const glm::vec3 worldNear = glm::vec3(nearPoint) / nearPoint.w;
+        const glm::vec3 worldFar = glm::vec3(farPoint) / farPoint.w;
+        const glm::vec3 ray = worldFar - worldNear;
+        const float rayY = ray.y;
+        if (std::abs(rayY) < 1e-6f)
+        {
+            return false;
+        }
+
+        const float planeY = m_SceneSettings.gridOrigin.y;
+        const float t = (planeY - worldNear.y) / rayY;
+        if (t < 0.0f)
+        {
+            return false;
+        }
+
+        glm::vec3 hit = worldNear + ray * t;
+        hit.y = planeY;
+
+        if (m_CursorSnapToGrid)
+        {
+            const float spacing = std::max(0.0001f, m_SceneSettings.gridSpacing);
+            hit.x = std::round((hit.x - m_SceneSettings.gridOrigin.x) / spacing) * spacing + m_SceneSettings.gridOrigin.x;
+            hit.z = std::round((hit.z - m_SceneSettings.gridOrigin.z) / spacing) * spacing + m_SceneSettings.gridOrigin.z;
+        }
+
+        outWorldPosition = hit;
+        return true;
+    }
+
+    void EditorLayer::Set3DCursorFromScreenPoint(const glm::vec2 &mousePos)
+    {
+        glm::vec3 worldHit(0.0f);
+        if (!PickWorldPositionOnGrid(mousePos, worldHit))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "3D cursor placement failed: could not project onto grid plane.";
+            LogWarn(m_LastStructureMessage);
+            return;
+        }
+
+        m_CursorPosition = worldHit;
+        m_AddAtomPosition = worldHit;
+        m_AddAtomCoordinateModeIndex = 1;
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "3D cursor moved to (" + std::to_string(worldHit.x) + ", " + std::to_string(worldHit.y) + ", " + std::to_string(worldHit.z) + ")";
+        LogInfo(m_LastStructureMessage);
+    }
+
+    void EditorLayer::DrawPeriodicTableWindow()
+    {
+        if (!m_PeriodicTableOpen)
+        {
+            return;
+        }
+
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 430.0f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Periodic Table", &m_PeriodicTableOpen))
+        {
+            ImGui::End();
+            return;
+        }
+
+        const char *tableRows[7][18] = {
+            {"H", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "He"},
+            {"Li", "Be", "", "", "", "", "", "", "", "", "", "", "B", "C", "N", "O", "F", "Ne"},
+            {"Na", "Mg", "", "", "", "", "", "", "", "", "", "", "Al", "Si", "P", "S", "Cl", "Ar"},
+            {"K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr"},
+            {"Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe"},
+            {"Cs", "Ba", "", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn"},
+            {"Fr", "Ra", "", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "", "", "", "", "", "", ""}};
+
+        const char *lanthanoids[15] = {"La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu"};
+        const char *actinoids[15] = {"Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr"};
+
+        const float cellWidth = 36.0f;
+        const float cellHeight = 32.0f;
+
+        auto setSelectedElement = [&](const char *symbol)
+        {
+            std::snprintf(m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size(), "%s", symbol);
+            m_PeriodicTableOpen = false;
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Selected element: " + std::string(symbol);
+        };
+
+        for (int row = 0; row < 7; ++row)
+        {
+            for (int col = 0; col < 18; ++col)
+            {
+                if (col > 0)
+                {
+                    ImGui::SameLine();
+                }
+
+                const char *symbol = tableRows[row][col];
+                if (symbol[0] == '\0')
+                {
+                    ImGui::Dummy(ImVec2(cellWidth, cellHeight));
+                    continue;
+                }
+
+                const bool isSelected = std::string(m_AddAtomElementBuffer.data()) == symbol;
+                if (isSelected)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.56f, 0.92f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.34f, 0.64f, 0.98f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.48f, 0.84f, 1.0f));
+                }
+
+                if (ImGui::Button(symbol, ImVec2(cellWidth, cellHeight)))
+                {
+                    setSelectedElement(symbol);
+                }
+
+                if (isSelected)
+                {
+                    ImGui::PopStyleColor(3);
+                }
+            }
+        }
+
+        ImGui::Separator();
+
+        ImGui::TextUnformatted("Lanthanoids");
+        ImGui::SameLine();
+        for (int i = 0; i < 15; ++i)
+        {
+            if (i > 0)
+            {
+                ImGui::SameLine();
+            }
+
+            const char *symbol = lanthanoids[i];
+            if (ImGui::Button(symbol, ImVec2(cellWidth, cellHeight)))
+            {
+                setSelectedElement(symbol);
+            }
+        }
+
+        ImGui::TextUnformatted("Actinoids");
+        ImGui::SameLine();
+        for (int i = 0; i < 15; ++i)
+        {
+            if (i > 0)
+            {
+                ImGui::SameLine();
+            }
+
+            const char *symbol = actinoids[i];
+            if (ImGui::Button(symbol, ImVec2(cellWidth, cellHeight)))
+            {
+                setSelectedElement(symbol);
+            }
+        }
+
+        ImGui::End();
     }
 
     void EditorLayer::SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection)
@@ -603,6 +823,74 @@ namespace ds
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Exported structure to: " + path;
         LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode)
+    {
+        if (!m_HasStructureLoaded)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Add atom failed: no structure loaded.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        std::string symbol;
+        symbol.reserve(elementSymbol.size());
+        for (char c : elementSymbol)
+        {
+            if (!std::isspace(static_cast<unsigned char>(c)))
+            {
+                symbol.push_back(c);
+            }
+        }
+
+        if (symbol.empty() || !std::isalpha(static_cast<unsigned char>(symbol[0])))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Add atom failed: invalid element symbol.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        symbol[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(symbol[0])));
+        for (std::size_t i = 1; i < symbol.size(); ++i)
+        {
+            symbol[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(symbol[i])));
+        }
+
+        Atom atom;
+        atom.element = symbol;
+        atom.selectiveDynamics = false;
+        atom.selectiveFlags = {true, true, true};
+
+        if (inputMode == m_WorkingStructure.coordinateMode)
+        {
+            atom.position = position;
+        }
+        else if (inputMode == CoordinateMode::Direct)
+        {
+            atom.position = m_WorkingStructure.DirectToCartesian(position);
+        }
+        else
+        {
+            atom.position = m_WorkingStructure.CartesianToDirect(position);
+        }
+
+        m_WorkingStructure.atoms.push_back(atom);
+        m_WorkingStructure.RebuildSpeciesFromAtoms();
+
+        m_SelectedAtomIndices.clear();
+        m_SelectedAtomIndices.push_back(m_WorkingStructure.atoms.size() - 1);
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Added atom " + symbol + " at (" +
+                                 std::to_string(position.x) + ", " +
+                                 std::to_string(position.y) + ", " +
+                                 std::to_string(position.z) + ") [" +
+                                 (inputMode == CoordinateMode::Direct ? "Direct" : "Cartesian") + "]";
+        LogInfo(m_LastStructureMessage + ", atom count=" + std::to_string(m_WorkingStructure.GetAtomCount()));
         return true;
     }
 
@@ -1189,6 +1477,54 @@ namespace ds
                     m_ProjectionModeIndex = 0;
                 }
             }
+            else if (key == "viewport_cursor_show")
+            {
+                m_Show3DCursor = (value == "1");
+            }
+            else if (key == "viewport_cursor_x")
+            {
+                try
+                {
+                    m_CursorPosition.x = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cursor_y")
+            {
+                try
+                {
+                    m_CursorPosition.y = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cursor_z")
+            {
+                try
+                {
+                    m_CursorPosition.z = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cursor_scale")
+            {
+                try
+                {
+                    m_CursorVisualScale = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cursor_snap")
+            {
+                m_CursorSnapToGrid = (value == "1");
+            }
         }
 
         if (!hasSensitivityMode || !relativeSensitivity)
@@ -1215,6 +1551,10 @@ namespace ds
             m_SelectionOutlineThickness = 1.0f;
         if (m_SelectionOutlineThickness > 8.0f)
             m_SelectionOutlineThickness = 8.0f;
+        if (m_CursorVisualScale < 0.05f)
+            m_CursorVisualScale = 0.05f;
+        if (m_CursorVisualScale > 2.0f)
+            m_CursorVisualScale = 2.0f;
     }
 
     void EditorLayer::SaveSettings() const
@@ -1286,6 +1626,12 @@ namespace ds
         out << "selection_outline_thickness=" << m_SelectionOutlineThickness << '\n';
         out << "selection_debug_to_file=" << (m_SelectionDebugToFile ? "1" : "0") << '\n';
         out << "viewport_projection_mode=" << m_ProjectionModeIndex << '\n';
+        out << "viewport_cursor_show=" << (m_Show3DCursor ? "1" : "0") << '\n';
+        out << "viewport_cursor_x=" << m_CursorPosition.x << '\n';
+        out << "viewport_cursor_y=" << m_CursorPosition.y << '\n';
+        out << "viewport_cursor_z=" << m_CursorPosition.z << '\n';
+        out << "viewport_cursor_scale=" << m_CursorVisualScale << '\n';
+        out << "viewport_cursor_snap=" << (m_CursorSnapToGrid ? "1" : "0") << '\n';
     }
 
     void EditorLayer::OnImGuiRender()
@@ -1409,6 +1755,7 @@ namespace ds
                 if (ImGui::BeginPopupContextItem("ViewportSelectionContext", ImGuiPopupFlags_MouseButtonRight))
                 {
                     const bool hasLoadedAtoms = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
+                    const glm::vec2 contextMouse(io.MousePos.x, io.MousePos.y);
 
                     if (ImGui::MenuItem("Select All", nullptr, false, hasLoadedAtoms))
                     {
@@ -1466,6 +1813,13 @@ namespace ds
 
                         m_Camera->FrameBounds(boundsMin, boundsMax);
                         AppendSelectionDebugLog("Context menu: Frame Selected");
+                    }
+
+                    if (ImGui::MenuItem("Set 3D Cursor Here (grid plane)", nullptr, false, m_Camera != nullptr))
+                    {
+                        Set3DCursorFromScreenPoint(contextMouse);
+                        AppendSelectionDebugLog("Context menu: Set 3D Cursor Here");
+                        settingsChanged = true;
                     }
 
                     ImGui::EndPopup();
@@ -1545,11 +1899,13 @@ namespace ds
         ImGui::Text("Size: %.0f x %.0f", size.x, size.y);
         ImGui::Text("Focused: %s | Hovered: %s", m_ViewportFocused ? "yes" : "no", m_ViewportHovered ? "yes" : "no");
         ImGui::Text("ImGui capture: mouse=%s keyboard=%s", io.WantCaptureMouse ? "yes" : "no", io.WantCaptureKeyboard ? "yes" : "no");
+        ImGui::Text("3D Cursor: (%.3f, %.3f, %.3f)", m_CursorPosition.x, m_CursorPosition.y, m_CursorPosition.z);
         ImGui::Separator();
         ImGui::TextUnformatted("Navigation:");
         ImGui::BulletText("MMB orbit");
         ImGui::BulletText("Shift + MMB pan");
         ImGui::BulletText("Mouse Wheel zoom");
+        ImGui::BulletText("RMB on viewport: Set 3D Cursor Here");
         ImGui::End();
 
         if (m_ViewportSettingsOpen)
@@ -1746,6 +2102,78 @@ namespace ds
             m_SelectedAtomIndices.clear();
         }
 
+        const char *coordinateModes[] = {"Direct", "Cartesian"};
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Add atom");
+        ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
+        ImGui::SameLine();
+        if (ImGui::Button("Periodic table"))
+        {
+            m_PeriodicTableOpen = true;
+        }
+        ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
+        ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+
+        if (ImGui::Button("Use camera target") && m_Camera)
+        {
+            m_AddAtomPosition = m_Camera->GetTarget();
+            m_AddAtomCoordinateModeIndex = 1;
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Use 3D cursor"))
+        {
+            m_AddAtomPosition = m_CursorPosition;
+            m_AddAtomCoordinateModeIndex = 1;
+        }
+
+        ImGui::SameLine();
+        const bool canAddAtom = m_HasStructureLoaded;
+        if (!canAddAtom)
+        {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Add atom"))
+        {
+            const CoordinateMode inputMode = (m_AddAtomCoordinateModeIndex == 0)
+                                                 ? CoordinateMode::Direct
+                                                 : CoordinateMode::Cartesian;
+            AddAtomToStructure(std::string(m_AddAtomElementBuffer.data()), m_AddAtomPosition, inputMode);
+        }
+        if (!canAddAtom)
+        {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("3D Cursor");
+        if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::DragFloat3("Cursor position", &m_CursorPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f"))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::ColorEdit3("Cursor color", &m_CursorColor.x))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::Button("Cursor <- camera target") && m_Camera)
+        {
+            m_CursorPosition = m_Camera->GetTarget();
+            settingsChanged = true;
+        }
+
         ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
         ImGui::SameLine();
         if (ImGui::Button("Browse##Export"))
@@ -1757,7 +2185,6 @@ namespace ds
             }
         }
 
-        const char *coordinateModes[] = {"Direct", "Cartesian"};
         ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
         ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
 
@@ -1951,6 +2378,8 @@ namespace ds
         {
             ImGui::ShowDemoWindow(&m_ShowDemoWindow);
         }
+
+        DrawPeriodicTableWindow();
 
         if (settingsChanged)
         {

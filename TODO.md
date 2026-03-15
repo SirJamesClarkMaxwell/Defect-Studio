@@ -35,12 +35,14 @@
 
 ### [ ] T05 - Atom rendering, selection, gizmo (`task/05-editor-selection-gizmo`)
 - [x] Instanced atom rendering
-- [ ] Click/multi-select (**next priority #1**)
-- [ ] Box select (`B`) and RMB context menu actions (**next priority #3**)
+- [x] Click/multi-select (**next priority #1**)
+- [x] Box select (`B`) and RMB context menu actions (**next priority #3**)
 - [ ] ImGuizmo transform for selected atoms (**next priority #4**)
+- [ ] Blender-like XYZ axes (R/G/B) with configurable orientation and colors 
+- [ ] adding local axes, relative axes (based on the sourounding) (x(green),y(red),z(blue))
 
 ### [ ] T06 - Bonds and measurements (`task/06-bonds-tools`)
-- [ ] Add atom tool (insert atom into structure) 
+- [x] Add atom tool (insert atom into structure) 
 - [ ] Auto bond generation and dynamic threshold updates
 - [ ] Global cutoff + per-element-pair mode
 - [ ] Distance/angle tools and labels
@@ -51,10 +53,10 @@
 - [ ] Dockspace + tool panels
 - [x] Viewport settings panel: background, grid, lighting, projection mode, atom color override
 - [x] File dialogs with fallback path
-- [ ] Blender-like XYZ axes (R/G/B) with configurable orientation and colors (**later**)
 - [ ] Persist axis settings (colors + orientation) together with renderer settings
 - [x] Persist ImGui dock/panel layout across runs
 - [ ] Toggles, profiler integration, config defaults
+- [ ] nice logging window with icons (error, warning, info, debug, trace) ❌,⚠️(dodaj inne emotki)
 
 ### [ ] T08 - Offscreen render and F12 pipeline (`task/09-offscreen-render`)
 - [ ] Render dialog and camera frame preview
