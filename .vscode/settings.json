@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "*.tpp": "cpp",
+        "*.inl": "cpp"
+    },
+    "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "editor.formatOnSave": false,
+    "cmake.configureOnOpen": false
+}
