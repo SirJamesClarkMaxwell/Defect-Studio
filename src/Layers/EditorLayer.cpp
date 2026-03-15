@@ -1,15 +1,26 @@
 #include "Layers/EditorLayer.h"
 
+#include "Core/ApplicationContext.h"
 #include "Core/Logger.h"
+#include "Renderer/OpenGLRendererBackend.h"
+#include "Renderer/OrbitCamera.h"
 
 #include <imgui.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 namespace ds
 {
+
+    namespace
+    {
+        constexpr float kBaseOrbitSensitivity = 0.01f;
+        constexpr float kBasePanSensitivity = 0.18f;
+        constexpr float kBaseZoomSensitivity = 0.17f;
+    }
 
     EditorLayer::EditorLayer()
         : Layer("EditorLayer") {}
@@ -19,7 +30,47 @@ namespace ds
         LoadSettings();
         ApplyTheme(m_CurrentTheme);
         ApplyFontScale(m_FontScale);
+
+        m_RenderBackend = std::make_unique<OpenGLRendererBackend>();
+        if (!m_RenderBackend->Initialize())
+        {
+            LogError("Failed to initialize OpenGL backend.");
+        }
+
+        m_Camera = std::make_unique<OrbitCamera>();
+        m_Camera->SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
+        ApplyCameraSensitivity();
+
         LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)));
+    }
+
+    void EditorLayer::OnDetach()
+    {
+        if (m_RenderBackend)
+        {
+            m_RenderBackend->Shutdown();
+            m_RenderBackend.reset();
+        }
+
+        m_Camera.reset();
+    }
+
+    void EditorLayer::OnUpdate(float deltaTime)
+    {
+        if (!m_RenderBackend || !m_Camera)
+        {
+            return;
+        }
+
+        m_Camera->SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
+        const bool allowCameraInput = m_ViewportHovered && m_ViewportFocused;
+        const float scrollDelta = ApplicationContext::Get().ConsumeScrollDelta();
+        m_Camera->OnUpdate(deltaTime, allowCameraInput, allowCameraInput ? scrollDelta : 0.0f);
+
+        m_RenderBackend->ResizeViewport(static_cast<std::uint32_t>(m_ViewportSize.x), static_cast<std::uint32_t>(m_ViewportSize.y));
+        m_RenderBackend->BeginFrame();
+        m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix());
+        m_RenderBackend->EndFrame();
     }
 
     void EditorLayer::ApplyFontScale(float scale)
@@ -31,6 +82,19 @@ namespace ds
 
         m_FontScale = scale;
         ImGui::GetIO().FontGlobalScale = m_FontScale;
+    }
+
+    void EditorLayer::ApplyCameraSensitivity()
+    {
+        if (!m_Camera)
+        {
+            return;
+        }
+
+        m_Camera->SetSensitivity(
+            m_CameraOrbitSensitivity * kBaseOrbitSensitivity,
+            m_CameraPanSensitivity * kBasePanSensitivity,
+            m_CameraZoomSensitivity * kBaseZoomSensitivity);
     }
 
     const char *EditorLayer::ThemeName(ThemePreset preset) const
@@ -133,6 +197,9 @@ namespace ds
             return;
         }
 
+        bool hasSensitivityMode = false;
+        bool relativeSensitivity = true;
+
         std::string line;
         while (std::getline(in, line))
         {
@@ -192,7 +259,60 @@ namespace ds
             {
                 m_LogAutoScroll = (value == "1");
             }
+            else if (key == "camera_orbit_sensitivity")
+            {
+                try
+                {
+                    m_CameraOrbitSensitivity = std::stof(value);
+                }
+                catch (...)
+                {
+                    m_CameraOrbitSensitivity = 1.0f;
+                }
+            }
+            else if (key == "camera_pan_sensitivity")
+            {
+                try
+                {
+                    m_CameraPanSensitivity = std::stof(value);
+                }
+                catch (...)
+                {
+                    m_CameraPanSensitivity = 1.0f;
+                }
+            }
+            else if (key == "camera_zoom_sensitivity")
+            {
+                try
+                {
+                    m_CameraZoomSensitivity = std::stof(value);
+                }
+                catch (...)
+                {
+                    m_CameraZoomSensitivity = 1.0f;
+                }
+            }
+            else if (key == "camera_sensitivity_mode")
+            {
+                hasSensitivityMode = true;
+                relativeSensitivity = (value == "relative_v2");
+            }
         }
+
+        if (!hasSensitivityMode || !relativeSensitivity)
+        {
+            // Legacy migration: old settings stored absolute values.
+            m_CameraOrbitSensitivity = m_CameraOrbitSensitivity / kBaseOrbitSensitivity;
+            m_CameraPanSensitivity = m_CameraPanSensitivity / kBasePanSensitivity;
+            m_CameraZoomSensitivity = m_CameraZoomSensitivity / kBaseZoomSensitivity;
+        }
+
+        if (m_CameraOrbitSensitivity < 0.05f)
+            m_CameraOrbitSensitivity = 0.05f;
+        if (m_CameraPanSensitivity < 0.05f)
+            m_CameraPanSensitivity = 0.05f;
+        if (m_CameraZoomSensitivity < 0.05f)
+            m_CameraZoomSensitivity = 0.05f;
     }
 
     void EditorLayer::SaveSettings() const
@@ -211,6 +331,10 @@ namespace ds
         out << "font_scale=" << m_FontScale << '\n';
         out << "log_filter=" << m_LogFilter << '\n';
         out << "log_auto_scroll=" << (m_LogAutoScroll ? "1" : "0") << '\n';
+        out << "camera_orbit_sensitivity=" << m_CameraOrbitSensitivity << '\n';
+        out << "camera_pan_sensitivity=" << m_CameraPanSensitivity << '\n';
+        out << "camera_zoom_sensitivity=" << m_CameraZoomSensitivity << '\n';
+        out << "camera_sensitivity_mode=relative_v2" << '\n';
     }
 
     void EditorLayer::OnImGuiRender()
@@ -265,12 +389,45 @@ namespace ds
         }
 
         ImGui::Begin("Viewport");
+        m_ViewportFocused = ImGui::IsWindowFocused();
+        m_ViewportHovered = ImGui::IsWindowHovered();
+
         ImVec2 size = ImGui::GetContentRegionAvail();
-        ImGui::TextUnformatted("3D Viewport (MVP)");
-        ImGui::Separator();
+        if (size.x < 1.0f)
+            size.x = 1.0f;
+        if (size.y < 1.0f)
+            size.y = 1.0f;
+        m_ViewportSize = glm::vec2(size.x, size.y);
+
+        if (m_RenderBackend)
+        {
+            const std::uint32_t texture = m_RenderBackend->GetColorAttachmentRendererID();
+            if (texture != 0)
+            {
+                ImTextureID textureID = (ImTextureID)(std::uintptr_t)texture;
+                ImGui::Image(textureID, size, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+            }
+            else
+            {
+                ImGui::TextUnformatted("Viewport render target not ready.");
+            }
+        }
+        else
+        {
+            ImGui::TextUnformatted("OpenGL backend unavailable.");
+        }
+        ImGui::End();
+
+        ImGui::Begin("Viewport Info");
+        const ImGuiIO &io = ImGui::GetIO();
         ImGui::Text("Size: %.0f x %.0f", size.x, size.y);
-        ImGui::TextUnformatted("Rendering backend: OpenGL");
-        ImGui::TextUnformatted("UI: Dear ImGui Docking");
+        ImGui::Text("Focused: %s | Hovered: %s", m_ViewportFocused ? "yes" : "no", m_ViewportHovered ? "yes" : "no");
+        ImGui::Text("ImGui capture: mouse=%s keyboard=%s", io.WantCaptureMouse ? "yes" : "no", io.WantCaptureKeyboard ? "yes" : "no");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Navigation:");
+        ImGui::BulletText("MMB orbit");
+        ImGui::BulletText("Shift + MMB pan");
+        ImGui::BulletText("Mouse Wheel zoom");
         ImGui::End();
 
         ImGui::Begin("Tools");
@@ -299,6 +456,33 @@ namespace ds
         if (ImGui::SliderFloat("Font size scale", &uiScale, 0.7f, 2.0f, "%.2f"))
         {
             ApplyFontScale(uiScale);
+            settingsChanged = true;
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Camera sensitivity");
+
+        float orbitSensitivity = m_CameraOrbitSensitivity;
+        if (ImGui::SliderFloat("Orbit sensitivity", &orbitSensitivity, 0.05f, 4.0f, "%.2fx"))
+        {
+            m_CameraOrbitSensitivity = orbitSensitivity;
+            ApplyCameraSensitivity();
+            settingsChanged = true;
+        }
+
+        float panSensitivity = m_CameraPanSensitivity;
+        if (ImGui::SliderFloat("Pan sensitivity", &panSensitivity, 0.05f, 4.0f, "%.2fx"))
+        {
+            m_CameraPanSensitivity = panSensitivity;
+            ApplyCameraSensitivity();
+            settingsChanged = true;
+        }
+
+        float zoomSensitivity = m_CameraZoomSensitivity;
+        if (ImGui::SliderFloat("Zoom sensitivity", &zoomSensitivity, 0.05f, 4.0f, "%.2fx"))
+        {
+            m_CameraZoomSensitivity = zoomSensitivity;
+            ApplyCameraSensitivity();
             settingsChanged = true;
         }
 
