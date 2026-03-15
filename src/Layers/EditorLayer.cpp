@@ -5,9 +5,13 @@
 #include "Renderer/OpenGLRendererBackend.h"
 #include "Renderer/OrbitCamera.h"
 
-#include <imgui.h>
-
 #include <algorithm>
+
+#include <imgui.h>
+#include <ImGuizmo.h>
+#define IMVIEWGUIZMO_IMPLEMENTATION
+#include <ImViewGuizmo.h>
+
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -22,6 +26,9 @@
 #include <vector>
 
 #include <glm/geometric.hpp>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/matrix.hpp>
 #include <glm/vec4.hpp>
@@ -43,6 +50,32 @@ namespace ds
         constexpr float kBasePanSensitivity = 0.18f;
         constexpr float kBaseZoomSensitivity = 0.17f;
         constexpr const char *kSelectionDebugLogPath = "logs/selection_debug.log";
+
+        float NormalizeAngleRadians(float angle)
+        {
+            const float twoPi = glm::two_pi<float>();
+            while (angle > glm::pi<float>())
+            {
+                angle -= twoPi;
+            }
+            while (angle < -glm::pi<float>())
+            {
+                angle += twoPi;
+            }
+            return angle;
+        }
+
+        float LerpAngleRadians(float from, float to, float t)
+        {
+            return from + NormalizeAngleRadians(to - from) * t;
+        }
+
+        float EaseOutCubic(float t)
+        {
+            const float x = glm::clamp(t, 0.0f, 1.0f);
+            const float inv = 1.0f - x;
+            return 1.0f - inv * inv * inv;
+        }
 
         std::string BuildDebugTimestampNow()
         {
@@ -211,6 +244,12 @@ namespace ds
         const float scrollDelta = ApplicationContext::Get().ConsumeScrollDelta();
         m_Camera->OnUpdate(deltaTime, allowCameraInput, allowCameraInput ? scrollDelta : 0.0f);
 
+        if (allowCameraInput && (ImGui::IsMouseDown(ImGuiMouseButton_Middle) || std::abs(scrollDelta) > 0.0001f))
+        {
+            m_CameraTransitionActive = false;
+        }
+        UpdateCameraOrbitTransition(deltaTime);
+
         m_RenderBackend->ResizeViewport(static_cast<std::uint32_t>(m_ViewportSize.x), static_cast<std::uint32_t>(m_ViewportSize.y));
         m_RenderBackend->BeginFrame(m_SceneSettings);
         if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
@@ -274,6 +313,8 @@ namespace ds
             cursorSettings.atomOverrideColor = m_CursorColor;
             cursorSettings.atomScale = m_CursorVisualScale;
             cursorSettings.atomBrightness = std::max(1.0f, m_SceneSettings.atomBrightness + 0.2f);
+            cursorSettings.atomWireframe = true;
+            cursorSettings.atomWireframeWidth = std::max(1.0f, m_SelectionOutlineThickness);
             m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), cursorPosition, cursorColor, cursorSettings);
         }
 
@@ -287,26 +328,92 @@ namespace ds
 
     void EditorLayer::ToggleInteractionMode()
     {
+        if (m_TranslateModeActive)
+        {
+            m_TranslateModeActive = false;
+            m_TranslateConstraintAxis = -1;
+            m_TranslatePlaneLockAxis = -1;
+            m_TranslateIndices.clear();
+            m_TranslateInitialCartesian.clear();
+            m_TranslateCurrentOffset = glm::vec3(0.0f);
+            AppendSelectionDebugLog("Translate mode exited by Tab");
+        }
+
         if (m_InteractionMode == InteractionMode::Navigate)
         {
-            if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+            if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
             {
-                m_LastStructureOperationFailed = true;
-                m_LastStructureMessage = "Selection mode unavailable: load POSCAR/CONTCAR first.";
-                LogWarn(m_LastStructureMessage);
-                AppendSelectionDebugLog("Mode switch denied: no loaded structure");
+                m_InteractionMode = InteractionMode::Select;
+                LogInfo("Interaction mode: Select");
+                AppendSelectionDebugLog("Mode switched to Select");
                 return;
             }
 
-            m_InteractionMode = InteractionMode::Select;
-            LogInfo("Interaction mode: Select");
-            AppendSelectionDebugLog("Mode switched to Select");
+            m_InteractionMode = InteractionMode::ViewSet;
+            LogInfo("Interaction mode: ViewSet");
+            AppendSelectionDebugLog("Mode switched to ViewSet (Select unavailable)");
+            return;
+        }
+
+        if (m_InteractionMode == InteractionMode::Select)
+        {
+            m_InteractionMode = InteractionMode::ViewSet;
+            LogInfo("Interaction mode: ViewSet");
+            AppendSelectionDebugLog("Mode switched to ViewSet");
             return;
         }
 
         m_InteractionMode = InteractionMode::Navigate;
         LogInfo("Interaction mode: Navigate");
         AppendSelectionDebugLog("Mode switched to Navigate");
+    }
+
+    void EditorLayer::StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch)
+    {
+        if (!m_Camera)
+        {
+            return;
+        }
+
+        m_CameraTransitionActive = true;
+        m_CameraTransitionElapsed = 0.0f;
+
+        m_CameraTransitionStartTarget = m_Camera->GetTarget();
+        m_CameraTransitionEndTarget = target;
+
+        m_CameraTransitionStartDistance = m_Camera->GetDistance();
+        m_CameraTransitionEndDistance = distance;
+
+        m_CameraTransitionStartYaw = m_Camera->GetYaw();
+        m_CameraTransitionEndYaw = yaw;
+
+        m_CameraTransitionStartPitch = m_Camera->GetPitch();
+        m_CameraTransitionEndPitch = pitch;
+    }
+
+    void EditorLayer::UpdateCameraOrbitTransition(float deltaTime)
+    {
+        if (!m_CameraTransitionActive || !m_Camera)
+        {
+            return;
+        }
+
+        m_CameraTransitionElapsed += std::max(0.0f, deltaTime);
+        const float duration = std::max(0.01f, m_CameraTransitionDuration);
+        const float alpha = glm::clamp(m_CameraTransitionElapsed / duration, 0.0f, 1.0f);
+        const float t = EaseOutCubic(alpha);
+
+        const glm::vec3 target = glm::mix(m_CameraTransitionStartTarget, m_CameraTransitionEndTarget, t);
+        const float distance = glm::mix(m_CameraTransitionStartDistance, m_CameraTransitionEndDistance, t);
+        const float yaw = LerpAngleRadians(m_CameraTransitionStartYaw, m_CameraTransitionEndYaw, t);
+        const float pitch = LerpAngleRadians(m_CameraTransitionStartPitch, m_CameraTransitionEndPitch, t);
+
+        m_Camera->SetOrbitState(target, distance, yaw, pitch);
+
+        if (alpha >= 1.0f)
+        {
+            m_CameraTransitionActive = false;
+        }
     }
 
     void EditorLayer::AppendSelectionDebugLog(const std::string &message) const
@@ -390,6 +497,37 @@ namespace ds
         return found;
     }
 
+    glm::vec3 EditorLayer::GetAtomCartesianPosition(std::size_t atomIndex) const
+    {
+        if (atomIndex >= m_WorkingStructure.atoms.size())
+        {
+            return glm::vec3(0.0f);
+        }
+
+        glm::vec3 position = m_WorkingStructure.atoms[atomIndex].position;
+        if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+        {
+            position = m_WorkingStructure.DirectToCartesian(position);
+        }
+        return position;
+    }
+
+    void EditorLayer::SetAtomCartesianPosition(std::size_t atomIndex, const glm::vec3 &position)
+    {
+        if (atomIndex >= m_WorkingStructure.atoms.size())
+        {
+            return;
+        }
+
+        if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+        {
+            m_WorkingStructure.atoms[atomIndex].position = m_WorkingStructure.CartesianToDirect(position);
+            return;
+        }
+
+        m_WorkingStructure.atoms[atomIndex].position = position;
+    }
+
     bool EditorLayer::PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const
     {
         if (!m_Camera)
@@ -426,27 +564,27 @@ namespace ds
         const glm::vec3 worldNear = glm::vec3(nearPoint) / nearPoint.w;
         const glm::vec3 worldFar = glm::vec3(farPoint) / farPoint.w;
         const glm::vec3 ray = worldFar - worldNear;
-        const float rayY = ray.y;
-        if (std::abs(rayY) < 1e-6f)
+        const float rayZ = ray.z;
+        if (std::abs(rayZ) < 1e-6f)
         {
             return false;
         }
 
-        const float planeY = m_SceneSettings.gridOrigin.y;
-        const float t = (planeY - worldNear.y) / rayY;
+        const float planeZ = m_SceneSettings.gridOrigin.z;
+        const float t = (planeZ - worldNear.z) / rayZ;
         if (t < 0.0f)
         {
             return false;
         }
 
         glm::vec3 hit = worldNear + ray * t;
-        hit.y = planeY;
+        hit.z = planeZ;
 
         if (m_CursorSnapToGrid)
         {
             const float spacing = std::max(0.0001f, m_SceneSettings.gridSpacing);
             hit.x = std::round((hit.x - m_SceneSettings.gridOrigin.x) / spacing) * spacing + m_SceneSettings.gridOrigin.x;
-            hit.z = std::round((hit.z - m_SceneSettings.gridOrigin.z) / spacing) * spacing + m_SceneSettings.gridOrigin.z;
+            hit.y = std::round((hit.y - m_SceneSettings.gridOrigin.y) / spacing) * spacing + m_SceneSettings.gridOrigin.y;
         }
 
         outWorldPosition = hit;
@@ -652,6 +790,21 @@ namespace ds
 
     void EditorLayer::HandleViewportSelection()
     {
+        if (m_TranslateModeActive)
+        {
+            return;
+        }
+
+        if (m_BlockSelectionThisFrame)
+        {
+            return;
+        }
+
+        if (m_GizmoConsumedMouseThisFrame)
+        {
+            return;
+        }
+
         if (m_BoxSelectArmed)
         {
             return;
@@ -660,6 +813,14 @@ namespace ds
         const ImGuiIO &io = ImGui::GetIO();
         if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
+            return;
+        }
+
+        const bool gizmoConsumesInput = (m_GizmoEnabled && (ImGuizmo::IsOver() || ImGuizmo::IsUsing())) ||
+                                        (m_ViewGuizmoEnabled && (ImViewGuizmo::IsOver() || ImViewGuizmo::IsUsing()));
+        if (gizmoConsumesInput)
+        {
+            AppendSelectionDebugLog("Ignored click: gizmo consumed input");
             return;
         }
 
@@ -718,6 +879,48 @@ namespace ds
         {
             if (!multiSelect)
             {
+                bool preserveSelectionForGizmo = false;
+                if (m_GizmoEnabled && !m_SelectedAtomIndices.empty() && m_Camera)
+                {
+                    glm::vec3 pivot(0.0f);
+                    std::size_t validCount = 0;
+                    for (std::size_t atomIndex : m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= m_WorkingStructure.atoms.size())
+                        {
+                            continue;
+                        }
+
+                        pivot += GetAtomCartesianPosition(atomIndex);
+                        ++validCount;
+                    }
+
+                    if (validCount > 0)
+                    {
+                        pivot /= static_cast<float>(validCount);
+
+                        const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(pivot, 1.0f);
+                        if (clip.w > 0.0001f)
+                        {
+                            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                            const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                            const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                            const glm::vec2 pivotScreen(
+                                m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                                m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+
+                            const float distanceToPivot = glm::length(mousePos - pivotScreen);
+                            preserveSelectionForGizmo = distanceToPivot <= 48.0f;
+                        }
+                    }
+                }
+
+                if (preserveSelectionForGizmo)
+                {
+                    AppendSelectionDebugLog("Selection preserved: click near gizmo pivot");
+                    return;
+                }
+
                 m_SelectedAtomIndices.clear();
                 AppendSelectionDebugLog("Selection cleared: no hit and Ctrl not pressed");
             }
@@ -1525,6 +1728,60 @@ namespace ds
             {
                 m_CursorSnapToGrid = (value == "1");
             }
+            else if (key == "viewport_view_gizmo")
+            {
+                m_ViewGuizmoEnabled = (value == "1");
+            }
+            else if (key == "viewport_transform_gizmo_size")
+            {
+                try
+                {
+                    m_TransformGizmoSize = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_view_gizmo_scale")
+            {
+                try
+                {
+                    m_ViewGizmoScale = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_view_gizmo_offset_right")
+            {
+                try
+                {
+                    m_ViewGizmoOffsetRight = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_view_gizmo_offset_top")
+            {
+                try
+                {
+                    m_ViewGizmoOffsetTop = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_fallback_marker_scale")
+            {
+                try
+                {
+                    m_FallbackGizmoVisualScale = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
         }
 
         if (!hasSensitivityMode || !relativeSensitivity)
@@ -1555,6 +1812,22 @@ namespace ds
             m_CursorVisualScale = 0.05f;
         if (m_CursorVisualScale > 2.0f)
             m_CursorVisualScale = 2.0f;
+        if (m_TransformGizmoSize < 0.05f)
+            m_TransformGizmoSize = 0.05f;
+        if (m_TransformGizmoSize > 0.35f)
+            m_TransformGizmoSize = 0.35f;
+        if (m_ViewGizmoScale < 0.35f)
+            m_ViewGizmoScale = 0.35f;
+        if (m_ViewGizmoScale > 2.20f)
+            m_ViewGizmoScale = 2.20f;
+        if (m_ViewGizmoOffsetRight < 0.0f)
+            m_ViewGizmoOffsetRight = 0.0f;
+        if (m_ViewGizmoOffsetTop < 0.0f)
+            m_ViewGizmoOffsetTop = 0.0f;
+        if (m_FallbackGizmoVisualScale < 0.5f)
+            m_FallbackGizmoVisualScale = 0.5f;
+        if (m_FallbackGizmoVisualScale > 6.0f)
+            m_FallbackGizmoVisualScale = 6.0f;
     }
 
     void EditorLayer::SaveSettings() const
@@ -1632,12 +1905,26 @@ namespace ds
         out << "viewport_cursor_z=" << m_CursorPosition.z << '\n';
         out << "viewport_cursor_scale=" << m_CursorVisualScale << '\n';
         out << "viewport_cursor_snap=" << (m_CursorSnapToGrid ? "1" : "0") << '\n';
+        out << "viewport_view_gizmo=" << (m_ViewGuizmoEnabled ? "1" : "0") << '\n';
+        out << "viewport_transform_gizmo_size=" << m_TransformGizmoSize << '\n';
+        out << "viewport_view_gizmo_scale=" << m_ViewGizmoScale << '\n';
+        out << "viewport_view_gizmo_offset_right=" << m_ViewGizmoOffsetRight << '\n';
+        out << "viewport_view_gizmo_offset_top=" << m_ViewGizmoOffsetTop << '\n';
+        out << "viewport_fallback_marker_scale=" << m_FallbackGizmoVisualScale << '\n';
     }
 
     void EditorLayer::OnImGuiRender()
     {
         bool settingsChanged = false;
         const ImGuiIO &io = ImGui::GetIO();
+
+        static bool s_LastCanRenderTransformGizmo = false;
+        static bool s_LastValidPivot = false;
+        static bool s_LastGizmoOver = false;
+        static bool s_LastGizmoUsing = false;
+        static bool s_LastGizmoManipulated = false;
+        static bool s_GizmoStateInitialized = false;
+        static std::size_t s_LastSelectedCount = 0;
 
         ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
 
@@ -1713,10 +2000,327 @@ namespace ds
         ImGui::Begin("Viewport");
         m_ViewportFocused = ImGui::IsWindowFocused();
         m_ViewportHovered = ImGui::IsWindowHovered();
+        m_BlockSelectionThisFrame = false;
+        m_GizmoConsumedMouseThisFrame = false;
 
         if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Tab, false))
         {
             ToggleInteractionMode();
+        }
+
+        auto beginTranslateMode = [&]()
+        {
+            if (!m_Camera || !m_HasStructureLoaded || m_SelectedAtomIndices.empty())
+            {
+                AppendSelectionDebugLog("Translate mode start denied: missing camera/structure/selection");
+                return;
+            }
+
+            m_TranslateIndices.clear();
+            m_TranslateInitialCartesian.clear();
+            m_TranslateCurrentOffset = glm::vec3(0.0f);
+            m_TranslateConstraintAxis = -1;
+            m_TranslatePlaneLockAxis = -1;
+
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex >= m_WorkingStructure.atoms.size())
+                {
+                    continue;
+                }
+
+                m_TranslateIndices.push_back(atomIndex);
+                m_TranslateInitialCartesian.push_back(GetAtomCartesianPosition(atomIndex));
+            }
+
+            if (m_TranslateIndices.empty())
+            {
+                AppendSelectionDebugLog("Translate mode start denied: no valid selected indices");
+                return;
+            }
+
+            m_TranslateModeActive = true;
+            m_InteractionMode = InteractionMode::Translate;
+            m_TranslateLastMousePos = glm::vec2(io.MousePos.x, io.MousePos.y);
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Translate mode active: move mouse, X/Y/Z constrain, Shift+X/Y/Z plane lock, Ctrl snap.";
+            AppendSelectionDebugLog("Translate mode started (G)");
+        };
+
+        auto cancelTranslateMode = [&]()
+        {
+            if (!m_TranslateModeActive)
+            {
+                return;
+            }
+
+            const std::size_t count = std::min(m_TranslateIndices.size(), m_TranslateInitialCartesian.size());
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                SetAtomCartesianPosition(m_TranslateIndices[i], m_TranslateInitialCartesian[i]);
+            }
+
+            m_TranslateModeActive = false;
+            m_InteractionMode = InteractionMode::Select;
+            m_TranslateIndices.clear();
+            m_TranslateInitialCartesian.clear();
+            m_TranslateCurrentOffset = glm::vec3(0.0f);
+            m_TranslateConstraintAxis = -1;
+            m_TranslatePlaneLockAxis = -1;
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Translate mode canceled.";
+            AppendSelectionDebugLog("Translate mode canceled (Esc/RMB)");
+        };
+
+        auto commitTranslateMode = [&]()
+        {
+            if (!m_TranslateModeActive)
+            {
+                return;
+            }
+
+            m_TranslateModeActive = false;
+            m_InteractionMode = InteractionMode::Select;
+            m_TranslateIndices.clear();
+            m_TranslateInitialCartesian.clear();
+            m_TranslateCurrentOffset = glm::vec3(0.0f);
+            m_TranslateConstraintAxis = -1;
+            m_TranslatePlaneLockAxis = -1;
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Translate mode applied.";
+            AppendSelectionDebugLog("Translate mode applied (LMB/Enter)");
+        };
+
+        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_G, false))
+        {
+            if (m_TranslateModeActive)
+            {
+                commitTranslateMode();
+            }
+            else
+            {
+                beginTranslateMode();
+            }
+        }
+
+        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Q, false))
+        {
+            m_ModePiePopupPos = glm::vec2(io.MousePos.x, io.MousePos.y);
+            ImGui::OpenPopup("InteractionModePie");
+        }
+
+        ImGui::SetNextWindowPos(ImVec2(m_ModePiePopupPos.x, m_ModePiePopupPos.y), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (ImGui::BeginPopup("InteractionModePie"))
+        {
+            ImGui::TextUnformatted("Interaction Mode");
+            ImGui::Separator();
+
+            if (ImGui::Selectable("Select"))
+            {
+                m_InteractionMode = InteractionMode::Select;
+                m_TranslateModeActive = false;
+            }
+            if (ImGui::Selectable("Navigate"))
+            {
+                m_InteractionMode = InteractionMode::Navigate;
+                m_TranslateModeActive = false;
+            }
+            if (ImGui::Selectable("ViewSet"))
+            {
+                m_InteractionMode = InteractionMode::ViewSet;
+                m_TranslateModeActive = false;
+            }
+            if (ImGui::Selectable("Translate (G)"))
+            {
+                beginTranslateMode();
+            }
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("Q: open pie");
+            ImGui::TextUnformatted("G: start/confirm translate");
+            ImGui::EndPopup();
+        }
+
+        if (m_TranslateModeActive && m_Camera)
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            {
+                cancelTranslateMode();
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                commitTranslateMode();
+            }
+            else
+            {
+                if (ImGui::IsKeyPressed(ImGuiKey_X, false))
+                {
+                    if (io.KeyShift)
+                    {
+                        m_TranslatePlaneLockAxis = 0;
+                        m_TranslateConstraintAxis = -1;
+                        AppendSelectionDebugLog("Translate constraint: plane lock X (Shift+X)");
+                    }
+                    else
+                    {
+                        m_TranslateConstraintAxis = 0;
+                        m_TranslatePlaneLockAxis = -1;
+                        AppendSelectionDebugLog("Translate constraint: axis X");
+                    }
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_Y, false))
+                {
+                    if (io.KeyShift)
+                    {
+                        m_TranslatePlaneLockAxis = 1;
+                        m_TranslateConstraintAxis = -1;
+                        AppendSelectionDebugLog("Translate constraint: plane lock Y (Shift+Y)");
+                    }
+                    else
+                    {
+                        m_TranslateConstraintAxis = 1;
+                        m_TranslatePlaneLockAxis = -1;
+                        AppendSelectionDebugLog("Translate constraint: axis Y");
+                    }
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_Z, false))
+                {
+                    if (io.KeyShift)
+                    {
+                        m_TranslatePlaneLockAxis = 2;
+                        m_TranslateConstraintAxis = -1;
+                        AppendSelectionDebugLog("Translate constraint: plane lock Z (Shift+Z)");
+                    }
+                    else
+                    {
+                        m_TranslateConstraintAxis = 2;
+                        m_TranslatePlaneLockAxis = -1;
+                        AppendSelectionDebugLog("Translate constraint: axis Z");
+                    }
+                }
+
+                const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
+                const glm::vec2 mouseDelta = mousePos - m_TranslateLastMousePos;
+                m_TranslateLastMousePos = mousePos;
+
+                const glm::vec3 forward = glm::normalize(glm::vec3(
+                    std::cos(m_Camera->GetPitch()) * std::sin(m_Camera->GetYaw()),
+                    std::cos(m_Camera->GetPitch()) * std::cos(m_Camera->GetYaw()),
+                    std::sin(m_Camera->GetPitch())));
+                const glm::vec3 worldUp(0.0f, 0.0f, 1.0f);
+                const glm::vec3 right = glm::normalize(glm::cross(forward, worldUp));
+                const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+
+                const float panSpeed = 0.006f * m_Camera->GetDistance();
+                glm::vec3 frameDelta = (-right * mouseDelta.x + up * mouseDelta.y) * panSpeed;
+
+                const glm::vec3 axis[3] = {
+                    glm::vec3(1.0f, 0.0f, 0.0f),
+                    glm::vec3(0.0f, 1.0f, 0.0f),
+                    glm::vec3(0.0f, 0.0f, 1.0f)};
+
+                if (m_TranslateConstraintAxis >= 0 && m_TranslateConstraintAxis < 3)
+                {
+                    frameDelta = axis[m_TranslateConstraintAxis] * glm::dot(frameDelta, axis[m_TranslateConstraintAxis]);
+                }
+                else if (m_TranslatePlaneLockAxis >= 0 && m_TranslatePlaneLockAxis < 3)
+                {
+                    frameDelta -= axis[m_TranslatePlaneLockAxis] * glm::dot(frameDelta, axis[m_TranslatePlaneLockAxis]);
+                }
+
+                m_TranslateCurrentOffset += frameDelta;
+
+                glm::vec3 appliedOffset = m_TranslateCurrentOffset;
+                if (io.KeyCtrl)
+                {
+                    const float snapStep = std::max(0.001f, m_GizmoTranslateSnap);
+
+                    if (m_TranslateConstraintAxis >= 0 && m_TranslateConstraintAxis < 3)
+                    {
+                        const float scalar = glm::dot(m_TranslateCurrentOffset, axis[m_TranslateConstraintAxis]);
+                        const float snapped = std::round(scalar / snapStep) * snapStep;
+                        appliedOffset = axis[m_TranslateConstraintAxis] * snapped;
+                    }
+                    else
+                    {
+                        appliedOffset.x = std::round(appliedOffset.x / snapStep) * snapStep;
+                        appliedOffset.y = std::round(appliedOffset.y / snapStep) * snapStep;
+                        appliedOffset.z = std::round(appliedOffset.z / snapStep) * snapStep;
+
+                        if (m_TranslatePlaneLockAxis >= 0 && m_TranslatePlaneLockAxis < 3)
+                        {
+                            if (m_TranslatePlaneLockAxis == 0)
+                                appliedOffset.x = 0.0f;
+                            if (m_TranslatePlaneLockAxis == 1)
+                                appliedOffset.y = 0.0f;
+                            if (m_TranslatePlaneLockAxis == 2)
+                                appliedOffset.z = 0.0f;
+                        }
+                    }
+                }
+
+                const std::size_t count = std::min(m_TranslateIndices.size(), m_TranslateInitialCartesian.size());
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    SetAtomCartesianPosition(m_TranslateIndices[i], m_TranslateInitialCartesian[i] + appliedOffset);
+                }
+
+                m_BlockSelectionThisFrame = true;
+                m_GizmoConsumedMouseThisFrame = true;
+            }
+        }
+
+        if (m_ViewportFocused && m_InteractionMode == InteractionMode::ViewSet && !io.WantTextInput && m_Camera)
+        {
+            const glm::vec3 target = m_Camera->GetTarget();
+            const float distance = m_Camera->GetDistance();
+            bool viewKeyUsed = false;
+            float yaw = m_Camera->GetYaw();
+            float pitch = m_Camera->GetPitch();
+
+            if (ImGui::IsKeyPressed(ImGuiKey_T, false))
+            {
+                pitch = glm::half_pi<float>() - 0.01f;
+                yaw = 0.0f;
+                viewKeyUsed = true;
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_B, false))
+            {
+                pitch = -glm::half_pi<float>() + 0.01f;
+                yaw = 0.0f;
+                viewKeyUsed = true;
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_L, false))
+            {
+                yaw = -glm::half_pi<float>();
+                pitch = 0.0f;
+                viewKeyUsed = true;
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_R, false))
+            {
+                yaw = glm::half_pi<float>();
+                pitch = 0.0f;
+                viewKeyUsed = true;
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_P, false))
+            {
+                yaw = 0.0f;
+                pitch = 0.0f;
+                viewKeyUsed = true;
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_K, false))
+            {
+                yaw = glm::pi<float>();
+                pitch = 0.0f;
+                viewKeyUsed = true;
+            }
+
+            if (viewKeyUsed)
+            {
+                StartCameraOrbitTransition(target, distance, yaw, pitch);
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "ViewSet: smooth camera transition started from keyboard.";
+            }
         }
 
         if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_B, false))
@@ -1751,6 +2355,444 @@ namespace ds
                 const ImVec2 rectMax = ImGui::GetItemRectMax();
                 m_ViewportRectMin = glm::vec2(rectMin.x, rectMin.y);
                 m_ViewportRectMax = glm::vec2(rectMax.x, rectMax.y);
+
+                const bool canRenderTransformGizmo = m_GizmoEnabled && m_Camera && !m_SelectedAtomIndices.empty() && m_HasStructureLoaded;
+                if (canRenderTransformGizmo != s_LastCanRenderTransformGizmo || m_SelectedAtomIndices.size() != s_LastSelectedCount)
+                {
+                    std::ostringstream gizmoPreconditionsLog;
+                    gizmoPreconditionsLog << "Gizmo preconditions: canRender=" << (canRenderTransformGizmo ? "1" : "0")
+                                          << " gizmoEnabled=" << (m_GizmoEnabled ? "1" : "0")
+                                          << " hasCamera=" << (m_Camera ? "1" : "0")
+                                          << " hasStructure=" << (m_HasStructureLoaded ? "1" : "0")
+                                          << " selectedCount=" << m_SelectedAtomIndices.size();
+                    AppendSelectionDebugLog(gizmoPreconditionsLog.str());
+                    s_LastCanRenderTransformGizmo = canRenderTransformGizmo;
+                    s_LastSelectedCount = m_SelectedAtomIndices.size();
+                }
+
+                if (m_GizmoEnabled && m_Camera && !m_SelectedAtomIndices.empty() && m_HasStructureLoaded)
+                {
+                    glm::vec3 pivot(0.0f);
+                    std::size_t validCount = 0;
+                    for (std::size_t atomIndex : m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= m_WorkingStructure.atoms.size())
+                        {
+                            continue;
+                        }
+
+                        pivot += GetAtomCartesianPosition(atomIndex);
+                        ++validCount;
+                    }
+
+                    if (validCount > 0)
+                    {
+                        pivot /= static_cast<float>(validCount);
+                        glm::vec2 pivotScreen(0.0f, 0.0f);
+                        bool pivotInViewport = false;
+
+                        if (!s_LastValidPivot)
+                        {
+                            std::ostringstream pivotLog;
+                            pivotLog << "Gizmo pivot ready: validCount=" << validCount
+                                     << " pivot=(" << pivot.x << "," << pivot.y << "," << pivot.z << ")";
+                            AppendSelectionDebugLog(pivotLog.str());
+
+                            const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(pivot, 1.0f);
+                            if (clip.w > 0.0001f)
+                            {
+                                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                                const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                                const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                                const glm::vec2 pivotScreen(
+                                    m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                                    m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+                                const bool inViewport =
+                                    pivotScreen.x >= m_ViewportRectMin.x && pivotScreen.x <= m_ViewportRectMax.x &&
+                                    pivotScreen.y >= m_ViewportRectMin.y && pivotScreen.y <= m_ViewportRectMax.y;
+
+                                std::ostringstream projectionLog;
+                                projectionLog << "Gizmo pivot projection: ndc=(" << ndc.x << "," << ndc.y << "," << ndc.z << ")"
+                                              << " screen=(" << pivotScreen.x << "," << pivotScreen.y << ")"
+                                              << " inViewport=" << (inViewport ? "1" : "0");
+                                AppendSelectionDebugLog(projectionLog.str());
+                            }
+                            else
+                            {
+                                AppendSelectionDebugLog("Gizmo pivot projection: clip.w <= 0 (behind camera).");
+                            }
+                        }
+                        s_LastValidPivot = true;
+
+                        {
+                            const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(pivot, 1.0f);
+                            if (clip.w > 0.0001f)
+                            {
+                                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                                const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                                const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                                pivotScreen = glm::vec2(
+                                    m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                                    m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+                                pivotInViewport =
+                                    pivotScreen.x >= m_ViewportRectMin.x && pivotScreen.x <= m_ViewportRectMax.x &&
+                                    pivotScreen.y >= m_ViewportRectMin.y && pivotScreen.y <= m_ViewportRectMax.y;
+                                m_FallbackPivotScreen = pivotScreen;
+                            }
+                        }
+
+                        glm::vec2 fallbackAxisScreenDir[3] = {
+                            glm::vec2(1.0f, 0.0f),
+                            glm::vec2(0.0f, 1.0f),
+                            glm::vec2(0.0f, -1.0f)};
+                        glm::vec2 fallbackAxisEnd[3] = {
+                            pivotScreen,
+                            pivotScreen,
+                            pivotScreen};
+                        float fallbackPixelsPerWorld[3] = {1.0f, 1.0f, 1.0f};
+                        bool fallbackAxisVisible[3] = {false, false, false};
+                        int hoveredFallbackAxis = -1;
+
+                        if (pivotInViewport)
+                        {
+                            const glm::vec3 axisWorld[3] = {
+                                glm::vec3(1.0f, 0.0f, 0.0f),
+                                glm::vec3(0.0f, 1.0f, 0.0f),
+                                glm::vec3(0.0f, 0.0f, 1.0f)};
+                            const ImU32 axisColor[3] = {
+                                IM_COL32(230, 70, 70, 245),
+                                IM_COL32(70, 230, 70, 245),
+                                IM_COL32(70, 120, 245, 245)};
+
+                            const float markerScale = glm::clamp(m_FallbackGizmoVisualScale, 0.5f, 6.0f);
+                            const float centerRadius = (m_FallbackGizmoDragging ? 9.0f : 7.5f) * markerScale;
+                            const float thickness = (m_FallbackGizmoDragging ? 3.2f : 2.6f) * markerScale;
+                            const float headLength = 12.0f * markerScale;
+                            const float headWidth = 8.0f * markerScale;
+                            const float axisWorldLen = 1.0f;
+
+                            ImDrawList *overlay = ImGui::GetForegroundDrawList();
+                            const ImVec2 p(pivotScreen.x, pivotScreen.y);
+
+                            for (int axis = 0; axis < 3; ++axis)
+                            {
+                                const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(pivot + axisWorld[axis] * axisWorldLen, 1.0f);
+                                if (clip.w <= 0.0001f)
+                                {
+                                    continue;
+                                }
+
+                                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                                const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                                const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                                const glm::vec2 endScreen(
+                                    m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                                    m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+
+                                glm::vec2 axisVec = endScreen - pivotScreen;
+                                const float axisPixels = glm::length(axisVec);
+                                if (axisPixels < 8.0f)
+                                {
+                                    continue;
+                                }
+
+                                axisVec /= axisPixels;
+                                fallbackAxisVisible[axis] = true;
+                                fallbackAxisScreenDir[axis] = axisVec;
+                                fallbackAxisEnd[axis] = endScreen;
+                                fallbackPixelsPerWorld[axis] = axisPixels / axisWorldLen;
+
+                                const ImVec2 a(p.x, p.y);
+                                const ImVec2 b(endScreen.x, endScreen.y);
+                                overlay->AddLine(a, b, axisColor[axis], thickness);
+
+                                const glm::vec2 perp(-axisVec.y, axisVec.x);
+                                const ImVec2 tip(endScreen.x, endScreen.y);
+                                const ImVec2 left(endScreen.x - axisVec.x * headLength + perp.x * headWidth,
+                                                 endScreen.y - axisVec.y * headLength + perp.y * headWidth);
+                                const ImVec2 right(endScreen.x - axisVec.x * headLength - perp.x * headWidth,
+                                                  endScreen.y - axisVec.y * headLength - perp.y * headWidth);
+                                overlay->AddTriangleFilled(tip, left, right, axisColor[axis]);
+                            }
+
+                            if (!m_FallbackGizmoDragging && m_GizmoOperationIndex == 0)
+                            {
+                                const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
+                                const float pickRadius = 10.0f * markerScale;
+                                float bestDist = std::numeric_limits<float>::max();
+
+                                for (int axis = 0; axis < 3; ++axis)
+                                {
+                                    if (!fallbackAxisVisible[axis])
+                                    {
+                                        continue;
+                                    }
+
+                                    const glm::vec2 a = pivotScreen;
+                                    const glm::vec2 b = fallbackAxisEnd[axis];
+                                    const glm::vec2 ab = b - a;
+                                    const float abLen2 = glm::dot(ab, ab);
+                                    if (abLen2 < 1.0f)
+                                    {
+                                        continue;
+                                    }
+
+                                    const float t = glm::clamp(glm::dot(mousePos - a, ab) / abLen2, 0.0f, 1.0f);
+                                    const glm::vec2 closest = a + ab * t;
+                                    const float dist = glm::length(mousePos - closest);
+                                    if (dist < pickRadius && dist < bestDist)
+                                    {
+                                        bestDist = dist;
+                                        hoveredFallbackAxis = axis;
+                                    }
+                                }
+                            }
+
+                            if (hoveredFallbackAxis >= 0 || m_FallbackGizmoDragging)
+                            {
+                                const int axisToHighlight = m_FallbackGizmoDragging ? m_FallbackGizmoAxis : hoveredFallbackAxis;
+                                if (axisToHighlight >= 0 && axisToHighlight < 3 && fallbackAxisVisible[axisToHighlight])
+                                {
+                                    const ImVec2 tip(fallbackAxisEnd[axisToHighlight].x, fallbackAxisEnd[axisToHighlight].y);
+                                    overlay->AddCircle(tip, 8.0f * markerScale, IM_COL32(255, 255, 255, 235), 0, 2.0f * markerScale);
+                                }
+                            }
+
+                            overlay->AddCircleFilled(p, centerRadius, IM_COL32(245, 245, 245, 235));
+                            overlay->AddCircle(p, centerRadius + 2.5f * markerScale, IM_COL32(20, 20, 20, 230), 0, 1.6f * markerScale);
+                        }
+
+                        glm::mat4 gizmoTransform = glm::translate(glm::mat4(1.0f), pivot);
+                        glm::mat4 deltaTransform(1.0f);
+
+                        ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList());
+                        ImGuizmo::BeginFrame();
+                        ImGuizmo::Enable(true);
+                        ImGuizmo::PushID(0);
+                        ImGuizmo::SetOrthographic(m_ProjectionModeIndex == 1);
+                        ImGuizmo::SetRect(rectMin.x, rectMin.y, size.x, size.y);
+                        const glm::vec3 cameraDirection = glm::normalize(glm::vec3(
+                            std::cos(m_Camera->GetPitch()) * std::sin(m_Camera->GetYaw()),
+                            std::cos(m_Camera->GetPitch()) * std::cos(m_Camera->GetYaw()),
+                            std::sin(m_Camera->GetPitch())));
+                        const glm::vec3 cameraPosition = m_Camera->GetTarget() - cameraDirection * m_Camera->GetDistance();
+                        const float distanceToPivot = glm::max(0.25f, glm::length(cameraPosition - pivot));
+                        const float distanceCompensation = glm::clamp(6.0f / distanceToPivot, 0.55f, 1.85f);
+                        const float gizmoSize = glm::clamp(m_TransformGizmoSize * distanceCompensation, 0.07f, 0.40f);
+                        ImGuizmo::SetGizmoSizeClipSpace(gizmoSize);
+
+                        ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
+                        if (m_GizmoOperationIndex == 1)
+                        {
+                            operation = ImGuizmo::ROTATE;
+                        }
+                        else if (m_GizmoOperationIndex == 2)
+                        {
+                            operation = ImGuizmo::SCALE;
+                        }
+
+                        ImGuizmo::MODE mode = (m_GizmoModeIndex == 0) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+
+                        float snapValues[3] = {m_GizmoTranslateSnap, m_GizmoTranslateSnap, m_GizmoTranslateSnap};
+                        if (operation == ImGuizmo::ROTATE)
+                        {
+                            snapValues[0] = m_GizmoRotateSnapDeg;
+                            snapValues[1] = m_GizmoRotateSnapDeg;
+                            snapValues[2] = m_GizmoRotateSnapDeg;
+                        }
+                        else if (operation == ImGuizmo::SCALE)
+                        {
+                            snapValues[0] = m_GizmoScaleSnap;
+                            snapValues[1] = m_GizmoScaleSnap;
+                            snapValues[2] = m_GizmoScaleSnap;
+                        }
+
+                        const bool manipulated = ImGuizmo::Manipulate(
+                            glm::value_ptr(m_Camera->GetViewMatrix()),
+                            glm::value_ptr(m_Camera->GetProjectionMatrix()),
+                            operation,
+                            mode,
+                            glm::value_ptr(gizmoTransform),
+                            glm::value_ptr(deltaTransform),
+                            m_GizmoSnapEnabled ? snapValues : nullptr);
+                        ImGuizmo::PopID();
+
+                        const bool gizmoOver = ImGuizmo::IsOver();
+                        const bool gizmoUsing = ImGuizmo::IsUsing();
+                        if (!s_GizmoStateInitialized || gizmoOver != s_LastGizmoOver || gizmoUsing != s_LastGizmoUsing || manipulated != s_LastGizmoManipulated)
+                        {
+                            std::ostringstream gizmoStateLog;
+                            gizmoStateLog << "Gizmo state: over=" << (gizmoOver ? "1" : "0")
+                                          << " using=" << (gizmoUsing ? "1" : "0")
+                                          << " manipulated=" << (manipulated ? "1" : "0")
+                                          << " size=" << gizmoSize
+                                          << " distPivot=" << distanceToPivot
+                                          << " op=" << m_GizmoOperationIndex
+                                          << " mode=" << m_GizmoModeIndex;
+                            AppendSelectionDebugLog(gizmoStateLog.str());
+                            s_LastGizmoOver = gizmoOver;
+                            s_LastGizmoUsing = gizmoUsing;
+                            s_LastGizmoManipulated = manipulated;
+                            s_GizmoStateInitialized = true;
+                        }
+
+                        if (gizmoOver || gizmoUsing)
+                        {
+                            m_GizmoConsumedMouseThisFrame = true;
+                        }
+
+                        if (!gizmoOver && !gizmoUsing && pivotInViewport && !m_FallbackGizmoDragging && m_GizmoOperationIndex == 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                        {
+                            if (hoveredFallbackAxis >= 0)
+                            {
+                                m_FallbackGizmoDragging = true;
+                                m_FallbackGizmoAxis = hoveredFallbackAxis;
+                                m_FallbackLastMousePos = glm::vec2(io.MousePos.x, io.MousePos.y);
+                                m_FallbackDragAxisScreenDir = fallbackAxisScreenDir[hoveredFallbackAxis];
+                                m_FallbackDragAxisWorldDir = (hoveredFallbackAxis == 0) ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                                                                           : (hoveredFallbackAxis == 1) ? glm::vec3(0.0f, 1.0f, 0.0f)
+                                                                                                                     : glm::vec3(0.0f, 0.0f, 1.0f);
+                                m_FallbackDragPixelsPerWorld = std::max(1.0f, fallbackPixelsPerWorld[hoveredFallbackAxis]);
+                                m_FallbackDragAccumulated = 0.0f;
+                                m_FallbackDragApplied = 0.0f;
+                                m_GizmoConsumedMouseThisFrame = true;
+
+                                std::ostringstream dragStartLog;
+                                dragStartLog << "Fallback axis drag started: axis=" << m_FallbackGizmoAxis
+                                             << " pxPerWorld=" << m_FallbackDragPixelsPerWorld;
+                                AppendSelectionDebugLog(dragStartLog.str());
+                            }
+                        }
+
+                        if (m_FallbackGizmoDragging)
+                        {
+                            if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                            {
+                                const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
+                                const glm::vec2 delta = mousePos - m_FallbackLastMousePos;
+                                m_FallbackLastMousePos = mousePos;
+
+                                const float deltaOnAxisPixels = glm::dot(delta, m_FallbackDragAxisScreenDir);
+                                const float deltaOnAxisWorld = deltaOnAxisPixels / std::max(1.0f, m_FallbackDragPixelsPerWorld);
+
+                                float worldToApply = deltaOnAxisWorld;
+                                if (m_GizmoSnapEnabled)
+                                {
+                                    const float snapStep = std::max(0.001f, m_GizmoTranslateSnap);
+                                    m_FallbackDragAccumulated += deltaOnAxisWorld;
+                                    const float snappedTarget = std::round(m_FallbackDragAccumulated / snapStep) * snapStep;
+                                    worldToApply = snappedTarget - m_FallbackDragApplied;
+                                    m_FallbackDragApplied = snappedTarget;
+                                }
+
+                                const glm::vec3 worldDelta = m_FallbackDragAxisWorldDir * worldToApply;
+                                if (glm::length(worldDelta) > 0.000001f)
+                                {
+                                    for (std::size_t atomIndex : m_SelectedAtomIndices)
+                                    {
+                                        if (atomIndex >= m_WorkingStructure.atoms.size())
+                                        {
+                                            continue;
+                                        }
+
+                                        const glm::vec3 atomCartesian = GetAtomCartesianPosition(atomIndex);
+                                        SetAtomCartesianPosition(atomIndex, atomCartesian + worldDelta);
+                                    }
+
+                                    m_LastStructureOperationFailed = false;
+                                    m_LastStructureMessage = "Fallback gizmo drag applied to selection (" + std::to_string(m_SelectedAtomIndices.size()) + " atoms).";
+                                }
+
+                                m_GizmoConsumedMouseThisFrame = true;
+                            }
+                            else
+                            {
+                                m_FallbackGizmoDragging = false;
+                                m_FallbackGizmoAxis = -1;
+                                m_FallbackDragAccumulated = 0.0f;
+                                m_FallbackDragApplied = 0.0f;
+                                AppendSelectionDebugLog("Fallback axis drag ended");
+                            }
+                        }
+
+                        if (manipulated && ImGuizmo::IsUsing())
+                        {
+                            for (std::size_t atomIndex : m_SelectedAtomIndices)
+                            {
+                                if (atomIndex >= m_WorkingStructure.atoms.size())
+                                {
+                                    continue;
+                                }
+
+                                const glm::vec3 atomCartesian = GetAtomCartesianPosition(atomIndex);
+                                const glm::vec3 transformed = glm::vec3(deltaTransform * glm::vec4(atomCartesian, 1.0f));
+                                SetAtomCartesianPosition(atomIndex, transformed);
+                            }
+
+                            m_LastStructureOperationFailed = false;
+                            m_LastStructureMessage = "Gizmo transform applied to selection (" + std::to_string(m_SelectedAtomIndices.size()) + " atoms).";
+                        }
+                    }
+                    else if (s_LastValidPivot)
+                    {
+                        AppendSelectionDebugLog("Gizmo pivot unavailable: selected atoms are not valid indices.");
+                        s_LastValidPivot = false;
+                    }
+                }
+                else if (s_LastValidPivot)
+                {
+                    AppendSelectionDebugLog("Gizmo pivot reset: transform gizmo preconditions no longer met.");
+                    s_LastValidPivot = false;
+                    m_FallbackGizmoDragging = false;
+                    m_FallbackGizmoAxis = -1;
+                }
+
+                if ((m_GizmoEnabled && (ImGuizmo::IsOver() || ImGuizmo::IsUsing())) ||
+                    (m_ViewGuizmoEnabled && (ImViewGuizmo::IsOver() || ImViewGuizmo::IsUsing())))
+                {
+                    m_BlockSelectionThisFrame = true;
+                    m_GizmoConsumedMouseThisFrame = true;
+                }
+
+                if (m_ViewGuizmoEnabled && m_Camera)
+                {
+                    ImViewGuizmo::BeginFrame();
+                    ImViewGuizmo::GetStyle().scale = m_ViewGizmoScale;
+
+                    glm::vec3 target = m_Camera->GetTarget();
+                    const float yaw = m_Camera->GetYaw();
+                    const float pitch = m_Camera->GetPitch();
+                    const float distance = m_Camera->GetDistance();
+
+                    const glm::vec3 cameraDirection = glm::normalize(glm::vec3(
+                        std::cos(pitch) * std::sin(yaw),
+                        std::sin(pitch),
+                        std::cos(pitch) * std::cos(yaw)));
+
+                    glm::vec3 cameraPosition = target - cameraDirection * distance;
+                    glm::quat cameraRotation = glm::quatLookAt(cameraDirection, glm::vec3(0.0f, 0.0f, 1.0f));
+
+                    const float rotateWidgetWidth = 256.0f * m_ViewGizmoScale;
+                    const ImVec2 rotatePos(rectMax.x - rotateWidgetWidth - m_ViewGizmoOffsetRight, rectMin.y + m_ViewGizmoOffsetTop);
+
+                    bool viewChanged = false;
+                    viewChanged |= ImViewGuizmo::Rotate(cameraPosition, cameraRotation, target, rotatePos, 0.0125f);
+
+                    if (viewChanged)
+                    {
+                        const glm::vec3 viewDir = glm::normalize(target - cameraPosition);
+                        const float nextDistance = glm::max(0.5f, glm::length(target - cameraPosition));
+                        const float nextYaw = std::atan2(viewDir.x, viewDir.y);
+                        const float nextPitch = std::asin(glm::clamp(viewDir.z, -1.0f, 1.0f));
+                        m_Camera->SetOrbitState(target, nextDistance, nextYaw, nextPitch);
+                    }
+
+                    if (ImViewGuizmo::IsOver() || ImViewGuizmo::IsUsing())
+                    {
+                        m_BlockSelectionThisFrame = true;
+                        m_GizmoConsumedMouseThisFrame = true;
+                    }
+                }
 
                 if (ImGui::BeginPopupContextItem("ViewportSelectionContext", ImGuiPopupFlags_MouseButtonRight))
                 {
@@ -1906,6 +2948,8 @@ namespace ds
         ImGui::BulletText("Shift + MMB pan");
         ImGui::BulletText("Mouse Wheel zoom");
         ImGui::BulletText("RMB on viewport: Set 3D Cursor Here");
+        ImGui::BulletText("Top-right axis gizmo: rotate view");
+        ImGui::BulletText("ViewSet mode keys: T top, B bottom, L left, R right, P front, K back");
         ImGui::End();
 
         if (m_ViewportSettingsOpen)
@@ -2034,7 +3078,7 @@ namespace ds
         }
 
         ImGui::Begin("Tools");
-        ImGui::TextUnformatted("Structure I/O (T04)");
+        ImGui::SeparatorText("Structure I/O");
         ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
         ImGui::SameLine();
         if (ImGui::Button("Browse##Import"))
@@ -2059,10 +3103,31 @@ namespace ds
             LoadStructureFromPath(samplePath);
         }
 
-        ImGui::Separator();
-        const char *interactionModeLabel = (m_InteractionMode == InteractionMode::Navigate) ? "Navigate" : "Select";
+        ImGui::SeparatorText("Selection & Gizmo");
+        const char *interactionModeLabel = "Navigate";
+        if (m_InteractionMode == InteractionMode::Select)
+        {
+            interactionModeLabel = "Select";
+        }
+        else if (m_InteractionMode == InteractionMode::ViewSet)
+        {
+            interactionModeLabel = "ViewSet";
+        }
+        else if (m_InteractionMode == InteractionMode::Translate)
+        {
+            interactionModeLabel = "Translate";
+        }
         ImGui::Text("Mode: %s", interactionModeLabel);
         ImGui::TextUnformatted("Tab: toggle mode (when viewport focused)");
+        if (m_InteractionMode == InteractionMode::ViewSet)
+        {
+            ImGui::TextUnformatted("ViewSet keys: T(top), B(bottom), L(left), R(right), P(front), K(back)");
+        }
+        if (m_TranslateModeActive)
+        {
+            ImGui::TextUnformatted("Translate: mouse move | X/Y/Z axis | Shift+X/Y/Z plane lock | Ctrl snap");
+            ImGui::TextUnformatted("Confirm: LMB/Enter/G | Cancel: RMB/Esc");
+        }
 
         if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
         {
@@ -2102,10 +3167,58 @@ namespace ds
             m_SelectedAtomIndices.clear();
         }
 
+        const char *gizmoOperations[] = {"Translate", "Rotate", "Scale"};
+        const char *gizmoModes[] = {"Local", "World"};
+        if (ImGui::Checkbox("Enable gizmo", &m_GizmoEnabled))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::Checkbox("Enable view gizmo overlay", &m_ViewGuizmoEnabled))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("Transform gizmo size", &m_TransformGizmoSize, 0.05f, 0.35f, "%.2f"))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("View gizmo scale", &m_ViewGizmoScale, 0.35f, 2.20f, "%.2f"))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("Fallback marker scale", &m_FallbackGizmoVisualScale, 0.5f, 6.0f, "%.2f"))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("View gizmo offset right", &m_ViewGizmoOffsetRight, 0.0f, 220.0f, "%.0f"))
+        {
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("View gizmo offset top", &m_ViewGizmoOffsetTop, 0.0f, 220.0f, "%.0f"))
+        {
+            settingsChanged = true;
+        }
+        ImGui::Combo("Gizmo operation", &m_GizmoOperationIndex, gizmoOperations, IM_ARRAYSIZE(gizmoOperations));
+        ImGui::Combo("Gizmo mode", &m_GizmoModeIndex, gizmoModes, IM_ARRAYSIZE(gizmoModes));
+        if (ImGui::Checkbox("Gizmo snap", &m_GizmoSnapEnabled))
+        {
+            settingsChanged = true;
+        }
+        if (m_GizmoOperationIndex == 0)
+        {
+            ImGui::SliderFloat("Translate snap", &m_GizmoTranslateSnap, 0.01f, 2.0f, "%.2f");
+        }
+        else if (m_GizmoOperationIndex == 1)
+        {
+            ImGui::SliderFloat("Rotate snap (deg)", &m_GizmoRotateSnapDeg, 1.0f, 90.0f, "%.1f");
+        }
+        else
+        {
+            ImGui::SliderFloat("Scale snap", &m_GizmoScaleSnap, 0.01f, 1.0f, "%.2f");
+        }
+
         const char *coordinateModes[] = {"Direct", "Cartesian"};
 
-        ImGui::Separator();
-        ImGui::TextUnformatted("Add atom");
+        ImGui::SeparatorText("Add Atom");
         ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
         ImGui::SameLine();
         if (ImGui::Button("Periodic table"))
@@ -2146,8 +3259,7 @@ namespace ds
             ImGui::EndDisabled();
         }
 
-        ImGui::Separator();
-        ImGui::TextUnformatted("3D Cursor");
+        ImGui::SeparatorText("3D Cursor");
         if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
         {
             settingsChanged = true;
@@ -2239,7 +3351,7 @@ namespace ds
             ImGui::PopStyleColor();
         }
 
-        ImGui::Separator();
+        ImGui::SeparatorText("Appearance & Camera");
         ImGui::TextUnformatted("Theme-Style & color customization");
 
         int currentTheme = static_cast<int>(m_CurrentTheme);

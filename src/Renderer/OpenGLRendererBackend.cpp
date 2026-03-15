@@ -425,11 +425,11 @@ namespace ds
         {
             const float p = static_cast<float>(i) * spacing;
 
-            lineVertices.push_back(glm::vec3(origin.x - span, origin.y, origin.z + p));
-            lineVertices.push_back(glm::vec3(origin.x + span, origin.y, origin.z + p));
+            lineVertices.push_back(glm::vec3(origin.x - span, origin.y + p, origin.z));
+            lineVertices.push_back(glm::vec3(origin.x + span, origin.y + p, origin.z));
 
-            lineVertices.push_back(glm::vec3(origin.x + p, origin.y, origin.z - span));
-            lineVertices.push_back(glm::vec3(origin.x + p, origin.y, origin.z + span));
+            lineVertices.push_back(glm::vec3(origin.x + p, origin.y - span, origin.z));
+            lineVertices.push_back(glm::vec3(origin.x + p, origin.y + span, origin.z));
         }
 
         if (lineVertices.empty())

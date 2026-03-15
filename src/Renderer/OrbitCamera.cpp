@@ -120,9 +120,9 @@ namespace ds
 
         const glm::vec3 forward = glm::normalize(glm::vec3(
             std::cos(m_Pitch) * std::sin(m_Yaw),
-            std::sin(m_Pitch),
-            std::cos(m_Pitch) * std::cos(m_Yaw)));
-        const glm::vec3 worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
+            std::cos(m_Pitch) * std::cos(m_Yaw),
+            std::sin(m_Pitch)));
+        const glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
         const glm::vec3 right = glm::normalize(glm::cross(forward, worldUp));
         const glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
@@ -235,11 +235,11 @@ namespace ds
     {
         const glm::vec3 direction = glm::normalize(glm::vec3(
             std::cos(m_Pitch) * std::sin(m_Yaw),
-            std::sin(m_Pitch),
-            std::cos(m_Pitch) * std::cos(m_Yaw)));
+            std::cos(m_Pitch) * std::cos(m_Yaw),
+            std::sin(m_Pitch)));
 
         const glm::vec3 position = m_Target - direction * m_Distance;
-        m_View = glm::lookAt(position, m_Target, glm::vec3(0.0f, 1.0f, 0.0f));
+        m_View = glm::lookAt(position, m_Target, glm::vec3(0.0f, 0.0f, 1.0f));
     }
 
 } // namespace ds
