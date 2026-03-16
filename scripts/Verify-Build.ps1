@@ -51,15 +51,22 @@ if ($null -eq $msbuildPath) {
     throw "MSBuild was not found. Install Visual Studio 2022 with Desktop development with C++ and MSBuild component."
 }
 
+$cpuCount = [Math]::Max([Environment]::ProcessorCount, 1)
+$msbuildParallelArgs = @(
+    "/m:$cpuCount",
+    "/p:UseMultiToolTask=true",
+    "/p:CL_MPCount=$cpuCount"
+)
+
 Invoke-Step -Name "Build Debug|x64" -Action {
-    & $msbuildPath $solutionPath /m /t:Build /p:Configuration=Debug /p:Platform=x64
+    & $msbuildPath $solutionPath /t:Build /p:Configuration=Debug /p:Platform=x64 @msbuildParallelArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Debug build failed"
     }
 }
 
 Invoke-Step -Name "Build Release|x64" -Action {
-    & $msbuildPath $solutionPath /m /t:Build /p:Configuration=Release /p:Platform=x64
+    & $msbuildPath $solutionPath /t:Build /p:Configuration=Release /p:Platform=x64 @msbuildParallelArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Release build failed"
     }

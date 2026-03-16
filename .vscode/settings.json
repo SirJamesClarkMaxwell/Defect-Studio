@@ -4,6 +4,25 @@
         "*.inl": "cpp"
     },
     "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
+    "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+    "C_Cpp.default.cppStandard": "c++23",
+    "C_Cpp.default.cStandard": "c17",
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/vendor/glfw/include",
+        "${workspaceFolder}/vendor/imgui",
+        "${workspaceFolder}/vendor/imgui/backends",
+        "${workspaceFolder}/vendor/imguizmo",
+        "${workspaceFolder}/vendor/imviewguizmo",
+        "${workspaceFolder}/vendor/glm",
+        "${workspaceFolder}/vendor/glad_gen/include"
+    ],
+    "C_Cpp.default.defines": [
+        "IMGUI_ENABLE_DOCKING",
+        "IMGUI_IMPL_OPENGL_LOADER_GLAD2",
+        "GLFW_INCLUDE_NONE",
+        "DS_PLATFORM_WINDOWS"
+    ],
     "terminal.integrated.defaultProfile.windows": "PowerShell",
     "editor.formatOnSave": false,
     "cmake.configureOnOpen": false

@@ -15,6 +15,13 @@ IncludeDir["glfw"] = "vendor/glfw/include"
 IncludeDir["imgui"] = "vendor/imgui"
 IncludeDir["glm"] = "vendor/glm"
 IncludeDir["glad"] = "vendor/glad_gen/include"
+IncludeDir["imguizmo"] = "vendor/imguizmo"
+IncludeDir["imviewguizmo"] = "vendor/imviewguizmo"
+
+filter "action:vs*"
+    flags { "MultiProcessorCompile" }
+
+filter {}
 
 group "Dependencies"
 
@@ -93,13 +100,17 @@ project "ImGui"
         "%{prj.location}/backends/imgui_impl_glfw.h",
         "%{prj.location}/backends/imgui_impl_glfw.cpp",
         "%{prj.location}/backends/imgui_impl_opengl3.h",
-        "%{prj.location}/backends/imgui_impl_opengl3.cpp"
+        "%{prj.location}/backends/imgui_impl_opengl3.cpp",
+        "%{wks.location}/vendor/imguizmo/ImGuizmo.h",
+        "%{wks.location}/vendor/imguizmo/ImGuizmo.cpp"
     }
 
     includedirs
     {
         "%{prj.location}",
         "%{prj.location}/backends",
+        IncludeDir["imguizmo"],
+        IncludeDir["imviewguizmo"],
         IncludeDir["glfw"],
         IncludeDir["glad"]
     }
@@ -183,6 +194,8 @@ project "DefectsStudio"
         "src",
         IncludeDir["glfw"],
         IncludeDir["imgui"],
+        IncludeDir["imguizmo"],
+        IncludeDir["imviewguizmo"],
         IncludeDir["glm"],
         IncludeDir["glad"]
     }

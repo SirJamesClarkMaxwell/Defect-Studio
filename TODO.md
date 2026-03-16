@@ -37,7 +37,7 @@
 - [x] Instanced atom rendering
 - [x] Click/multi-select (**next priority #1**)
 - [x] Box select (`B`) and RMB context menu actions (**next priority #3**)
-- [ ] ImGuizmo transform for selected atoms (**next priority #4**)
+- [x] ImGuizmo transform for selected atoms (**next priority #4**)
 - [ ] Blender-like XYZ axes (R/G/B) with configurable orientation and colors 
 - [ ] adding local axes, relative axes (based on the sourounding) (x(green),y(red),z(blue))
 

@@ -1,0 +1,35 @@
+{
+    "version": 4,
+    "configurations": [
+        {
+            "name": "Win32",
+            "compilerPath": "cl.exe",
+            "intelliSenseMode": "windows-msvc-x64",
+            "cStandard": "c17",
+            "cppStandard": "c++23",
+            "includePath": [
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/vendor/glfw/include",
+                "${workspaceFolder}/vendor/imgui",
+                "${workspaceFolder}/vendor/imgui/backends",
+                "${workspaceFolder}/vendor/imguizmo",
+                "${workspaceFolder}/vendor/imviewguizmo",
+                "${workspaceFolder}/vendor/glm",
+                "${workspaceFolder}/vendor/glad_gen/include"
+            ],
+            "defines": [
+                "IMGUI_ENABLE_DOCKING",
+                "IMGUI_IMPL_OPENGL_LOADER_GLAD2",
+                "GLFW_INCLUDE_NONE",
+                "DS_PLATFORM_WINDOWS"
+            ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/src",
+                    "${workspaceFolder}/vendor"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            }
+        }
+    ]
+}

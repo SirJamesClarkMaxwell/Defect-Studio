@@ -45,7 +45,10 @@ namespace ds
         enum class InteractionMode
         {
             Navigate = 0,
-            Select = 1
+            Select = 1,
+            ViewSet = 2,
+            Translate = 3,
+            Rotate = 4
         };
 
         static constexpr const char *kSettingsPath = "config/editor_ui_settings.ini";
@@ -65,9 +68,15 @@ namespace ds
         void SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
         void AppendSelectionDebugLog(const std::string &message) const;
         bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
+        glm::vec3 GetAtomCartesianPosition(std::size_t atomIndex) const;
+        void SetAtomCartesianPosition(std::size_t atomIndex, const glm::vec3 &position);
+        bool Set3DCursorToSelectionCenterOfMass();
+        bool Set3DCursorToSelectedAtom(bool useLastSelected);
         bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
         void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
         void DrawPeriodicTableWindow();
+        void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch);
+        void UpdateCameraOrbitTransition(float deltaTime);
 
         bool m_ShowDemoWindow = false;
         bool m_ShowLogPanel = true;
@@ -106,9 +115,51 @@ namespace ds
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
         glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);
         float m_SelectionOutlineThickness = 2.0f;
+        bool m_GizmoEnabled = true;
+        bool m_ViewGuizmoEnabled = true;
+        int m_GizmoOperationIndex = 0;
+        int m_GizmoModeIndex = 1;
+        bool m_GizmoSnapEnabled = false;
+        float m_GizmoTranslateSnap = 0.1f;
+        float m_GizmoRotateSnapDeg = 15.0f;
+        float m_GizmoScaleSnap = 0.1f;
+        float m_TransformGizmoSize = 0.24f;
+        float m_ViewGizmoScale = 0.72f;
+        float m_ViewGizmoOffsetRight = 16.0f;
+        float m_ViewGizmoOffsetTop = 72.0f;
         bool m_SelectionDebugToFile = true;
         bool m_BoxSelectArmed = false;
         bool m_BoxSelecting = false;
+        bool m_BlockSelectionThisFrame = false;
+        bool m_GizmoConsumedMouseThisFrame = false;
+        bool m_FallbackGizmoDragging = false;
+        float m_FallbackGizmoVisualScale = 2.0f;
+        bool m_TranslateModeActive = false;
+        int m_TranslateConstraintAxis = -1;
+        int m_TranslatePlaneLockAxis = -1;
+        glm::vec2 m_TranslateLastMousePos = glm::vec2(0.0f, 0.0f);
+        std::vector<std::size_t> m_TranslateIndices;
+        std::vector<glm::vec3> m_TranslateInitialCartesian;
+        glm::vec3 m_TranslateCurrentOffset = glm::vec3(0.0f);
+        bool m_RotateModeActive = false;
+        int m_RotateConstraintAxis = -1;
+        glm::vec2 m_RotateLastMousePos = glm::vec2(0.0f, 0.0f);
+        std::vector<std::size_t> m_RotateIndices;
+        std::vector<glm::vec3> m_RotateInitialCartesian;
+        glm::vec3 m_RotatePivot = glm::vec3(0.0f);
+        float m_RotateCurrentAngle = 0.0f;
+        glm::vec2 m_ModePiePopupPos = glm::vec2(0.0f, 0.0f);
+        glm::vec2 m_FallbackLastMousePos = glm::vec2(0.0f, 0.0f);
+        glm::vec2 m_FallbackPivotScreen = glm::vec2(0.0f, 0.0f);
+        int m_FallbackGizmoOperation = -1;
+        int m_FallbackGizmoAxis = -1;
+        glm::vec2 m_FallbackDragAxisScreenDir = glm::vec2(1.0f, 0.0f);
+        glm::vec3 m_FallbackDragAxisWorldDir = glm::vec3(1.0f, 0.0f, 0.0f);
+        float m_FallbackDragPixelsPerWorld = 1.0f;
+        float m_FallbackDragAccumulated = 0.0f;
+        float m_FallbackDragApplied = 0.0f;
+        float m_FallbackRotateStartAngle = 0.0f;
+        float m_FallbackRotateLastAngle = 0.0f;
         glm::vec2 m_BoxSelectStart = glm::vec2(0.0f, 0.0f);
         glm::vec2 m_BoxSelectEnd = glm::vec2(0.0f, 0.0f);
         bool m_Show3DCursor = true;
@@ -122,6 +173,18 @@ namespace ds
         float m_CameraDistancePersisted = 6.0f;
         float m_CameraYawPersisted = 0.6f;
         float m_CameraPitchPersisted = 0.5f;
+
+        bool m_CameraTransitionActive = false;
+        float m_CameraTransitionElapsed = 0.0f;
+        float m_CameraTransitionDuration = 0.25f;
+        glm::vec3 m_CameraTransitionStartTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::vec3 m_CameraTransitionEndTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+        float m_CameraTransitionStartDistance = 6.0f;
+        float m_CameraTransitionEndDistance = 6.0f;
+        float m_CameraTransitionStartYaw = 0.0f;
+        float m_CameraTransitionEndYaw = 0.0f;
+        float m_CameraTransitionStartPitch = 0.0f;
+        float m_CameraTransitionEndPitch = 0.0f;
 
         SceneRenderSettings m_SceneSettings;
         int m_ProjectionModeIndex = 0;
