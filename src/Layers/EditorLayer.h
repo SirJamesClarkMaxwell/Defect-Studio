@@ -51,6 +51,40 @@ namespace ds
             Rotate = 4
         };
 
+        enum class TemporaryAxesSource
+        {
+            SelectionAtoms = 0,
+            ActiveEmpty = 1
+        };
+
+        struct TransformEmpty
+        {
+            std::string name;
+            glm::vec3 position = glm::vec3(0.0f);
+            std::array<glm::vec3, 3> axes = {
+                glm::vec3(1.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 1.0f, 0.0f),
+                glm::vec3(0.0f, 0.0f, 1.0f)};
+            int collectionIndex = 0;
+            int groupIndex = -1;
+            bool visible = true;
+            bool selectable = true;
+        };
+
+        struct SceneCollection
+        {
+            std::string name;
+            bool visible = true;
+            bool selectable = true;
+        };
+
+        struct SceneGroup
+        {
+            std::string name;
+            std::vector<std::size_t> atomIndices;
+            std::vector<int> emptyIndices;
+        };
+
         static constexpr const char *kSettingsPath = "config/editor_ui_settings.ini";
 
         void ApplyTheme(ThemePreset preset);
@@ -68,8 +102,17 @@ namespace ds
         void SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
         void AppendSelectionDebugLog(const std::string &message) const;
         bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
+        bool PickTransformEmptyAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outEmptyIndex) const;
         glm::vec3 GetAtomCartesianPosition(std::size_t atomIndex) const;
         void SetAtomCartesianPosition(std::size_t atomIndex, const glm::vec3 &position);
+        glm::vec3 ComputeSelectionCenter() const;
+        bool ComputeSelectionAxesAround(const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const;
+        bool HasActiveTransformEmpty() const;
+        bool IsCollectionVisible(int collectionIndex) const;
+        bool IsCollectionSelectable(int collectionIndex) const;
+        void EnsureSceneDefaults();
+        void DeleteTransformEmptyAtIndex(int emptyIndex);
+        bool AlignEmptyZAxisFromSelectedAtoms(int emptyIndex);
         std::array<glm::vec3, 3> ResolveTransformAxes(const glm::vec3 &pivot) const;
         bool BuildAxesFromPoints(const std::vector<glm::vec3> &points, const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const;
         bool ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const;
@@ -123,9 +166,24 @@ namespace ds
         int m_GizmoOperationIndex = 0;
         int m_GizmoModeIndex = 1;
         bool m_UseTemporaryLocalAxes = false;
+        TemporaryAxesSource m_TemporaryAxesSource = TemporaryAxesSource::SelectionAtoms;
         int m_TemporaryAxisAtomA = -1;
         int m_TemporaryAxisAtomB = -1;
         int m_TemporaryAxisAtomC = -1;
+        std::vector<TransformEmpty> m_TransformEmpties;
+        int m_ActiveTransformEmptyIndex = -1;
+        int m_SelectedTransformEmptyIndex = -1;
+        int m_TransformEmptyCounter = 1;
+        std::vector<SceneCollection> m_Collections;
+        std::vector<SceneGroup> m_ObjectGroups;
+        int m_ActiveCollectionIndex = 0;
+        int m_ActiveGroupIndex = -1;
+        int m_CollectionCounter = 1;
+        int m_GroupCounter = 1;
+        bool m_ShowSceneOutlinerPanel = true;
+        bool m_ShowObjectPropertiesPanel = true;
+        bool m_ShowTransformEmpties = true;
+        float m_TransformEmptyVisualScale = 0.20f;
         std::array<glm::vec3, 3> m_AxisColors = {
             glm::vec3(0.90f, 0.27f, 0.27f),
             glm::vec3(0.27f, 0.90f, 0.27f),
@@ -152,6 +210,8 @@ namespace ds
         glm::vec2 m_TranslateLastMousePos = glm::vec2(0.0f, 0.0f);
         std::vector<std::size_t> m_TranslateIndices;
         std::vector<glm::vec3> m_TranslateInitialCartesian;
+        int m_TranslateEmptyIndex = -1;
+        glm::vec3 m_TranslateEmptyInitialPosition = glm::vec3(0.0f);
         glm::vec3 m_TranslateCurrentOffset = glm::vec3(0.0f);
         bool m_RotateModeActive = false;
         int m_RotateConstraintAxis = -1;

@@ -39,11 +39,24 @@
 - [x] Box select (`B`) and RMB context menu actions (**next priority #3**)
 - [x] ImGuizmo transform for selected atoms (**next priority #4**)
 - [x] Blender-like XYZ axes (R/G/B) with configurable orientation and colors
-- [ ] Relative axes mode (based on surrounding atoms)
-- [ ] Fix Blender-like global axis overlay so axes are always readable and visually consistent in viewport
-- [ ] Fix keyboard transform flow: `G` then `X/Y/Z` should start constrained move and show active axis
-- [ ] Implement atom-defined pivot workflow (create/manage local pivot axes from selected atoms)
+- [x] Relative axes mode (based on surrounding atoms)
+- [x] Fix Blender-like global axis overlay so axes are always readable and visually consistent in viewport
+
+#### [ ] T05a - Scene object system (Blender-like, in-progress under T05)
+- [x] Fix crash on deleting Empty and stabilize Empty lifecycle
+- [x] Fix Empty re-selection after lifecycle operations (add/delete/clear)
+- [ ] Add Scene Outliner panel (tree view, Blender-like workflow)
+- [ ] Add Object Properties panel for selected object
+- [ ] Introduce scene Collections model and visibility/selectability controls
+- [ ] Introduce Grouping model (create/select/manage groups)
+- [ ] Add "Align Empty Z axis to atoms" workflow
+
+#### [ ] T05b - Transform UX polish (under T05)
+- [ ] Iterate UX polish for Empty transform interactions
+- [x] Fix keyboard transform flow: `G` then `X/Y/Z` should start constrained move and show active axis
+- [x] Implement atom-defined pivot workflow (create/manage local pivot axes from selected atoms)
 - [ ] Add Circle Menu for fast mode/action switching (selection, transform, view)
+
 
 ### [ ] T06 - Bonds and measurements (`task/06-bonds-tools`)
 - [x] Add atom tool (insert atom into structure) 
@@ -79,5 +92,5 @@
 - [ ] README (build/run/controls)
 
 ## Current focus
-- Active task: **T05 - Atom rendering, selection, gizmo**
+- Active task: **T05 / T05a - Atom rendering, selection, gizmo + scene object system**
 - Active branch: **task/05-editor-selection-gizmo**
