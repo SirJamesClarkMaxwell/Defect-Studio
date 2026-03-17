@@ -7,7 +7,10 @@
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <stdexcept>
 
@@ -16,6 +19,102 @@ namespace ds
 
     namespace
     {
+
+        constexpr const char *kWindowStatePath = "config/window_state.ini";
+
+        struct WindowState
+        {
+            int x = 100;
+            int y = 100;
+            int width = 1600;
+            int height = 900;
+            bool hasPosition = false;
+            bool maximized = true;
+        };
+
+        WindowState LoadWindowState()
+        {
+            WindowState state;
+
+            std::ifstream in(kWindowStatePath);
+            if (!in.is_open())
+            {
+                return state;
+            }
+
+            std::string line;
+            while (std::getline(in, line))
+            {
+                const std::size_t eq = line.find('=');
+                if (eq == std::string::npos)
+                {
+                    continue;
+                }
+
+                const std::string key = line.substr(0, eq);
+                const std::string value = line.substr(eq + 1);
+
+                try
+                {
+                    if (key == "x")
+                    {
+                        state.x = std::stoi(value);
+                        state.hasPosition = true;
+                    }
+                    else if (key == "y")
+                    {
+                        state.y = std::stoi(value);
+                        state.hasPosition = true;
+                    }
+                    else if (key == "width")
+                    {
+                        state.width = std::max(640, std::stoi(value));
+                    }
+                    else if (key == "height")
+                    {
+                        state.height = std::max(480, std::stoi(value));
+                    }
+                    else if (key == "open_maximized")
+                    {
+                        state.maximized = (value == "1");
+                    }
+                }
+                catch (...)
+                {
+                }
+            }
+
+            return state;
+        }
+
+        void SaveWindowState(GLFWwindow *window)
+        {
+            if (window == nullptr)
+            {
+                return;
+            }
+
+            int x = 0;
+            int y = 0;
+            int width = 0;
+            int height = 0;
+            glfwGetWindowPos(window, &x, &y);
+            glfwGetWindowSize(window, &width, &height);
+            const bool maximized = glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
+
+            std::filesystem::create_directories("config");
+            std::ofstream out(kWindowStatePath, std::ios::trunc);
+            if (!out.is_open())
+            {
+                return;
+            }
+
+            out << "x=" << x << '\n';
+            out << "y=" << y << '\n';
+            out << "width=" << width << '\n';
+            out << "height=" << height << '\n';
+            out << "open_maximized=" << (maximized ? "1" : "0") << '\n';
+        }
 
         void GLFWErrorCallback(int error, const char *description)
         {
@@ -34,6 +133,8 @@ namespace ds
         LogInfo("Application startup initiated");
         glfwSetErrorCallback(GLFWErrorCallback);
 
+        const WindowState windowState = LoadWindowState();
+
         if (!glfwInit())
         {
             LogError("GLFW initialization failed");
@@ -43,13 +144,24 @@ namespace ds
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_MAXIMIZED, windowState.maximized ? GLFW_TRUE : GLFW_FALSE);
 
-        m_Window = glfwCreateWindow(1600, 900, "DefectsStudio", nullptr, nullptr);
+        m_Window = glfwCreateWindow(windowState.width, windowState.height, "DefectsStudio", nullptr, nullptr);
         if (m_Window == nullptr)
         {
             glfwTerminate();
             LogError("GLFW window creation failed");
             throw std::runtime_error("Failed to create GLFW window");
+        }
+
+        if (windowState.hasPosition)
+        {
+            glfwSetWindowPos(m_Window, windowState.x, windowState.y);
+        }
+
+        if (windowState.maximized)
+        {
+            glfwMaximizeWindow(m_Window);
         }
 
         glfwMakeContextCurrent(m_Window);
@@ -76,6 +188,7 @@ namespace ds
     Application::~Application()
     {
         LogInfo("Application shutdown");
+        SaveWindowState(m_Window);
         glfwDestroyWindow(m_Window);
         glfwTerminate();
     }

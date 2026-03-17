@@ -73,14 +73,33 @@ namespace ds
 
         if (scrollDelta != 0.0f)
         {
-            const float zoomFromWheel = 0.9f * m_Distance * m_ZoomSensitivity;
-            m_Distance -= scrollDelta * zoomFromWheel;
-            if (m_Distance < 0.5f)
-                m_Distance = 0.5f;
-            if (m_Distance > 100.0f)
-                m_Distance = 100.0f;
+            if (m_ProjectionMode == ProjectionMode::Orthographic)
+            {
+                float zoomFactor = 1.0f - scrollDelta * 0.12f * m_ZoomSensitivity;
+                if (zoomFactor < 0.1f)
+                    zoomFactor = 0.1f;
+                if (zoomFactor > 4.0f)
+                    zoomFactor = 4.0f;
 
-            RecalculateView();
+                m_OrthographicSize *= zoomFactor;
+                if (m_OrthographicSize < 0.1f)
+                    m_OrthographicSize = 0.1f;
+                if (m_OrthographicSize > 100.0f)
+                    m_OrthographicSize = 100.0f;
+
+                RecalculateProjection();
+            }
+            else
+            {
+                const float zoomFromWheel = 0.9f * m_Distance * m_ZoomSensitivity;
+                m_Distance -= scrollDelta * zoomFromWheel;
+                if (m_Distance < 0.5f)
+                    m_Distance = 0.5f;
+                if (m_Distance > 100.0f)
+                    m_Distance = 100.0f;
+
+                RecalculateView();
+            }
         }
 
         if (!mmb)
@@ -101,9 +120,9 @@ namespace ds
 
         const glm::vec3 forward = glm::normalize(glm::vec3(
             std::cos(m_Pitch) * std::sin(m_Yaw),
-            std::sin(m_Pitch),
-            std::cos(m_Pitch) * std::cos(m_Yaw)));
-        const glm::vec3 worldUp = glm::vec3(0.0f, 1.0f, 0.0f);
+            std::cos(m_Pitch) * std::cos(m_Yaw),
+            std::sin(m_Pitch)));
+        const glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
         const glm::vec3 right = glm::normalize(glm::cross(forward, worldUp));
         const glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
@@ -144,9 +163,71 @@ namespace ds
         RecalculateView();
     }
 
+    void OrbitCamera::SetProjectionMode(ProjectionMode mode)
+    {
+        if (m_ProjectionMode == mode)
+        {
+            return;
+        }
+
+        m_ProjectionMode = mode;
+        RecalculateProjection();
+    }
+
+    void OrbitCamera::SetPerspectiveFovDegrees(float fovDegrees)
+    {
+        if (fovDegrees < 10.0f)
+            fovDegrees = 10.0f;
+        if (fovDegrees > 100.0f)
+            fovDegrees = 100.0f;
+
+        m_FovYDegrees = fovDegrees;
+        RecalculateProjection();
+    }
+
+    void OrbitCamera::SetOrthographicSize(float orthographicSize)
+    {
+        if (orthographicSize < 0.1f)
+            orthographicSize = 0.1f;
+        if (orthographicSize > 100.0f)
+            orthographicSize = 100.0f;
+
+        m_OrthographicSize = orthographicSize;
+        RecalculateProjection();
+    }
+
+    void OrbitCamera::SetOrbitState(const glm::vec3 &target, float distance, float yaw, float pitch)
+    {
+        m_Target = target;
+
+        if (distance < 0.5f)
+            distance = 0.5f;
+        if (distance > 250.0f)
+            distance = 250.0f;
+        m_Distance = distance;
+
+        m_Yaw = yaw;
+        m_Pitch = pitch;
+        const float limit = glm::half_pi<float>() - 0.05f;
+        if (m_Pitch > limit)
+            m_Pitch = limit;
+        if (m_Pitch < -limit)
+            m_Pitch = -limit;
+
+        RecalculateView();
+    }
+
     void OrbitCamera::RecalculateProjection()
     {
         const float aspect = m_ViewportWidth / m_ViewportHeight;
+        if (m_ProjectionMode == ProjectionMode::Orthographic)
+        {
+            const float halfHeight = m_OrthographicSize;
+            const float halfWidth = m_OrthographicSize * aspect;
+            m_Projection = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, m_NearClip, m_FarClip);
+            return;
+        }
+
         m_Projection = glm::perspective(glm::radians(m_FovYDegrees), aspect, m_NearClip, m_FarClip);
     }
 
@@ -154,11 +235,11 @@ namespace ds
     {
         const glm::vec3 direction = glm::normalize(glm::vec3(
             std::cos(m_Pitch) * std::sin(m_Yaw),
-            std::sin(m_Pitch),
-            std::cos(m_Pitch) * std::cos(m_Yaw)));
+            std::cos(m_Pitch) * std::cos(m_Yaw),
+            std::sin(m_Pitch)));
 
         const glm::vec3 position = m_Target - direction * m_Distance;
-        m_View = glm::lookAt(position, m_Target, glm::vec3(0.0f, 1.0f, 0.0f));
+        m_View = glm::lookAt(position, m_Target, glm::vec3(0.0f, 0.0f, 1.0f));
     }
 
 } // namespace ds

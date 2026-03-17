@@ -5,10 +5,14 @@ bin/
 bin-int/
 
 tools/
-vendor/
+vendor/*
+!vendor/imviewguizmo/
+!vendor/imviewguizmo/**
 
 imgui.ini
 config/editor_ui_settings.ini
+config/imgui_layout.ini
+assets/samples/config/
 
 *.sln
 *.vcxproj
