@@ -4,6 +4,7 @@
 - One feature branch per task: `task/NN-short-name`
 - Merge to `main` only after build and basic verification pass
 - Keep `scripts/Setup.bat` as the canonical local setup entrypoint
+- Track only significant tasks/features in this TODO; do not add tiny fixes
 
 ## Milestones
 
@@ -45,17 +46,25 @@
 #### [ ] T05a - Scene object system (Blender-like, in-progress under T05)
 - [x] Fix crash on deleting Empty and stabilize Empty lifecycle
 - [x] Fix Empty re-selection after lifecycle operations (add/delete/clear)
-- [ ] Add Scene Outliner panel (tree view, Blender-like workflow)
-- [ ] Add Object Properties panel for selected object
-- [ ] Introduce scene Collections model and visibility/selectability controls
-- [ ] Introduce Grouping model (create/select/manage groups)
-- [ ] Add "Align Empty Z axis to atoms" workflow
+- [x] Add Scene Outliner panel (tree view, Blender-like workflow)
+- [x] Add Object Properties panel for selected object
+- [x] Introduce scene Collections model and visibility/selectability controls
+- [x] Introduce Grouping model (create/select/manage groups)
+- [x] Add "Align Empty Z axis to atoms" workflow
 
-#### [ ] T05b - Transform UX polish (under T05)
-- [ ] Iterate UX polish for Empty transform interactions
+#### [x] T05b - Transform UX polish (under T05)
+- [x] Iterate UX polish for Empty transform interactions
 - [x] Fix keyboard transform flow: `G` then `X/Y/Z` should start constrained move and show active axis
+- [x] Improve constrained `G`+axis movement to follow mouse direction more predictably
+- [x] Keep gizmo active together with modal `G` workflow (single consistent transform mode)
 - [x] Implement atom-defined pivot workflow (create/manage local pivot axes from selected atoms)
-- [ ] Add Circle Menu for fast mode/action switching (selection, transform, view)
+- [x] Add Circle Menu for fast mode/action switching (selection, transform, view)
+- [x] Add Blender-like `Shift+A` add menu for scene items (Atoms, Empty)
+- [x] Add `Delete` hotkey for selected scene items (atoms/empty/group)
+- [x] Add atom add popup with configurable insert options before creation
+- [x] Add movable special helpers: `Origin` and `Light` (select + transform + properties)
+- [x] Add view gizmo reposition workflow (offset + drag mode)
+- [x] Add Blender-like `N` side-panel behavior (toggle + collapsed side strip)
 
 
 ### [ ] T06 - Bonds and measurements (`task/06-bonds-tools`)
@@ -68,9 +77,11 @@
 - [ ] Clean view + cell edge toggle
 
 ### [ ] T07 - UI panels and UX polishing (`task/08-ui-panels-ux`)
-- [ ] Dockspace + tool panels
+- [x] Dockspace + tool panels
+- [x] Extract dedicated `Settings` window to separate UI class (`SettingsPanel`)
 - [x] Viewport settings panel: background, grid, lighting, projection mode, atom color override
 - [x] File dialogs with fallback path
+- [x] Configurable UI spacing scale (saved in editor settings)
 - [ ] Persist axis settings (colors + orientation) together with renderer settings
 - [x] Persist ImGui dock/panel layout across runs
 - [ ] Toggles, profiler integration, config defaults
@@ -93,4 +104,4 @@
 
 ## Current focus
 - Active task: **T05 / T05a - Atom rendering, selection, gizmo + scene object system**
-- Active branch: **task/05-editor-selection-gizmo**
+- Active branch: **temp/blender-like-scene-system**

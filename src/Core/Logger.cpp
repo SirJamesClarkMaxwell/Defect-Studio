@@ -2,6 +2,8 @@
 
 #include <chrono>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 
@@ -40,10 +42,29 @@ namespace ds
     {
         std::scoped_lock lock(m_Mutex);
 
-        m_Entries.push_back(LogEntry{level, BuildTimestampNow(), std::string(message)});
+        const std::string timestamp = BuildTimestampNow();
+        const std::string text(message);
+        m_Entries.push_back(LogEntry{level, timestamp, text});
         if (level == LogLevel::Error)
         {
             ++m_ErrorCount;
+        }
+
+        std::filesystem::create_directories("logs");
+        std::ofstream out("logs/runtime.log", std::ios::app);
+        if (out.is_open())
+        {
+            const char *levelText = "INFO";
+            if (level == LogLevel::Warn)
+            {
+                levelText = "WARN";
+            }
+            else if (level == LogLevel::Error)
+            {
+                levelText = "ERROR";
+            }
+
+            out << '[' << timestamp << "] [" << levelText << "] " << text << '\n';
         }
 
         constexpr std::size_t maxEntries = 2000;

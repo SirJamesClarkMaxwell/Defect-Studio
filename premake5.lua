@@ -186,7 +186,8 @@ project "DefectsStudio"
     files
     {
         "src/**.h",
-        "src/**.cpp"
+        "src/**.cpp",
+        "assets/icon.rc"
     }
 
     includedirs
