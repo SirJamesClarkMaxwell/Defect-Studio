@@ -7,10 +7,23 @@
 
 #include <imgui.h>
 
+#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
+#include <vector>
+
+#include <glm/geometric.hpp>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#include <commdlg.h>
+#endif
 
 namespace ds
 {
@@ -20,10 +33,88 @@ namespace ds
         constexpr float kBaseOrbitSensitivity = 0.01f;
         constexpr float kBasePanSensitivity = 0.18f;
         constexpr float kBaseZoomSensitivity = 0.17f;
+
+        bool OpenNativeFileDialog(std::string &outPath)
+        {
+#ifdef _WIN32
+            char pathBuffer[MAX_PATH] = {};
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer;
+            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
+            dialog.lpstrDefExt = "vasp";
+
+            if (GetOpenFileNameA(&dialog) != FALSE)
+            {
+                outPath = pathBuffer;
+                return true;
+            }
+
+            return false;
+#else
+            (void)outPath;
+            return false;
+#endif
+        }
+
+        bool SaveNativeFileDialog(std::string &outPath)
+        {
+#ifdef _WIN32
+            char pathBuffer[MAX_PATH] = "CONTCAR.vasp";
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer;
+            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.lpstrDefExt = "vasp";
+
+            if (GetSaveFileNameA(&dialog) != FALSE)
+            {
+                outPath = pathBuffer;
+                return true;
+            }
+
+            return false;
+#else
+            (void)outPath;
+            return false;
+#endif
+        }
+
+        glm::vec3 ColorFromElement(const std::string &element)
+        {
+            std::uint32_t hash = 2166136261u;
+            for (unsigned char c : element)
+            {
+                hash ^= static_cast<std::uint32_t>(c);
+                hash *= 16777619u;
+            }
+
+            const float r = 0.35f + 0.50f * static_cast<float>((hash >> 0) & 0xFF) / 255.0f;
+            const float g = 0.35f + 0.50f * static_cast<float>((hash >> 8) & 0xFF) / 255.0f;
+            const float b = 0.35f + 0.50f * static_cast<float>((hash >> 16) & 0xFF) / 255.0f;
+            return glm::vec3(r, g, b);
+        }
     }
 
     EditorLayer::EditorLayer()
-        : Layer("EditorLayer") {}
+        : Layer("EditorLayer")
+    {
+        const char *defaultImportPath = "assets/samples/POSCAR_Si2.vasp";
+        const char *defaultExportPath = "exports/CONTCAR.vasp";
+
+        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultImportPath);
+        std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", defaultExportPath);
+    }
 
     void EditorLayer::OnAttach()
     {
@@ -69,8 +160,103 @@ namespace ds
 
         m_RenderBackend->ResizeViewport(static_cast<std::uint32_t>(m_ViewportSize.x), static_cast<std::uint32_t>(m_ViewportSize.y));
         m_RenderBackend->BeginFrame();
-        m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix());
+        if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
+        {
+            std::vector<glm::vec3> atomPositions;
+            std::vector<glm::vec3> atomColors;
+            atomPositions.reserve(m_WorkingStructure.atoms.size());
+            atomColors.reserve(m_WorkingStructure.atoms.size());
+
+            for (const Atom &atom : m_WorkingStructure.atoms)
+            {
+                glm::vec3 position = atom.position;
+                if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+                {
+                    position = m_WorkingStructure.DirectToCartesian(position);
+                }
+
+                atomPositions.push_back(position);
+                atomColors.push_back(ColorFromElement(atom.element));
+            }
+
+            m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), atomPositions, atomColors, 0.30f);
+        }
+        else
+        {
+            m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix());
+        }
         m_RenderBackend->EndFrame();
+    }
+
+    bool EditorLayer::LoadStructureFromPath(const std::string &path)
+    {
+        Structure parsed;
+        std::string error;
+        if (!m_PoscarParser.ParseFromFile(path, parsed, error))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Import failed: " + error;
+            LogError(m_LastStructureMessage);
+            return false;
+        }
+
+        m_WorkingStructure = parsed;
+        m_OriginalStructure = parsed;
+        m_HasStructureLoaded = true;
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Imported structure from: " + path;
+
+        if (m_Camera && !m_WorkingStructure.atoms.empty())
+        {
+            glm::vec3 boundsMin(std::numeric_limits<float>::max());
+            glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+
+            for (const Atom &atom : m_WorkingStructure.atoms)
+            {
+                glm::vec3 position = atom.position;
+                if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+                {
+                    position = m_WorkingStructure.DirectToCartesian(position);
+                }
+
+                boundsMin = glm::min(boundsMin, position);
+                boundsMax = glm::max(boundsMax, position);
+            }
+
+            m_Camera->FrameBounds(boundsMin, boundsMax);
+        }
+
+        LogInfo(m_LastStructureMessage + " (atoms=" + std::to_string(m_WorkingStructure.GetAtomCount()) + ")");
+        return true;
+    }
+
+    bool EditorLayer::ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision)
+    {
+        if (!m_HasStructureLoaded)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Export failed: no structure loaded.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        PoscarWriteOptions options;
+        options.coordinateMode = mode;
+        options.precision = precision;
+
+        std::string error;
+        if (!m_PoscarSerializer.WriteToFile(m_WorkingStructure, path, options, error))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Export failed: " + error;
+            LogError(m_LastStructureMessage);
+            return false;
+        }
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Exported structure to: " + path;
+        LogInfo(m_LastStructureMessage);
+        return true;
     }
 
     void EditorLayer::ApplyFontScale(float scale)
@@ -367,8 +553,28 @@ namespace ds
         {
             if (ImGui::BeginMenu("File"))
             {
-                ImGui::MenuItem("Open POSCAR...", "Ctrl+O", false, false);
-                ImGui::MenuItem("Export CONTCAR...", "Ctrl+S", false, false);
+                if (ImGui::MenuItem("Open POSCAR/CONTCAR", "Ctrl+O"))
+                {
+                    std::string selectedPath;
+                    if (OpenNativeFileDialog(selectedPath))
+                    {
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
+                        LoadStructureFromPath(selectedPath);
+                    }
+                }
+
+                if (ImGui::MenuItem("Export POSCAR/CONTCAR", "Ctrl+S", false, m_HasStructureLoaded))
+                {
+                    std::string selectedPath;
+                    if (SaveNativeFileDialog(selectedPath))
+                    {
+                        std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+                        const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                              ? CoordinateMode::Direct
+                                                              : CoordinateMode::Cartesian;
+                        ExportStructureToPath(selectedPath, exportMode, m_ExportPrecision);
+                    }
+                }
                 ImGui::EndMenu();
             }
 
@@ -431,8 +637,96 @@ namespace ds
         ImGui::End();
 
         ImGui::Begin("Tools");
-        ImGui::TextUnformatted("Task bootstrap complete.");
-        ImGui::BulletText("Next: parsery POSCAR/CONTCAR i renderer instancing.");
+        ImGui::TextUnformatted("Structure I/O (T04)");
+        ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##Import"))
+        {
+            std::string selectedPath;
+            if (OpenNativeFileDialog(selectedPath))
+            {
+                std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
+            }
+        }
+
+        if (ImGui::Button("Load POSCAR/CONTCAR"))
+        {
+            LoadStructureFromPath(std::string(m_ImportPathBuffer.data()));
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Load sample"))
+        {
+            const char *samplePath = "assets/samples/POSCAR_Si2.vasp";
+            std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
+            LoadStructureFromPath(samplePath);
+        }
+
+        ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##Export"))
+        {
+            std::string selectedPath;
+            if (SaveNativeFileDialog(selectedPath))
+            {
+                std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+            }
+        }
+
+        const char *coordinateModes[] = {"Direct", "Cartesian"};
+        ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+        ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
+
+        if (ImGui::Button("Export POSCAR/CONTCAR"))
+        {
+            const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                  ? CoordinateMode::Direct
+                                                  : CoordinateMode::Cartesian;
+            ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Restore original state"))
+        {
+            if (m_OriginalStructure.has_value())
+            {
+                m_WorkingStructure = *m_OriginalStructure;
+                m_HasStructureLoaded = true;
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Original file state restored.";
+                LogInfo(m_LastStructureMessage);
+            }
+            else
+            {
+                m_LastStructureOperationFailed = true;
+                m_LastStructureMessage = "Restore failed: no original structure captured yet.";
+                LogWarn(m_LastStructureMessage);
+            }
+        }
+
+        if (m_HasStructureLoaded)
+        {
+            const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
+            ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
+                        m_WorkingStructure.GetAtomCount(),
+                        m_WorkingStructure.species.size(),
+                        modeLabel);
+            ImGui::Text("Title: %s", m_WorkingStructure.title.empty() ? "(empty)" : m_WorkingStructure.title.c_str());
+        }
+        else
+        {
+            ImGui::TextUnformatted("Loaded: none");
+        }
+
+        if (!m_LastStructureMessage.empty())
+        {
+            const ImVec4 color = m_LastStructureOperationFailed
+                                     ? ImVec4(0.95f, 0.35f, 0.35f, 1.0f)
+                                     : ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+            ImGui::TextWrapped("%s", m_LastStructureMessage.c_str());
+            ImGui::PopStyleColor();
+        }
 
         ImGui::Separator();
         ImGui::TextUnformatted("Theme-Style & color customization");

@@ -4,8 +4,8 @@
 
 out vec4 o_Color;
 
-uniform vec3 u_AtomColor = vec3(0.35, 0.75, 0.95);
+in vec3 v_Color;
 
 void main() {
-    o_Color = vec4(u_AtomColor, 1.0);
+    o_Color = vec4(v_Color, 1.0);
 }

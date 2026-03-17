@@ -126,6 +126,24 @@ namespace ds
         RecalculateView();
     }
 
+    void OrbitCamera::FrameBounds(const glm::vec3 &boundsMin, const glm::vec3 &boundsMax)
+    {
+        m_Target = 0.5f * (boundsMin + boundsMax);
+
+        const glm::vec3 extents = glm::max(boundsMax - boundsMin, glm::vec3(0.001f));
+        const float radius = 0.5f * glm::length(extents);
+        const float halfFovRadians = glm::radians(m_FovYDegrees) * 0.5f;
+        const float minDistance = radius / std::max(std::sin(halfFovRadians), 0.15f);
+
+        m_Distance = std::max(minDistance * 1.35f, 0.5f);
+        if (m_Distance > 250.0f)
+        {
+            m_Distance = 250.0f;
+        }
+
+        RecalculateView();
+    }
+
     void OrbitCamera::RecalculateProjection()
     {
         const float aspect = m_ViewportWidth / m_ViewportHeight;

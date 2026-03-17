@@ -15,6 +15,7 @@ namespace ds
         void SetViewportSize(float width, float height);
         void SetSensitivity(float orbit, float pan, float zoom);
         void OnUpdate(float deltaTime, bool allowInput, float scrollDelta);
+        void FrameBounds(const glm::vec3 &boundsMin, const glm::vec3 &boundsMax);
 
         const glm::mat4 &GetViewMatrix() const { return m_View; }
         const glm::mat4 &GetProjectionMatrix() const { return m_Projection; }

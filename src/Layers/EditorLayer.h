@@ -1,8 +1,14 @@
 #pragma once
 
 #include "Core/Layer.h"
+#include "DataModel/Structure.h"
+#include "IO/PoscarParser.h"
+#include "IO/PoscarSerializer.h"
 
+#include <array>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include <glm/vec2.hpp>
 
@@ -40,6 +46,8 @@ namespace ds
         void SaveSettings() const;
         void LoadSettings();
         const char *ThemeName(ThemePreset preset) const;
+        bool LoadStructureFromPath(const std::string &path);
+        bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
 
         bool m_ShowDemoWindow = false;
         bool m_ShowLogPanel = true;
@@ -55,6 +63,19 @@ namespace ds
         float m_CameraOrbitSensitivity = 1.0f;
         float m_CameraPanSensitivity = 1.0f;
         float m_CameraZoomSensitivity = 1.0f;
+
+        PoscarParser m_PoscarParser;
+        PoscarSerializer m_PoscarSerializer;
+        std::optional<Structure> m_OriginalStructure;
+        Structure m_WorkingStructure;
+        bool m_HasStructureLoaded = false;
+
+        std::array<char, 512> m_ImportPathBuffer = {};
+        std::array<char, 512> m_ExportPathBuffer = {};
+        int m_ExportPrecision = 8;
+        int m_ExportCoordinateModeIndex = 0;
+        bool m_LastStructureOperationFailed = false;
+        std::string m_LastStructureMessage;
 
         std::unique_ptr<IRenderBackend> m_RenderBackend;
         std::unique_ptr<OrbitCamera> m_Camera;
