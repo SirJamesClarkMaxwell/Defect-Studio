@@ -67,6 +67,12 @@ namespace ds
             ActiveEmpty = 1
         };
 
+        enum class PeriodicTableTarget
+        {
+            AddAtomEntry = 0,
+            ChangeSelectedAtoms = 1
+        };
+
         struct TransformEmpty
         {
             SceneUUID id = 0;
@@ -122,6 +128,7 @@ namespace ds
         bool LoadStructureFromPath(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
         bool AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode);
+        bool ApplyElementToSelectedAtoms(const std::string &elementInput, std::size_t *outChangedCount = nullptr);
         bool IsAtomSelected(std::size_t index) const;
         void ToggleInteractionMode();
         void HandleViewportSelection();
@@ -148,6 +155,7 @@ namespace ds
         bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
         void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
         void DrawPeriodicTableWindow();
+        void DrawChangeAtomTypeConfirmDialog();
         void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch);
         void UpdateCameraOrbitTransition(float deltaTime);
 
@@ -179,10 +187,16 @@ namespace ds
         int m_ExportPrecision = 8;
         int m_ExportCoordinateModeIndex = 0;
         std::array<char, 16> m_AddAtomElementBuffer = {'S', 'i', '\0'};
+        std::array<char, 16> m_ChangeAtomElementBuffer = {'G', 'e', '\0'};
         glm::vec3 m_AddAtomPosition = glm::vec3(0.0f);
         float m_AddAtomUniformPositionValue = 0.0f;
         int m_AddAtomCoordinateModeIndex = 1;
         bool m_PeriodicTableOpen = false;
+        PeriodicTableTarget m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
+        std::array<char, 16> m_PendingChangeAtomElementBuffer = {};
+        bool m_ChangeAtomTypeConfirmOpen = false;
+        bool m_PeriodicTableOpenedFromContextMenu = false;
+        bool m_ReopenViewportSelectionContextMenu = false;
         bool m_ShowAddAtomDialog = false;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;

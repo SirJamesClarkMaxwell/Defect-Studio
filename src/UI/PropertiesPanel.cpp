@@ -366,11 +366,12 @@ namespace ds
                         auto &atom = editor.m_WorkingStructure.atoms[atomIndex];
                         std::array<char, 16> elementBuffer = {};
                         std::snprintf(elementBuffer.data(), elementBuffer.size(), "%s", atom.element.c_str());
-                        if (ImGui::InputText("Element", elementBuffer.data(), elementBuffer.size()))
+                        if (ImGui::InputText("Element", elementBuffer.data(), elementBuffer.size(), ImGuiInputTextFlags_EnterReturnsTrue))
                         {
-                            atom.element = std::string(elementBuffer.data());
-                            editor.m_WorkingStructure.RebuildSpeciesFromAtoms();
-                            settingsChanged = true;
+                            if (editor.ApplyElementToSelectedAtoms(std::string(elementBuffer.data())))
+                            {
+                                settingsChanged = true;
+                            }
                         }
 
                         glm::vec3 atomPosition = editor.GetAtomCartesianPosition(atomIndex);
@@ -418,6 +419,24 @@ namespace ds
                             }
                             editor.SetAtomCartesianPosition(atomIndex, editor.GetAtomCartesianPosition(atomIndex) + delta);
                         }
+                        settingsChanged = true;
+                    }
+                }
+
+                ImGui::SeparatorText("Change atom type");
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputText("Target element", editor.m_ChangeAtomElementBuffer.data(), editor.m_ChangeAtomElementBuffer.size());
+                ImGui::SameLine();
+                if (ImGui::Button("Periodic table"))
+                {
+                    editor.m_PeriodicTableTarget = EditorLayer::PeriodicTableTarget::ChangeSelectedAtoms;
+                    editor.m_PeriodicTableOpen = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Apply to selection"))
+                {
+                    if (editor.ApplyElementToSelectedAtoms(std::string(editor.m_ChangeAtomElementBuffer.data())))
+                    {
                         settingsChanged = true;
                     }
                 }

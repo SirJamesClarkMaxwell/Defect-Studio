@@ -119,12 +119,51 @@ namespace ds
                 return std::string();
             }
 
-            std::string normalized;
-            normalized.reserve(symbol.size());
-            normalized.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(symbol[0]))));
-            for (std::size_t i = 1; i < symbol.size(); ++i)
+            std::string compact;
+            compact.reserve(symbol.size());
+            for (char c : symbol)
             {
-                normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(symbol[i]))));
+                if (std::isalpha(static_cast<unsigned char>(c)))
+                {
+                    compact.push_back(c);
+                }
+            }
+
+            if (compact.empty())
+            {
+                return std::string();
+            }
+
+            std::string lower;
+            lower.reserve(compact.size());
+            for (char c : compact)
+            {
+                lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            }
+
+            static const std::unordered_map<std::string, std::string> kNameToSymbol = {
+                {"hydrogen", "H"}, {"helium", "He"}, {"lithium", "Li"}, {"beryllium", "Be"}, {"boron", "B"}, {"carbon", "C"}, {"nitrogen", "N"}, {"oxygen", "O"}, {"fluorine", "F"}, {"neon", "Ne"}, {"sodium", "Na"}, {"magnesium", "Mg"}, {"aluminium", "Al"}, {"aluminum", "Al"}, {"silicon", "Si"}, {"krzem", "Si"}, {"phosphorus", "P"}, {"sulfur", "S"}, {"sulphur", "S"}, {"chlorine", "Cl"}, {"argon", "Ar"}, {"potassium", "K"}, {"calcium", "Ca"}, {"scandium", "Sc"}, {"titanium", "Ti"}, {"vanadium", "V"}, {"chromium", "Cr"}, {"manganese", "Mn"}, {"iron", "Fe"}, {"cobalt", "Co"}, {"nickel", "Ni"}, {"copper", "Cu"}, {"zinc", "Zn"}, {"gallium", "Ga"}, {"germanium", "Ge"}, {"german", "Ge"}, {"germaniu", "Ge"}, {"germanium", "Ge"}, {"arsenic", "As"}, {"selenium", "Se"}, {"bromine", "Br"}, {"krypton", "Kr"}, {"rubidium", "Rb"}, {"strontium", "Sr"}, {"yttrium", "Y"}, {"zirconium", "Zr"}};
+
+            const auto aliasIt = kNameToSymbol.find(lower);
+            if (aliasIt != kNameToSymbol.end())
+            {
+                return aliasIt->second;
+            }
+
+            std::string normalized;
+            normalized.reserve(compact.size());
+            normalized.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(compact[0]))));
+            for (std::size_t i = 1; i < compact.size(); ++i)
+            {
+                normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(compact[i]))));
+            }
+
+            static const std::unordered_set<std::string> kKnownSymbols = {
+                "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg"};
+
+            if (kKnownSymbols.find(normalized) == kKnownSymbols.end())
+            {
+                return std::string();
             }
 
             return normalized;
@@ -350,6 +389,22 @@ namespace ds
             return glm::vec3(r, g, b);
         }
 
+        float ElementRadiusScale(const std::string &element)
+        {
+            static const std::unordered_map<std::string, float> kCovalentRadiusPm = {
+                {"H", 31.0f}, {"He", 28.0f}, {"Li", 128.0f}, {"Be", 96.0f}, {"B", 84.0f}, {"C", 76.0f}, {"N", 71.0f}, {"O", 66.0f}, {"F", 57.0f}, {"Ne", 58.0f}, {"Na", 166.0f}, {"Mg", 141.0f}, {"Al", 121.0f}, {"Si", 111.0f}, {"P", 107.0f}, {"S", 105.0f}, {"Cl", 102.0f}, {"Ar", 106.0f}, {"K", 203.0f}, {"Ca", 176.0f}, {"Sc", 170.0f}, {"Ti", 160.0f}, {"V", 153.0f}, {"Cr", 139.0f}, {"Mn", 139.0f}, {"Fe", 132.0f}, {"Co", 126.0f}, {"Ni", 124.0f}, {"Cu", 132.0f}, {"Zn", 122.0f}, {"Ga", 122.0f}, {"Ge", 120.0f}, {"As", 119.0f}, {"Se", 120.0f}, {"Br", 120.0f}, {"Kr", 116.0f}};
+
+            const std::string normalized = NormalizeElementSymbol(element);
+            const auto it = kCovalentRadiusPm.find(normalized);
+            const float baseRadiusPm = 111.0f; // Si as a neutral baseline for current default scenes.
+            if (it == kCovalentRadiusPm.end())
+            {
+                return 1.0f;
+            }
+
+            return glm::clamp(it->second / baseRadiusPm, 0.45f, 1.95f);
+        }
+
         void DrawInlineHelpMarker(const char *description)
         {
             ImGui::TextDisabled("(?)");
@@ -484,10 +539,10 @@ namespace ds
         m_RenderBackend->BeginFrame(m_SceneSettings);
         if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
         {
-            std::vector<glm::vec3> atomPositions;
-            std::vector<glm::vec3> atomColors;
-            atomPositions.reserve(m_WorkingStructure.atoms.size());
-            atomColors.reserve(m_WorkingStructure.atoms.size());
+            std::unordered_map<std::string, std::vector<glm::vec3>> atomPositionsByElement;
+            std::unordered_map<std::string, std::vector<glm::vec3>> atomColorsByElement;
+            atomPositionsByElement.reserve(m_WorkingStructure.species.size() + 4);
+            atomColorsByElement.reserve(m_WorkingStructure.species.size() + 4);
 
             std::vector<glm::vec3> selectedPositions;
             selectedPositions.reserve(m_SelectedAtomIndices.size());
@@ -503,8 +558,9 @@ namespace ds
                     position = m_WorkingStructure.DirectToCartesian(position);
                 }
 
-                atomPositions.push_back(position);
-                atomColors.push_back(ColorFromElement(atom.element));
+                const std::string elementKey = NormalizeElementSymbol(atom.element);
+                atomPositionsByElement[elementKey].push_back(position);
+                atomColorsByElement[elementKey].push_back(ColorFromElement(elementKey));
 
                 if (IsAtomSelected(i))
                 {
@@ -513,7 +569,15 @@ namespace ds
                 }
             }
 
-            m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), atomPositions, atomColors, m_SceneSettings);
+            for (auto &entry : atomPositionsByElement)
+            {
+                const std::string &elementKey = entry.first;
+                const std::vector<glm::vec3> &positions = entry.second;
+                std::vector<glm::vec3> &colors = atomColorsByElement[elementKey];
+                SceneRenderSettings elementSettings = m_SceneSettings;
+                elementSettings.atomScale = m_SceneSettings.atomScale * ElementRadiusScale(elementKey);
+                m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), positions, colors, elementSettings);
+            }
 
             if (!selectedPositions.empty())
             {
@@ -1649,11 +1713,26 @@ namespace ds
 
         auto setSelectedElement = [&](const char *symbol)
         {
-            std::snprintf(m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size(), "%s", symbol);
+            if (m_PeriodicTableTarget == PeriodicTableTarget::ChangeSelectedAtoms)
+            {
+                std::snprintf(m_PendingChangeAtomElementBuffer.data(), m_PendingChangeAtomElementBuffer.size(), "%s", symbol);
+                m_ChangeAtomTypeConfirmOpen = true;
+            }
+            else
+            {
+                std::snprintf(m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size(), "%s", symbol);
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Selected element: " + std::string(symbol);
+                m_PeriodicTableOpenedFromContextMenu = false;
+            }
+
             m_PeriodicTableOpen = false;
-            m_LastStructureOperationFailed = false;
-            m_LastStructureMessage = "Selected element: " + std::string(symbol);
         };
+
+        const std::string activeTargetElement =
+            (m_PeriodicTableTarget == PeriodicTableTarget::ChangeSelectedAtoms)
+                ? std::string(m_ChangeAtomElementBuffer.data())
+                : std::string(m_AddAtomElementBuffer.data());
 
         for (int row = 0; row < 7; ++row)
         {
@@ -1671,7 +1750,7 @@ namespace ds
                     continue;
                 }
 
-                const bool isSelected = std::string(m_AddAtomElementBuffer.data()) == symbol;
+                const bool isSelected = activeTargetElement == symbol;
                 if (isSelected)
                 {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.56f, 0.92f, 1.0f));
@@ -1726,6 +1805,69 @@ namespace ds
         }
 
         ImGui::End();
+    }
+
+    void EditorLayer::DrawChangeAtomTypeConfirmDialog()
+    {
+        if (!m_ChangeAtomTypeConfirmOpen)
+        {
+            return;
+        }
+
+        ImGui::OpenPopup("Confirm atom type change");
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::BeginPopupModal("Confirm atom type change", nullptr, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            return;
+        }
+
+        ImGui::Text("Change selected atoms to: %s", m_PendingChangeAtomElementBuffer.data());
+        ImGui::TextDisabled("Enter: confirm   Esc: cancel and return to periodic table");
+        ImGui::Separator();
+
+        bool confirm = ImGui::Button("Confirm (Enter)");
+        ImGui::SameLine();
+        bool cancel = ImGui::Button("Back (Esc)");
+
+        if (!confirm && ImGui::IsKeyPressed(ImGuiKey_Enter, false))
+        {
+            confirm = true;
+        }
+        if (!cancel && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        {
+            cancel = true;
+        }
+
+        if (confirm)
+        {
+            std::size_t changedCount = 0;
+            if (ApplyElementToSelectedAtoms(std::string(m_PendingChangeAtomElementBuffer.data()), &changedCount))
+            {
+                if (changedCount > 0)
+                {
+                    AppendSelectionDebugLog("Periodic table: changed selected atom type");
+                }
+
+                std::snprintf(m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size(), "%s", m_PendingChangeAtomElementBuffer.data());
+                if (m_PeriodicTableOpenedFromContextMenu)
+                {
+                    m_ReopenViewportSelectionContextMenu = true;
+                }
+            }
+
+            m_PeriodicTableOpenedFromContextMenu = false;
+            m_ChangeAtomTypeConfirmOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+        else if (cancel)
+        {
+            m_PeriodicTableOpen = true;
+            m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
+            m_ChangeAtomTypeConfirmOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
     }
 
     void EditorLayer::SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection)
@@ -2162,28 +2304,13 @@ namespace ds
             return false;
         }
 
-        std::string symbol;
-        symbol.reserve(elementSymbol.size());
-        for (char c : elementSymbol)
-        {
-            if (!std::isspace(static_cast<unsigned char>(c)))
-            {
-                symbol.push_back(c);
-            }
-        }
-
-        if (symbol.empty() || !std::isalpha(static_cast<unsigned char>(symbol[0])))
+        const std::string symbol = NormalizeElementSymbol(elementSymbol);
+        if (symbol.empty())
         {
             m_LastStructureOperationFailed = true;
             m_LastStructureMessage = "Add atom failed: invalid element symbol.";
             LogWarn(m_LastStructureMessage);
             return false;
-        }
-
-        symbol[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(symbol[0])));
-        for (std::size_t i = 1; i < symbol.size(); ++i)
-        {
-            symbol[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(symbol[i])));
         }
 
         Atom atom;
@@ -2218,6 +2345,62 @@ namespace ds
                                  std::to_string(position.z) + ") [" +
                                  (inputMode == CoordinateMode::Direct ? "Direct" : "Cartesian") + "]";
         LogInfo(m_LastStructureMessage + ", atom count=" + std::to_string(m_WorkingStructure.GetAtomCount()));
+        return true;
+    }
+
+    bool EditorLayer::ApplyElementToSelectedAtoms(const std::string &elementInput, std::size_t *outChangedCount)
+    {
+        if (!m_HasStructureLoaded || m_SelectedAtomIndices.empty())
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Change atom type failed: no selected atoms.";
+            return false;
+        }
+
+        const std::string symbol = NormalizeElementSymbol(elementInput);
+        if (symbol.empty())
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Change atom type failed: invalid element symbol.";
+            return false;
+        }
+
+        std::size_t changedCount = 0;
+        for (std::size_t atomIndex : m_SelectedAtomIndices)
+        {
+            if (atomIndex >= m_WorkingStructure.atoms.size())
+            {
+                continue;
+            }
+
+            Atom &atom = m_WorkingStructure.atoms[atomIndex];
+            if (atom.element == symbol)
+            {
+                continue;
+            }
+
+            atom.element = symbol;
+            ++changedCount;
+        }
+
+        if (changedCount == 0)
+        {
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Change atom type: selection already uses " + symbol + ".";
+            if (outChangedCount)
+            {
+                *outChangedCount = 0;
+            }
+            return true;
+        }
+
+        m_WorkingStructure.RebuildSpeciesFromAtoms();
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Changed atom type to " + symbol + " for " + std::to_string(changedCount) + " atom(s).";
+        if (outChangedCount)
+        {
+            *outChangedCount = changedCount;
+        }
         return true;
     }
 
@@ -5851,6 +6034,12 @@ namespace ds
                     }
                 }
 
+                if (m_ReopenViewportSelectionContextMenu)
+                {
+                    ImGui::OpenPopup("ViewportSelectionContext");
+                    m_ReopenViewportSelectionContextMenu = false;
+                }
+
                 if (ImGui::BeginPopupContextItem("ViewportSelectionContext", ImGuiPopupFlags_MouseButtonRight))
                 {
                     const bool hasLoadedAtoms = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
@@ -6104,6 +6293,30 @@ namespace ds
                     {
                         const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
                         const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
+                        if (ImGui::BeginMenu("Change selected atom type", !m_SelectedAtomIndices.empty()))
+                        {
+                            ImGui::SetNextItemWidth(110.0f);
+                            ImGui::InputText("Element", m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size());
+
+                            if (ImGui::MenuItem("Periodic table..."))
+                            {
+                                m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
+                                m_PeriodicTableOpenedFromContextMenu = true;
+                                m_PeriodicTableOpen = true;
+                            }
+
+                            if (ImGui::MenuItem("Apply"))
+                            {
+                                if (ApplyElementToSelectedAtoms(std::string(m_ChangeAtomElementBuffer.data())))
+                                {
+                                    settingsChanged = true;
+                                    AppendSelectionDebugLog("Context menu: Changed selected atom type");
+                                }
+                            }
+
+                            ImGui::EndMenu();
+                        }
+
                         if (ImGui::MenuItem("Move selected objects to 3D cursor", nullptr, false, !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight))
                         {
                             if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
@@ -6765,6 +6978,8 @@ namespace ds
             ImGui::SameLine();
             if (ImGui::Button("Periodic table"))
             {
+                m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
+                m_PeriodicTableOpenedFromContextMenu = false;
                 m_PeriodicTableOpen = true;
             }
             ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
@@ -7181,6 +7396,7 @@ namespace ds
         }
 
         DrawPeriodicTableWindow();
+        DrawChangeAtomTypeConfirmDialog();
 
         if (m_ShowAddAtomDialog)
         {
@@ -7194,6 +7410,8 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Periodic table"))
                 {
+                    m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
+                    m_PeriodicTableOpenedFromContextMenu = false;
                     m_PeriodicTableOpen = true;
                 }
 

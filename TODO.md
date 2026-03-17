@@ -34,7 +34,7 @@
 - [x] Export with precision and Direct/Cartesian options
 - [x] Original-state restore support
 
-### [ ] T05 - Atom rendering, selection, gizmo (`task/05-editor-selection-gizmo`)
+### [x] T05 - Atom rendering, selection, gizmo (`task/05-editor-selection-gizmo`)
 - [x] Instanced atom rendering
 - [x] Click/multi-select (**next priority #1**)
 - [x] Box select (`B`) and RMB context menu actions (**next priority #3**)
@@ -43,7 +43,7 @@
 - [x] Relative axes mode (based on surrounding atoms)
 - [x] Fix Blender-like global axis overlay so axes are always readable and visually consistent in viewport
 
-#### [ ] T05a - Scene object system (Blender-like, in-progress under T05)
+#### [x] T05a - Scene object system (Blender-like, in-progress under T05)
 - [x] Fix crash on deleting Empty and stabilize Empty lifecycle
 - [x] Fix Empty re-selection after lifecycle operations (add/delete/clear)
 - [x] Add Scene Outliner panel (tree view, Blender-like workflow)
@@ -69,8 +69,10 @@
 
 ### [ ] T06 - Bonds and measurements (`task/06-bonds-tools`)
 - [x] Add atom tool (insert atom into structure) 
-- [ ] change atom type 
-- [ ] Auto bond generation and dynamic threshold updates
+- [x] add rotation button on the top of the view window with specification how much the view has to be rotated
+- [x] change atom type 
+- [ ] Make POSCAR/CONTCAR export formatting exactly match sample style (e.g., `assets/samples/diamond_bulk`) to avoid noisy `diff`
+- [ ] Auto bond generation and dynamic threshold updates with generated text as bond length along the bonds and easy read in camera view
 - [ ] Global cutoff + per-element-pair mode
 - [ ] Distance/angle tools and labels
 - [ ] Collections system (Blender-like outliner groups, visibility/lock/select toggles)
@@ -103,5 +105,5 @@
 - [ ] README (build/run/controls)
 
 ## Current focus
-- Active task: **T05 / T05a - Atom rendering, selection, gizmo + scene object system**
-- Active branch: **temp/blender-like-scene-system**
+- Active task: **T06 - Bonds and measurements**
+- Active branch: **task/06-bonds-tools**
