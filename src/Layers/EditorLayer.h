@@ -70,6 +70,9 @@ namespace ds
         bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
         glm::vec3 GetAtomCartesianPosition(std::size_t atomIndex) const;
         void SetAtomCartesianPosition(std::size_t atomIndex, const glm::vec3 &position);
+        std::array<glm::vec3, 3> ResolveTransformAxes(const glm::vec3 &pivot) const;
+        bool BuildAxesFromPoints(const std::vector<glm::vec3> &points, const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const;
+        bool ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const;
         bool Set3DCursorToSelectionCenterOfMass();
         bool Set3DCursorToSelectedAtom(bool useLastSelected);
         bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
@@ -119,6 +122,15 @@ namespace ds
         bool m_ViewGuizmoEnabled = true;
         int m_GizmoOperationIndex = 0;
         int m_GizmoModeIndex = 1;
+        bool m_UseTemporaryLocalAxes = false;
+        int m_TemporaryAxisAtomA = -1;
+        int m_TemporaryAxisAtomB = -1;
+        int m_TemporaryAxisAtomC = -1;
+        std::array<glm::vec3, 3> m_AxisColors = {
+            glm::vec3(0.90f, 0.27f, 0.27f),
+            glm::vec3(0.27f, 0.90f, 0.27f),
+            glm::vec3(0.27f, 0.47f, 0.96f)};
+        bool m_ShowGlobalAxesOverlay = true;
         bool m_GizmoSnapEnabled = false;
         float m_GizmoTranslateSnap = 0.1f;
         float m_GizmoRotateSnapDeg = 15.0f;
@@ -158,7 +170,6 @@ namespace ds
         float m_FallbackDragPixelsPerWorld = 1.0f;
         float m_FallbackDragAccumulated = 0.0f;
         float m_FallbackDragApplied = 0.0f;
-        float m_FallbackRotateStartAngle = 0.0f;
         float m_FallbackRotateLastAngle = 0.0f;
         glm::vec2 m_BoxSelectStart = glm::vec2(0.0f, 0.0f);
         glm::vec2 m_BoxSelectEnd = glm::vec2(0.0f, 0.0f);

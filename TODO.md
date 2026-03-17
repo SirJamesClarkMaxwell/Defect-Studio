@@ -38,11 +38,16 @@
 - [x] Click/multi-select (**next priority #1**)
 - [x] Box select (`B`) and RMB context menu actions (**next priority #3**)
 - [x] ImGuizmo transform for selected atoms (**next priority #4**)
-- [ ] Blender-like XYZ axes (R/G/B) with configurable orientation and colors 
-- [ ] adding local axes, relative axes (based on the sourounding) (x(green),y(red),z(blue))
+- [x] Blender-like XYZ axes (R/G/B) with configurable orientation and colors
+- [ ] Relative axes mode (based on surrounding atoms)
+- [ ] Fix Blender-like global axis overlay so axes are always readable and visually consistent in viewport
+- [ ] Fix keyboard transform flow: `G` then `X/Y/Z` should start constrained move and show active axis
+- [ ] Implement atom-defined pivot workflow (create/manage local pivot axes from selected atoms)
+- [ ] Add Circle Menu for fast mode/action switching (selection, transform, view)
 
 ### [ ] T06 - Bonds and measurements (`task/06-bonds-tools`)
 - [x] Add atom tool (insert atom into structure) 
+- [ ] change atom type 
 - [ ] Auto bond generation and dynamic threshold updates
 - [ ] Global cutoff + per-element-pair mode
 - [ ] Distance/angle tools and labels

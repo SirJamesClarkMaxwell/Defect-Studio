@@ -24,6 +24,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <glm/geometric.hpp>
@@ -236,6 +237,19 @@ namespace ds
             const float g = 0.35f + 0.50f * static_cast<float>((hash >> 8) & 0xFF) / 255.0f;
             const float b = 0.35f + 0.50f * static_cast<float>((hash >> 16) & 0xFF) / 255.0f;
             return glm::vec3(r, g, b);
+        }
+
+        void DrawInlineHelpMarker(const char *description)
+        {
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            {
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+                ImGui::TextUnformatted(description);
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
         }
     }
 
@@ -610,6 +624,207 @@ namespace ds
         }
 
         m_WorkingStructure.atoms[atomIndex].position = position;
+    }
+
+    bool EditorLayer::BuildAxesFromPoints(const std::vector<glm::vec3> &points, const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const
+    {
+        std::vector<glm::vec3> offsets;
+        offsets.reserve(points.size());
+
+        for (const glm::vec3 &point : points)
+        {
+            const glm::vec3 offset = point - pivot;
+            if (glm::length2(offset) > 1e-8f)
+            {
+                offsets.push_back(offset);
+            }
+        }
+
+        if (offsets.empty())
+        {
+            return false;
+        }
+
+        glm::vec3 axisX(0.0f);
+        float maxLen2 = 0.0f;
+        for (const glm::vec3 &offset : offsets)
+        {
+            const float len2 = glm::length2(offset);
+            if (len2 > maxLen2)
+            {
+                maxLen2 = len2;
+                axisX = offset;
+            }
+        }
+
+        if (maxLen2 < 1e-8f)
+        {
+            return false;
+        }
+        axisX = glm::normalize(axisX);
+
+        glm::vec3 axisY(0.0f);
+        float bestOrthogonality = 0.0f;
+        for (const glm::vec3 &offset : offsets)
+        {
+            const glm::vec3 normalized = glm::normalize(offset);
+            const float orthogonality = glm::length(glm::cross(axisX, normalized));
+            if (orthogonality > bestOrthogonality)
+            {
+                bestOrthogonality = orthogonality;
+                axisY = normalized;
+            }
+        }
+
+        if (bestOrthogonality < 1e-4f)
+        {
+            axisY = (std::abs(axisX.z) < 0.9f) ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+
+        glm::vec3 axisZ = glm::cross(axisX, axisY);
+        if (glm::length2(axisZ) < 1e-8f)
+        {
+            return false;
+        }
+
+        axisZ = glm::normalize(axisZ);
+        axisY = glm::normalize(glm::cross(axisZ, axisX));
+
+        outAxes[0] = axisX;
+        outAxes[1] = axisY;
+        outAxes[2] = axisZ;
+        return true;
+    }
+
+    bool EditorLayer::ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const
+    {
+        if (!m_UseTemporaryLocalAxes || !m_HasStructureLoaded)
+        {
+            return false;
+        }
+
+        if (m_TemporaryAxisAtomA < 0 || m_TemporaryAxisAtomB < 0)
+        {
+            return false;
+        }
+
+        const std::size_t atomA = static_cast<std::size_t>(m_TemporaryAxisAtomA);
+        const std::size_t atomB = static_cast<std::size_t>(m_TemporaryAxisAtomB);
+        if (atomA >= m_WorkingStructure.atoms.size() || atomB >= m_WorkingStructure.atoms.size() || atomA == atomB)
+        {
+            return false;
+        }
+
+        const glm::vec3 origin = GetAtomCartesianPosition(atomA);
+        std::vector<glm::vec3> framePoints;
+        framePoints.reserve(2);
+        framePoints.push_back(GetAtomCartesianPosition(atomB));
+
+        if (m_TemporaryAxisAtomC >= 0)
+        {
+            const std::size_t atomC = static_cast<std::size_t>(m_TemporaryAxisAtomC);
+            if (atomC < m_WorkingStructure.atoms.size() && atomC != atomA && atomC != atomB)
+            {
+                framePoints.push_back(GetAtomCartesianPosition(atomC));
+            }
+        }
+
+        return BuildAxesFromPoints(framePoints, origin, outAxes);
+    }
+
+    std::array<glm::vec3, 3> EditorLayer::ResolveTransformAxes(const glm::vec3 &pivot) const
+    {
+        std::array<glm::vec3, 3> axes = {
+            glm::vec3(1.0f, 0.0f, 0.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f),
+            glm::vec3(0.0f, 0.0f, 1.0f)};
+
+        if (m_GizmoModeIndex == 1)
+        {
+            return axes;
+        }
+
+        std::vector<glm::vec3> points;
+        if (m_GizmoModeIndex == 0)
+        {
+            std::array<glm::vec3, 3> temporaryAxes = axes;
+            if (ResolveTemporaryLocalAxes(temporaryAxes))
+            {
+                return temporaryAxes;
+            }
+
+            points.reserve(m_SelectedAtomIndices.size());
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex < m_WorkingStructure.atoms.size())
+                {
+                    points.push_back(GetAtomCartesianPosition(atomIndex));
+                }
+            }
+        }
+        else
+        {
+            float selectionRadius = 0.0f;
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex < m_WorkingStructure.atoms.size())
+                {
+                    const float dist = glm::length(GetAtomCartesianPosition(atomIndex) - pivot);
+                    selectionRadius = std::max(selectionRadius, dist);
+                }
+            }
+
+            const float searchRadius = std::max(1.0f, selectionRadius * 1.6f);
+            constexpr std::size_t kMaxNeighbors = 48;
+            std::vector<std::pair<float, glm::vec3>> nearest;
+            nearest.reserve(kMaxNeighbors);
+
+            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+            {
+                const glm::vec3 atomPos = GetAtomCartesianPosition(atomIndex);
+                const float dist = glm::length(atomPos - pivot);
+                if (dist < 1e-4f || dist > searchRadius)
+                {
+                    continue;
+                }
+
+                if (nearest.size() < kMaxNeighbors)
+                {
+                    nearest.emplace_back(dist, atomPos);
+                    continue;
+                }
+
+                std::size_t farthestIndex = 0;
+                float farthestDistance = nearest[0].first;
+                for (std::size_t i = 1; i < nearest.size(); ++i)
+                {
+                    if (nearest[i].first > farthestDistance)
+                    {
+                        farthestDistance = nearest[i].first;
+                        farthestIndex = i;
+                    }
+                }
+
+                if (dist < farthestDistance)
+                {
+                    nearest[farthestIndex] = std::make_pair(dist, atomPos);
+                }
+            }
+
+            points.reserve(nearest.size());
+            for (const auto &entry : nearest)
+            {
+                points.push_back(entry.second);
+            }
+        }
+
+        std::array<glm::vec3, 3> computedAxes = axes;
+        if (BuildAxesFromPoints(points, pivot, computedAxes))
+        {
+            return computedAxes;
+        }
+
+        return axes;
     }
 
     bool EditorLayer::Set3DCursorToSelectionCenterOfMass()
@@ -1149,7 +1364,7 @@ namespace ds
             }
 
             const glm::vec3 center = 0.5f * (boundsMin + boundsMax);
-            m_SceneSettings.gridOrigin = glm::vec3(center.x, boundsMin.y, center.z);
+            m_SceneSettings.gridOrigin = glm::vec3(center.x, center.y, 0.0f);
 
             const float halfSpanXZ = 0.5f * std::max(boundsMax.x - boundsMin.x, boundsMax.z - boundsMin.z);
             const int recommendedHalfExtent = static_cast<int>(std::ceil(halfSpanXZ / std::max(0.1f, m_SceneSettings.gridSpacing))) + 2;
@@ -1944,6 +2159,134 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_show_global_axes_overlay")
+            {
+                m_ShowGlobalAxesOverlay = (value == "1");
+            }
+            else if (key == "gizmo_use_temporary_local_axes")
+            {
+                m_UseTemporaryLocalAxes = (value == "1");
+            }
+            else if (key == "gizmo_temp_axis_atom_a")
+            {
+                try
+                {
+                    m_TemporaryAxisAtomA = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_temp_axis_atom_b")
+            {
+                try
+                {
+                    m_TemporaryAxisAtomB = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_temp_axis_atom_c")
+            {
+                try
+                {
+                    m_TemporaryAxisAtomC = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_x_r")
+            {
+                try
+                {
+                    m_AxisColors[0].r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_x_g")
+            {
+                try
+                {
+                    m_AxisColors[0].g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_x_b")
+            {
+                try
+                {
+                    m_AxisColors[0].b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_y_r")
+            {
+                try
+                {
+                    m_AxisColors[1].r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_y_g")
+            {
+                try
+                {
+                    m_AxisColors[1].g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_y_b")
+            {
+                try
+                {
+                    m_AxisColors[1].b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_z_r")
+            {
+                try
+                {
+                    m_AxisColors[2].r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_z_g")
+            {
+                try
+                {
+                    m_AxisColors[2].g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "gizmo_axis_color_z_b")
+            {
+                try
+                {
+                    m_AxisColors[2].b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
         }
 
         if (!hasSensitivityMode || !relativeSensitivity)
@@ -1990,6 +2333,13 @@ namespace ds
             m_FallbackGizmoVisualScale = 0.5f;
         if (m_FallbackGizmoVisualScale > 6.0f)
             m_FallbackGizmoVisualScale = 6.0f;
+        if (m_GizmoModeIndex < 0)
+            m_GizmoModeIndex = 0;
+        if (m_GizmoModeIndex > 2)
+            m_GizmoModeIndex = 2;
+
+        // Keep simulation grid on the canonical XY plane.
+        m_SceneSettings.gridOrigin.z = 0.0f;
     }
 
     void EditorLayer::SaveSettings() const
@@ -2039,7 +2389,7 @@ namespace ds
         out << "viewport_grid_line_width=" << m_SceneSettings.gridLineWidth << '\n';
         out << "viewport_grid_origin_x=" << m_SceneSettings.gridOrigin.x << '\n';
         out << "viewport_grid_origin_y=" << m_SceneSettings.gridOrigin.y << '\n';
-        out << "viewport_grid_origin_z=" << m_SceneSettings.gridOrigin.z << '\n';
+        out << "viewport_grid_origin_z=" << 0.0f << '\n';
         out << "viewport_grid_color_r=" << m_SceneSettings.gridColor.r << '\n';
         out << "viewport_grid_color_g=" << m_SceneSettings.gridColor.g << '\n';
         out << "viewport_grid_color_b=" << m_SceneSettings.gridColor.b << '\n';
@@ -2073,6 +2423,20 @@ namespace ds
         out << "viewport_view_gizmo_offset_right=" << m_ViewGizmoOffsetRight << '\n';
         out << "viewport_view_gizmo_offset_top=" << m_ViewGizmoOffsetTop << '\n';
         out << "viewport_fallback_marker_scale=" << m_FallbackGizmoVisualScale << '\n';
+        out << "viewport_show_global_axes_overlay=" << (m_ShowGlobalAxesOverlay ? "1" : "0") << '\n';
+        out << "gizmo_use_temporary_local_axes=" << (m_UseTemporaryLocalAxes ? "1" : "0") << '\n';
+        out << "gizmo_temp_axis_atom_a=" << m_TemporaryAxisAtomA << '\n';
+        out << "gizmo_temp_axis_atom_b=" << m_TemporaryAxisAtomB << '\n';
+        out << "gizmo_temp_axis_atom_c=" << m_TemporaryAxisAtomC << '\n';
+        out << "gizmo_axis_color_x_r=" << m_AxisColors[0].r << '\n';
+        out << "gizmo_axis_color_x_g=" << m_AxisColors[0].g << '\n';
+        out << "gizmo_axis_color_x_b=" << m_AxisColors[0].b << '\n';
+        out << "gizmo_axis_color_y_r=" << m_AxisColors[1].r << '\n';
+        out << "gizmo_axis_color_y_g=" << m_AxisColors[1].g << '\n';
+        out << "gizmo_axis_color_y_b=" << m_AxisColors[1].b << '\n';
+        out << "gizmo_axis_color_z_r=" << m_AxisColors[2].r << '\n';
+        out << "gizmo_axis_color_z_g=" << m_AxisColors[2].g << '\n';
+        out << "gizmo_axis_color_z_b=" << m_AxisColors[2].b << '\n';
     }
 
     void EditorLayer::OnImGuiRender()
@@ -2209,6 +2573,7 @@ namespace ds
 
             m_TranslateModeActive = true;
             m_InteractionMode = InteractionMode::Translate;
+            m_GizmoOperationIndex = 0;
             m_TranslateLastMousePos = glm::vec2(io.MousePos.x, io.MousePos.y);
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Translate mode active: move mouse, X/Y/Z constrain, Shift+X/Y/Z plane lock, Ctrl snap.";
@@ -2347,10 +2712,24 @@ namespace ds
             AppendSelectionDebugLog("Rotate mode applied (LMB/Enter/R)");
         };
 
-        const bool translateHotkey = ImGui::IsKeyPressed(ImGuiKey_G, false) ||
-                                     (m_InteractionMode != InteractionMode::ViewSet && ImGui::IsKeyPressed(ImGuiKey_T, false));
+        const bool translateModalHotkey = ImGui::IsKeyPressed(ImGuiKey_G, false);
+        const bool translateGizmoHotkey = (m_InteractionMode != InteractionMode::ViewSet && ImGui::IsKeyPressed(ImGuiKey_T, false));
 
-        if (m_ViewportFocused && !io.WantTextInput && translateHotkey)
+        if (m_ViewportFocused && !io.WantTextInput && translateModalHotkey)
+        {
+            cancelTranslateMode();
+            cancelRotateMode();
+            beginTranslateMode();
+            m_GizmoEnabled = false;
+            m_LastStructureOperationFailed = false;
+            if (!m_HasStructureLoaded || m_SelectedAtomIndices.empty())
+            {
+                m_LastStructureMessage = "Translate mode unavailable: select atoms first.";
+            }
+            AppendSelectionDebugLog("Hotkey: G -> modal Translate");
+        }
+
+        if (m_ViewportFocused && !io.WantTextInput && translateGizmoHotkey)
         {
             cancelTranslateMode();
             cancelRotateMode();
@@ -2358,15 +2737,15 @@ namespace ds
             m_GizmoEnabled = true;
             m_GizmoOperationIndex = 0;
             m_LastStructureOperationFailed = false;
-            m_LastStructureMessage = "Transform mode: Translate (Blender-style G).";
+            m_LastStructureMessage = "Transform mode: Translate gizmo (T).";
             if (!m_HasStructureLoaded || m_SelectedAtomIndices.empty())
             {
                 m_LastStructureMessage += " Select atoms to use gizmo.";
             }
-            AppendSelectionDebugLog("Hotkey: G/T -> gizmo Translate");
+            AppendSelectionDebugLog("Hotkey: T -> gizmo Translate");
         }
 
-        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_R, false))
+        if (m_ViewportFocused && !io.WantTextInput && m_InteractionMode != InteractionMode::ViewSet && ImGui::IsKeyPressed(ImGuiKey_R, false))
         {
             cancelTranslateMode();
             cancelRotateMode();
@@ -2523,10 +2902,21 @@ namespace ds
                 const float panSpeed = 0.006f * m_Camera->GetDistance();
                 glm::vec3 frameDelta = (-right * mouseDelta.x + up * mouseDelta.y) * panSpeed;
 
+                glm::vec3 translatePivot(0.0f);
+                if (!m_TranslateInitialCartesian.empty())
+                {
+                    for (const glm::vec3 &position : m_TranslateInitialCartesian)
+                    {
+                        translatePivot += position;
+                    }
+                    translatePivot /= static_cast<float>(m_TranslateInitialCartesian.size());
+                }
+
+                const std::array<glm::vec3, 3> transformAxes = ResolveTransformAxes(translatePivot);
                 const glm::vec3 axis[3] = {
-                    glm::vec3(1.0f, 0.0f, 0.0f),
-                    glm::vec3(0.0f, 1.0f, 0.0f),
-                    glm::vec3(0.0f, 0.0f, 1.0f)};
+                    transformAxes[0],
+                    transformAxes[1],
+                    transformAxes[2]};
 
                 if (m_TranslateConstraintAxis >= 0 && m_TranslateConstraintAxis < 3)
                 {
@@ -2607,13 +2997,15 @@ namespace ds
                     AppendSelectionDebugLog("Rotate axis: Z");
                 }
 
+                const std::array<glm::vec3, 3> transformAxes = ResolveTransformAxes(m_RotatePivot);
+
                 glm::vec3 rotationAxis(0.0f, 0.0f, 1.0f);
                 if (m_RotateConstraintAxis == 0)
-                    rotationAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+                    rotationAxis = transformAxes[0];
                 else if (m_RotateConstraintAxis == 1)
-                    rotationAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+                    rotationAxis = transformAxes[1];
                 else if (m_RotateConstraintAxis == 2)
-                    rotationAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+                    rotationAxis = transformAxes[2];
                 else
                     rotationAxis = glm::normalize(glm::vec3(
                         std::cos(m_Camera->GetPitch()) * std::sin(m_Camera->GetYaw()),
@@ -2738,6 +3130,117 @@ namespace ds
                 m_ViewportRectMin = glm::vec2(rectMin.x, rectMin.y);
                 m_ViewportRectMax = glm::vec2(rectMax.x, rectMax.y);
 
+                if (m_ShowGlobalAxesOverlay && m_Camera)
+                {
+                    const glm::vec3 origin(0.0f, 0.0f, 0.0f);
+                    const float sceneExtent = std::max(3.0f, m_SceneSettings.gridSpacing * static_cast<float>(std::max(2, m_SceneSettings.gridHalfExtent)));
+                    const float axisLen = std::max(sceneExtent * 2.0f, m_Camera->GetDistance() * 2.4f);
+                    const glm::vec3 axisDir[3] = {
+                        glm::vec3(1.0f, 0.0f, 0.0f),
+                        glm::vec3(0.0f, 1.0f, 0.0f),
+                        glm::vec3(0.0f, 0.0f, 1.0f)};
+
+                    auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen) -> bool
+                    {
+                        const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(world, 1.0f);
+                        if (clip.w <= 0.0001f)
+                        {
+                            return false;
+                        }
+
+                        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                        outScreen = glm::vec2(
+                            m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                            m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+                        return true;
+                    };
+
+                    ImDrawList *overlay = ImGui::GetWindowDrawList();
+                    overlay->PushClipRect(rectMin, rectMax, true);
+                    const ImU32 axisColor[3] = {
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[0].r, m_AxisColors[0].g, m_AxisColors[0].b, 0.95f)),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[1].r, m_AxisColors[1].g, m_AxisColors[1].b, 0.95f)),
+                        ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[2].r, m_AxisColors[2].g, m_AxisColors[2].b, 0.95f))};
+                    const char *axisLabel[3] = {"X", "Y", "Z"};
+                    glm::vec2 originScreen(0.0f);
+                    const bool hasOrigin = projectWorldToScreen(origin, originScreen);
+
+                    for (int axis = 0; axis < 3; ++axis)
+                    {
+                        glm::vec2 startScreen(0.0f);
+                        glm::vec2 endScreen(0.0f);
+                        const bool hasStart = projectWorldToScreen(origin - axisDir[axis] * axisLen, startScreen);
+                        const bool hasEnd = projectWorldToScreen(origin + axisDir[axis] * axisLen, endScreen);
+                        if (!hasOrigin || (!hasStart && !hasEnd))
+                        {
+                            continue;
+                        }
+
+                        if (hasStart)
+                        {
+                            overlay->AddLine(ImVec2(startScreen.x, startScreen.y), ImVec2(originScreen.x, originScreen.y), axisColor[axis], 2.0f);
+                        }
+
+                        if (hasEnd)
+                        {
+                            overlay->AddLine(ImVec2(originScreen.x, originScreen.y), ImVec2(endScreen.x, endScreen.y), axisColor[axis], 2.0f);
+                            overlay->AddCircleFilled(ImVec2(endScreen.x, endScreen.y), 3.2f, axisColor[axis]);
+                            overlay->AddText(ImVec2(endScreen.x + 6.0f, endScreen.y - 7.0f), axisColor[axis], axisLabel[axis]);
+                        }
+                    }
+                    overlay->PopClipRect();
+                }
+
+                if (m_TranslateModeActive && m_Camera && m_TranslateConstraintAxis >= 0 && m_TranslateConstraintAxis < 3 && !m_TranslateInitialCartesian.empty())
+                {
+                    glm::vec3 pivot(0.0f);
+                    for (const glm::vec3 &position : m_TranslateInitialCartesian)
+                    {
+                        pivot += position;
+                    }
+                    pivot /= static_cast<float>(m_TranslateInitialCartesian.size());
+
+                    const std::array<glm::vec3, 3> axes = ResolveTransformAxes(pivot);
+                    const glm::vec3 activeAxis = glm::normalize(axes[m_TranslateConstraintAxis]);
+                    const glm::vec3 currentPivot = pivot + m_TranslateCurrentOffset;
+                    const float sceneExtent = std::max(3.0f, m_SceneSettings.gridSpacing * static_cast<float>(std::max(2, m_SceneSettings.gridHalfExtent)));
+                    const float lineLen = std::max(sceneExtent * 2.0f, m_Camera->GetDistance() * 2.0f);
+
+                    auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen) -> bool
+                    {
+                        const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(world, 1.0f);
+                        if (clip.w <= 0.0001f)
+                        {
+                            return false;
+                        }
+
+                        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                        outScreen = glm::vec2(
+                            m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                            m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+                        return true;
+                    };
+
+                    glm::vec2 a(0.0f);
+                    glm::vec2 b(0.0f);
+                    if (projectWorldToScreen(currentPivot - activeAxis * lineLen, a) && projectWorldToScreen(currentPivot + activeAxis * lineLen, b))
+                    {
+                        ImDrawList *overlay = ImGui::GetWindowDrawList();
+                        overlay->PushClipRect(rectMin, rectMax, true);
+                        const ImU32 guideColor = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                            m_AxisColors[m_TranslateConstraintAxis].r,
+                            m_AxisColors[m_TranslateConstraintAxis].g,
+                            m_AxisColors[m_TranslateConstraintAxis].b,
+                            0.96f));
+                        overlay->AddLine(ImVec2(a.x, a.y), ImVec2(b.x, b.y), guideColor, 2.6f);
+                        overlay->PopClipRect();
+                    }
+                }
+
                 const bool canRenderTransformGizmo = m_GizmoEnabled && m_Camera && !m_SelectedAtomIndices.empty() && m_HasStructureLoaded;
                 if (canRenderTransformGizmo != s_LastCanRenderTransformGizmo || m_SelectedAtomIndices.size() != s_LastSelectedCount)
                 {
@@ -2836,6 +3339,7 @@ namespace ds
                         }
 
                         const int activeOperation = m_RotateModeActive ? 1 : m_GizmoOperationIndex;
+                        const std::array<glm::vec3, 3> transformAxes = ResolveTransformAxes(pivot);
 
                         glm::vec2 fallbackAxisScreenDir[3] = {
                             glm::vec2(1.0f, 0.0f),
@@ -2851,52 +3355,76 @@ namespace ds
 
                         if (pivotInViewport)
                         {
-                            const glm::vec3 axisWorld[3] = {
-                                glm::vec3(1.0f, 0.0f, 0.0f),
-                                glm::vec3(0.0f, 1.0f, 0.0f),
-                                glm::vec3(0.0f, 0.0f, 1.0f)};
                             const ImU32 axisColor[3] = {
-                                IM_COL32(230, 70, 70, 245),
-                                IM_COL32(70, 230, 70, 245),
-                                IM_COL32(70, 120, 245, 245)};
+                                ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[0].r, m_AxisColors[0].g, m_AxisColors[0].b, 0.96f)),
+                                ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[1].r, m_AxisColors[1].g, m_AxisColors[1].b, 0.96f)),
+                                ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[2].r, m_AxisColors[2].g, m_AxisColors[2].b, 0.96f))};
 
                             const float markerScale = glm::clamp(m_FallbackGizmoVisualScale, 0.5f, 6.0f);
                             const float centerRadius = (m_FallbackGizmoDragging ? 9.0f : 7.5f) * markerScale;
                             const float thickness = (m_FallbackGizmoDragging ? 3.2f : 2.6f) * markerScale;
                             const float headLength = 12.0f * markerScale;
                             const float headWidth = 8.0f * markerScale;
-                            const float axisWorldLen = 1.0f;
+                            const float axisWorldLen = glm::max(0.4f, 0.18f * m_Camera->GetDistance());
 
-                            ImDrawList *overlay = ImGui::GetForegroundDrawList();
+                            ImDrawList *overlay = ImGui::GetWindowDrawList();
+                            overlay->PushClipRect(rectMin, rectMax, true);
                             const ImVec2 p(pivotScreen.x, pivotScreen.y);
 
                             for (int axis = 0; axis < 3; ++axis)
                             {
-                                const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(pivot + axisWorld[axis] * axisWorldLen, 1.0f);
-                                if (clip.w <= 0.0001f)
-                                {
-                                    continue;
-                                }
-
-                                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
                                 const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
                                 const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
-                                const glm::vec2 endScreen(
-                                    m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
-                                    m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
-
-                                glm::vec2 axisVec = endScreen - pivotScreen;
-                                const float axisPixels = glm::length(axisVec);
-                                if (axisPixels < 8.0f)
+                                auto projectScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen) -> bool
                                 {
-                                    continue;
+                                    const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(world, 1.0f);
+                                    if (clip.w <= 0.0001f)
+                                    {
+                                        return false;
+                                    }
+
+                                    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                                    outScreen = glm::vec2(
+                                        m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                                        m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+                                    return true;
+                                };
+
+                                glm::vec2 posScreen(0.0f);
+                                glm::vec2 negScreen(0.0f);
+                                const bool hasPos = projectScreen(pivot + transformAxes[axis] * axisWorldLen, posScreen);
+                                const bool hasNeg = projectScreen(pivot - transformAxes[axis] * axisWorldLen, negScreen);
+
+                                glm::vec2 axisVec(0.0f);
+                                if (hasPos && hasNeg)
+                                {
+                                    axisVec = posScreen - negScreen;
+                                }
+                                else if (hasPos)
+                                {
+                                    axisVec = posScreen - pivotScreen;
+                                }
+                                else if (hasNeg)
+                                {
+                                    axisVec = pivotScreen - negScreen;
+                                }
+
+                                float axisPixels = glm::length(axisVec);
+                                if (axisPixels < 1.0f)
+                                {
+                                    axisVec = (axis == 0)   ? glm::vec2(1.0f, 0.0f)
+                                             : (axis == 1) ? glm::vec2(0.0f, -1.0f)
+                                                           : glm::vec2(-0.7071f, -0.7071f);
+                                    axisPixels = 1.0f;
                                 }
 
                                 axisVec /= axisPixels;
+                                const float visualAxisLen = glm::clamp(axisPixels, 55.0f * markerScale, 140.0f * markerScale);
+                                const glm::vec2 endScreen = pivotScreen + axisVec * visualAxisLen;
                                 fallbackAxisVisible[axis] = true;
                                 fallbackAxisScreenDir[axis] = axisVec;
                                 fallbackAxisEnd[axis] = endScreen;
-                                fallbackPixelsPerWorld[axis] = axisPixels / axisWorldLen;
+                                fallbackPixelsPerWorld[axis] = glm::max(30.0f, axisPixels / axisWorldLen);
 
                                 if (activeOperation == 0 || activeOperation == 2)
                                 {
@@ -2937,52 +3465,9 @@ namespace ds
                                     IM_COL32(70, 230, 70, 245),
                                     IM_COL32(70, 120, 245, 245)};
 
-                                // Spherical rotation look: outer sphere ring with active angle sector.
-                                overlay->AddCircle(p, ringRadius[2], IM_COL32(245, 245, 245, 230), 96, 1.8f * markerScale);
-
-                                const int axisForVisual = m_FallbackGizmoDragging ? m_FallbackGizmoAxis : hoveredFallbackAxis;
-                                if (axisForVisual >= 0 && axisForVisual < 3)
-                                {
-                                    overlay->AddCircle(p, ringRadius[axisForVisual], rotateColor[axisForVisual], 96, 2.4f * markerScale);
-                                }
-
-                                if (m_FallbackGizmoDragging && m_FallbackGizmoOperation == 1)
-                                {
-                                    const float radius = ringRadius[2];
-                                    const float startAngle = m_FallbackRotateStartAngle;
-                                    const float endAngle = startAngle + m_FallbackDragApplied;
-
-                                    const int segments = 42;
-                                    std::vector<ImVec2> wedge;
-                                    wedge.reserve(static_cast<std::size_t>(segments) + 2);
-                                    wedge.push_back(p);
-                                    for (int i = 0; i <= segments; ++i)
-                                    {
-                                        const float t = static_cast<float>(i) / static_cast<float>(segments);
-                                        const float angle = startAngle + (endAngle - startAngle) * t;
-                                        wedge.emplace_back(
-                                            p.x + std::cos(angle) * radius,
-                                            p.y + std::sin(angle) * radius);
-                                    }
-                                    if (wedge.size() >= 3)
-                                    {
-                                        overlay->AddConvexPolyFilled(wedge.data(), static_cast<int>(wedge.size()), IM_COL32(255, 150, 40, 90));
-                                    }
-
-                                    overlay->PathClear();
-                                    overlay->PathArcTo(p, radius, startAngle, endAngle, segments);
-                                    overlay->PathStroke(IM_COL32(255, 150, 40, 245), false, 2.8f * markerScale);
-
-                                    const char axisLabel = (m_FallbackGizmoAxis == 0) ? 'X' : (m_FallbackGizmoAxis == 1) ? 'Y' : 'Z';
-                                    const float deg = glm::degrees(m_FallbackDragApplied);
-                                    char angleLabel[96] = {};
-                                    std::snprintf(angleLabel, sizeof(angleLabel), "%c: %.2f deg %.2f rad", axisLabel, deg, m_FallbackDragApplied);
-                                    overlay->AddText(ImVec2(p.x + radius + 10.0f, p.y - radius * 0.35f), IM_COL32(245, 245, 245, 240), angleLabel);
-                                }
-
                                 for (int axis = 0; axis < 3; ++axis)
                                 {
-                                    overlay->AddCircle(p, ringRadius[axis], IM_COL32(255, 255, 255, 55), 64, 1.0f * markerScale);
+                                    overlay->AddCircle(p, ringRadius[axis], rotateColor[axis], 64, 2.0f * markerScale);
                                 }
 
                                 if (!m_FallbackGizmoDragging)
@@ -3038,6 +3523,21 @@ namespace ds
                                 }
                             }
 
+                            if (m_TranslateModeActive && m_TranslateConstraintAxis >= 0 && m_TranslateConstraintAxis < 3)
+                            {
+                                const int axis = m_TranslateConstraintAxis;
+                                const glm::vec2 axisDir = glm::normalize(fallbackAxisScreenDir[axis]);
+                                const float farLen = std::max(rectMax.x - rectMin.x, rectMax.y - rectMin.y) * 1.35f;
+                                const glm::vec2 guideA = pivotScreen - axisDir * farLen;
+                                const glm::vec2 guideB = pivotScreen + axisDir * farLen;
+
+                                overlay->AddLine(
+                                    ImVec2(guideA.x, guideA.y),
+                                    ImVec2(guideB.x, guideB.y),
+                                    axisColor[axis],
+                                    1.8f * markerScale);
+                            }
+
                             if (hoveredFallbackAxis >= 0 || m_FallbackGizmoDragging)
                             {
                                 const int axisToHighlight = m_FallbackGizmoDragging ? m_FallbackGizmoAxis : hoveredFallbackAxis;
@@ -3050,9 +3550,17 @@ namespace ds
 
                             overlay->AddCircleFilled(p, centerRadius, IM_COL32(245, 245, 245, 235));
                             overlay->AddCircle(p, centerRadius + 2.5f * markerScale, IM_COL32(20, 20, 20, 230), 0, 1.6f * markerScale);
+                            overlay->PopClipRect();
                         }
 
-                        glm::mat4 gizmoTransform = glm::translate(glm::mat4(1.0f), pivot);
+                        glm::mat4 gizmoTransform(1.0f);
+                        if (m_GizmoModeIndex != 1)
+                        {
+                            gizmoTransform[0] = glm::vec4(transformAxes[0], 0.0f);
+                            gizmoTransform[1] = glm::vec4(transformAxes[1], 0.0f);
+                            gizmoTransform[2] = glm::vec4(transformAxes[2], 0.0f);
+                        }
+                        gizmoTransform[3] = glm::vec4(pivot, 1.0f);
                         glm::mat4 deltaTransform(1.0f);
 
                         // Use the current window draw list so ImGuizmo is rendered in the viewport context.
@@ -3088,7 +3596,7 @@ namespace ds
                             operation = ImGuizmo::SCALE;
                         }
 
-                        ImGuizmo::MODE mode = (m_GizmoModeIndex == 0) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+                        ImGuizmo::MODE mode = (m_GizmoModeIndex == 1) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
 
                         float snapValues[3] = {m_GizmoTranslateSnap, m_GizmoTranslateSnap, m_GizmoTranslateSnap};
                         if (operation == ImGuizmo::ROTATE)
@@ -3147,13 +3655,10 @@ namespace ds
                                 m_FallbackGizmoAxis = hoveredFallbackAxis;
                                 m_FallbackLastMousePos = glm::vec2(io.MousePos.x, io.MousePos.y);
                                 m_FallbackDragAxisScreenDir = fallbackAxisScreenDir[hoveredFallbackAxis];
-                                m_FallbackDragAxisWorldDir = (hoveredFallbackAxis == 0)   ? glm::vec3(1.0f, 0.0f, 0.0f)
-                                                             : (hoveredFallbackAxis == 1) ? glm::vec3(0.0f, 1.0f, 0.0f)
-                                                                                          : glm::vec3(0.0f, 0.0f, 1.0f);
+                                m_FallbackDragAxisWorldDir = transformAxes[hoveredFallbackAxis];
                                 m_FallbackDragPixelsPerWorld = std::max(1.0f, fallbackPixelsPerWorld[hoveredFallbackAxis]);
                                 m_FallbackDragAccumulated = 0.0f;
                                 m_FallbackDragApplied = 0.0f;
-                                m_FallbackRotateStartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
                                 m_FallbackRotateLastAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
                                 m_GizmoConsumedMouseThisFrame = true;
 
@@ -3178,23 +3683,19 @@ namespace ds
                                     const float currentAngle = std::atan2(mousePos.y - m_FallbackPivotScreen.y, mousePos.x - m_FallbackPivotScreen.x);
                                     float deltaAngle = NormalizeAngleRadians(currentAngle - m_FallbackRotateLastAngle);
                                     m_FallbackRotateLastAngle = currentAngle;
-                                    const float previousApplied = m_FallbackDragApplied;
-                                    m_FallbackDragAccumulated += deltaAngle;
-                                    m_FallbackDragApplied = m_FallbackDragAccumulated;
 
                                     if (m_GizmoSnapEnabled)
                                     {
                                         const float snapStep = glm::radians(std::max(0.1f, m_GizmoRotateSnapDeg));
+                                        m_FallbackDragAccumulated += deltaAngle;
                                         const float snappedTarget = std::round(m_FallbackDragAccumulated / snapStep) * snapStep;
-                                        deltaAngle = snappedTarget - previousApplied;
+                                        deltaAngle = snappedTarget - m_FallbackDragApplied;
                                         m_FallbackDragApplied = snappedTarget;
                                     }
 
                                     if (std::abs(deltaAngle) > 1e-6f)
                                     {
-                                        const glm::vec3 axisWorld = (m_FallbackGizmoAxis == 0)   ? glm::vec3(1.0f, 0.0f, 0.0f)
-                                                                    : (m_FallbackGizmoAxis == 1) ? glm::vec3(0.0f, 1.0f, 0.0f)
-                                                                                                 : glm::vec3(0.0f, 0.0f, 1.0f);
+                                        const glm::vec3 axisWorld = glm::normalize(m_FallbackDragAxisWorldDir);
                                         const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), deltaAngle, axisWorld);
                                         for (std::size_t atomIndex : m_SelectedAtomIndices)
                                         {
@@ -3242,15 +3743,12 @@ namespace ds
                                                     continue;
                                                 }
 
-                                                glm::vec3 relative = GetAtomCartesianPosition(atomIndex) - pivot;
-                                                if (m_FallbackGizmoAxis == 0)
-                                                    relative.x *= factor;
-                                                else if (m_FallbackGizmoAxis == 1)
-                                                    relative.y *= factor;
-                                                else
-                                                    relative.z *= factor;
-
-                                                SetAtomCartesianPosition(atomIndex, pivot + relative);
+                                                const glm::vec3 scaleAxis = glm::normalize(m_FallbackDragAxisWorldDir);
+                                                const glm::vec3 relative = GetAtomCartesianPosition(atomIndex) - pivot;
+                                                const float along = glm::dot(relative, scaleAxis);
+                                                const glm::vec3 perpendicular = relative - scaleAxis * along;
+                                                const glm::vec3 scaled = perpendicular + scaleAxis * (along * factor);
+                                                SetAtomCartesianPosition(atomIndex, pivot + scaled);
                                             }
 
                                             m_LastStructureOperationFailed = false;
@@ -3288,7 +3786,6 @@ namespace ds
                                 m_FallbackGizmoAxis = -1;
                                 m_FallbackDragAccumulated = 0.0f;
                                 m_FallbackDragApplied = 0.0f;
-                                m_FallbackRotateStartAngle = 0.0f;
                                 m_FallbackRotateLastAngle = 0.0f;
                                 AppendSelectionDebugLog("Fallback axis drag ended");
                             }
@@ -3325,7 +3822,6 @@ namespace ds
                     m_FallbackGizmoDragging = false;
                     m_FallbackGizmoOperation = -1;
                     m_FallbackGizmoAxis = -1;
-                    m_FallbackRotateStartAngle = 0.0f;
                 }
 
                 if ((m_GizmoEnabled && (ImGuizmo::IsOver() || ImGuizmo::IsUsing())) ||
@@ -3339,6 +3835,9 @@ namespace ds
                 {
                     ImViewGuizmo::BeginFrame();
                     ImViewGuizmo::GetStyle().scale = m_ViewGizmoScale;
+                    ImViewGuizmo::GetStyle().axisColors[0] = ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[0].r, m_AxisColors[0].g, m_AxisColors[0].b, 1.0f));
+                    ImViewGuizmo::GetStyle().axisColors[1] = ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[1].r, m_AxisColors[1].g, m_AxisColors[1].b, 1.0f));
+                    ImViewGuizmo::GetStyle().axisColors[2] = ImGui::ColorConvertFloat4ToU32(ImVec4(m_AxisColors[2].r, m_AxisColors[2].g, m_AxisColors[2].b, 1.0f));
 
                     glm::vec3 target = m_Camera->GetTarget();
                     const float yaw = m_Camera->GetYaw();
@@ -3691,268 +4190,375 @@ namespace ds
         }
 
         ImGui::Begin("Tools");
-        ImGui::SeparatorText("Structure I/O");
-        ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
-        ImGui::SameLine();
-        if (ImGui::Button("Browse##Import"))
-        {
-            std::string selectedPath;
-            if (OpenNativeFileDialog(selectedPath))
-            {
-                std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
-            }
-        }
-
-        if (ImGui::Button("Load POSCAR/CONTCAR"))
-        {
-            LoadStructureFromPath(std::string(m_ImportPathBuffer.data()));
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Load sample"))
-        {
-            const char *samplePath = "assets/samples/POSCAR";
-            std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
-            LoadStructureFromPath(samplePath);
-        }
-
-        ImGui::SeparatorText("Selection & Gizmo");
-        const char *interactionModeLabel = "Navigate";
-        if (m_InteractionMode == InteractionMode::Select)
-        {
-            interactionModeLabel = "Select";
-        }
-        else if (m_InteractionMode == InteractionMode::ViewSet)
-        {
-            interactionModeLabel = "ViewSet";
-        }
-        else if (m_InteractionMode == InteractionMode::Translate)
-        {
-            interactionModeLabel = "Translate";
-        }
-        else if (m_InteractionMode == InteractionMode::Rotate)
-        {
-            interactionModeLabel = "Rotate";
-        }
-        ImGui::Text("Mode: %s", interactionModeLabel);
-        ImGui::TextUnformatted("Tab: toggle mode (when viewport focused)");
-        if (m_InteractionMode == InteractionMode::ViewSet)
-        {
-            ImGui::TextUnformatted("ViewSet keys: T(top), B(bottom), L(left), R(right), P(front), K(back)");
-        }
-        if (m_TranslateModeActive)
-        {
-            ImGui::TextUnformatted("Translate: mouse move | X/Y/Z axis | Shift+X/Y/Z plane lock | Ctrl snap");
-            ImGui::TextUnformatted("Confirm: LMB/Enter/G | Cancel: RMB/Esc");
-        }
-        if (m_RotateModeActive)
-        {
-            ImGui::TextUnformatted("Rotate: around 3D cursor | mouse move | X/Y/Z axis | Ctrl snap");
-            ImGui::TextUnformatted("Confirm: Enter | Cancel: RMB/Esc");
-        }
-
-        if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.77f, 0.36f, 1.0f));
-            ImGui::TextUnformatted("Select mode requires loaded structure.");
-            ImGui::PopStyleColor();
-        }
-
-        if (ImGui::Button("Toggle mode (Tab)"))
-        {
-            ToggleInteractionMode();
-        }
-
-        if (ImGui::Checkbox("Selection debug log to file", &m_SelectionDebugToFile))
-        {
-            settingsChanged = true;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Clear selection log file"))
-        {
-            std::filesystem::create_directories("logs");
-            std::ofstream clearOut("logs/selection_debug.log", std::ios::trunc);
-            if (clearOut.is_open())
-            {
-                clearOut << "";
-            }
-            AppendSelectionDebugLog("Selection debug log file cleared");
-        }
-        ImGui::TextUnformatted("Log path: logs/selection_debug.log");
-
-        ImGui::Separator();
-        ImGui::Text("Selection: %zu atoms", m_SelectedAtomIndices.size());
-        ImGui::TextUnformatted("LMB: select | Ctrl+LMB: add/remove | B+LMB drag: box select");
-        ImGui::TextUnformatted("RMB on viewport: selection context menu");
-        ImGui::TextUnformatted("R: rotate around 3D cursor (when ViewSet is off)");
-        if (ImGui::Button("Clear selection"))
-        {
-            m_SelectedAtomIndices.clear();
-        }
-
-        const char *gizmoOperations[] = {"Translate", "Rotate", "Scale"};
-        const char *gizmoModes[] = {"Local", "World"};
-        if (ImGui::Checkbox("Enable gizmo", &m_GizmoEnabled))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::Checkbox("Enable view gizmo overlay", &m_ViewGuizmoEnabled))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::SliderFloat("Transform gizmo size", &m_TransformGizmoSize, 0.05f, 0.35f, "%.2f"))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::SliderFloat("View gizmo scale", &m_ViewGizmoScale, 0.35f, 2.20f, "%.2f"))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::SliderFloat("Fallback marker scale", &m_FallbackGizmoVisualScale, 0.5f, 6.0f, "%.2f"))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::SliderFloat("View gizmo offset right", &m_ViewGizmoOffsetRight, 0.0f, 220.0f, "%.0f"))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::SliderFloat("View gizmo offset top", &m_ViewGizmoOffsetTop, 0.0f, 220.0f, "%.0f"))
-        {
-            settingsChanged = true;
-        }
-        ImGui::Combo("Gizmo operation", &m_GizmoOperationIndex, gizmoOperations, IM_ARRAYSIZE(gizmoOperations));
-        ImGui::Combo("Gizmo mode", &m_GizmoModeIndex, gizmoModes, IM_ARRAYSIZE(gizmoModes));
-        if (ImGui::Checkbox("Gizmo snap", &m_GizmoSnapEnabled))
-        {
-            settingsChanged = true;
-        }
-        if (m_GizmoOperationIndex == 0)
-        {
-            ImGui::SliderFloat("Translate snap", &m_GizmoTranslateSnap, 0.01f, 2.0f, "%.2f");
-        }
-        else if (m_GizmoOperationIndex == 1)
-        {
-            ImGui::SliderFloat("Rotate snap (deg)", &m_GizmoRotateSnapDeg, 1.0f, 90.0f, "%.1f");
-        }
-        else
-        {
-            ImGui::SliderFloat("Scale snap", &m_GizmoScaleSnap, 0.01f, 1.0f, "%.2f");
-        }
 
         const char *coordinateModes[] = {"Direct", "Cartesian"};
+        const char *gizmoOperations[] = {"Translate", "Rotate", "Scale"};
+        const char *gizmoModes[] = {"Local (selection)", "World", "Relative (surrounding)"};
 
-        ImGui::SeparatorText("Add Atom");
-        ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
-        ImGui::SameLine();
-        if (ImGui::Button("Periodic table"))
+        if (ImGui::CollapsingHeader("Actions", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            m_PeriodicTableOpen = true;
-        }
-        ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
-        ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-
-        if (ImGui::Button("Use camera target") && m_Camera)
-        {
-            m_AddAtomPosition = m_Camera->GetTarget();
-            m_AddAtomCoordinateModeIndex = 1;
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Use 3D cursor"))
-        {
-            m_AddAtomPosition = m_CursorPosition;
-            m_AddAtomCoordinateModeIndex = 1;
-        }
-
-        ImGui::SameLine();
-        const bool canAddAtom = m_HasStructureLoaded;
-        if (!canAddAtom)
-        {
-            ImGui::BeginDisabled();
-        }
-        if (ImGui::Button("Add atom"))
-        {
-            const CoordinateMode inputMode = (m_AddAtomCoordinateModeIndex == 0)
-                                                 ? CoordinateMode::Direct
-                                                 : CoordinateMode::Cartesian;
-            AddAtomToStructure(std::string(m_AddAtomElementBuffer.data()), m_AddAtomPosition, inputMode);
-        }
-        if (!canAddAtom)
-        {
-            ImGui::EndDisabled();
-        }
-
-        ImGui::SeparatorText("3D Cursor");
-        if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::DragFloat3("Cursor position", &m_CursorPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f"))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::ColorEdit3("Cursor color", &m_CursorColor.x))
-        {
-            settingsChanged = true;
-        }
-        if (ImGui::Button("Cursor <- camera target") && m_Camera)
-        {
-            m_CursorPosition = m_Camera->GetTarget();
-            settingsChanged = true;
-        }
-
-        ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
-        ImGui::SameLine();
-        if (ImGui::Button("Browse##Export"))
-        {
-            std::string selectedPath;
-            if (SaveNativeFileDialog(selectedPath))
+            ImGui::SeparatorText("Structure I/O");
+            ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
+            ImGui::SameLine();
+            if (ImGui::Button("Browse##Import"))
             {
-                std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+                std::string selectedPath;
+                if (OpenNativeFileDialog(selectedPath))
+                {
+                    std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
+                }
+            }
+
+            if (ImGui::Button("Load POSCAR/CONTCAR"))
+            {
+                LoadStructureFromPath(std::string(m_ImportPathBuffer.data()));
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Load sample"))
+            {
+                const char *samplePath = "assets/samples/POSCAR";
+                std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
+                LoadStructureFromPath(samplePath);
+            }
+
+            ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
+            ImGui::SameLine();
+            if (ImGui::Button("Browse##Export"))
+            {
+                std::string selectedPath;
+                if (SaveNativeFileDialog(selectedPath))
+                {
+                    std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+                }
+            }
+
+            ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+            ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
+
+            if (ImGui::Button("Export POSCAR/CONTCAR"))
+            {
+                const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                      ? CoordinateMode::Direct
+                                                      : CoordinateMode::Cartesian;
+                ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Restore original state"))
+            {
+                if (m_OriginalStructure.has_value())
+                {
+                    m_WorkingStructure = *m_OriginalStructure;
+                    m_HasStructureLoaded = true;
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Original file state restored.";
+                    LogInfo(m_LastStructureMessage);
+                }
+                else
+                {
+                    m_LastStructureOperationFailed = true;
+                    m_LastStructureMessage = "Restore failed: no original structure captured yet.";
+                    LogWarn(m_LastStructureMessage);
+                }
+            }
+
+            ImGui::SeparatorText("Selection & Transform");
+            const char *interactionModeLabel = "Navigate";
+            if (m_InteractionMode == InteractionMode::Select)
+                interactionModeLabel = "Select";
+            else if (m_InteractionMode == InteractionMode::ViewSet)
+                interactionModeLabel = "ViewSet";
+            else if (m_InteractionMode == InteractionMode::Translate)
+                interactionModeLabel = "Translate";
+            else if (m_InteractionMode == InteractionMode::Rotate)
+                interactionModeLabel = "Rotate";
+
+            ImGui::Text("Mode: %s", interactionModeLabel);
+            ImGui::Text("Selection: %zu atoms", m_SelectedAtomIndices.size());
+            if (ImGui::Button("Toggle mode (Tab)"))
+            {
+                ToggleInteractionMode();
+            }
+            ImGui::SameLine();
+            DrawInlineHelpMarker("Selection: LMB select, Ctrl+LMB add/remove, B then drag for box select.\nViewSet: T/B/L/R/P/K to snap camera.");
+
+            if (ImGui::Button("Clear selection"))
+            {
+                m_SelectedAtomIndices.clear();
+            }
+            ImGui::SameLine();
+            DrawInlineHelpMarker("Transform shortcuts in viewport: G translate, R rotate, S scale.\nIn ViewSet, R works as Right View.");
+
+            ImGui::SeparatorText("Add Atom");
+            ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
+            ImGui::SameLine();
+            if (ImGui::Button("Periodic table"))
+            {
+                m_PeriodicTableOpen = true;
+            }
+            ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
+            ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+
+            if (ImGui::Button("Use camera target") && m_Camera)
+            {
+                m_AddAtomPosition = m_Camera->GetTarget();
+                m_AddAtomCoordinateModeIndex = 1;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Use 3D cursor"))
+            {
+                m_AddAtomPosition = m_CursorPosition;
+                m_AddAtomCoordinateModeIndex = 1;
+            }
+            ImGui::SameLine();
+            const bool canAddAtom = m_HasStructureLoaded;
+            if (!canAddAtom)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Add atom"))
+            {
+                const CoordinateMode inputMode = (m_AddAtomCoordinateModeIndex == 0)
+                                                     ? CoordinateMode::Direct
+                                                     : CoordinateMode::Cartesian;
+                AddAtomToStructure(std::string(m_AddAtomElementBuffer.data()), m_AddAtomPosition, inputMode);
+            }
+            if (!canAddAtom)
+            {
+                ImGui::EndDisabled();
             }
         }
 
-        ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-        ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
-
-        if (ImGui::Button("Export POSCAR/CONTCAR"))
+        if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
-                                                  ? CoordinateMode::Direct
-                                                  : CoordinateMode::Cartesian;
-            ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Restore original state"))
-        {
-            if (m_OriginalStructure.has_value())
+            ImGui::SeparatorText("Gizmo");
+            if (ImGui::Checkbox("Enable gizmo", &m_GizmoEnabled))
             {
-                m_WorkingStructure = *m_OriginalStructure;
-                m_HasStructureLoaded = true;
-                m_LastStructureOperationFailed = false;
-                m_LastStructureMessage = "Original file state restored.";
-                LogInfo(m_LastStructureMessage);
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Enable view gizmo overlay", &m_ViewGuizmoEnabled))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("Transform gizmo size", &m_TransformGizmoSize, 0.05f, 0.35f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("View gizmo scale", &m_ViewGizmoScale, 0.35f, 2.20f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("Fallback marker scale", &m_FallbackGizmoVisualScale, 0.5f, 6.0f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("View gizmo offset right", &m_ViewGizmoOffsetRight, 0.0f, 220.0f, "%.0f"))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("View gizmo offset top", &m_ViewGizmoOffsetTop, 0.0f, 220.0f, "%.0f"))
+            {
+                settingsChanged = true;
+            }
+            ImGui::Combo("Gizmo operation", &m_GizmoOperationIndex, gizmoOperations, IM_ARRAYSIZE(gizmoOperations));
+            ImGui::Combo("Gizmo mode", &m_GizmoModeIndex, gizmoModes, IM_ARRAYSIZE(gizmoModes));
+            if (ImGui::Checkbox("Show global XYZ overlay", &m_ShowGlobalAxesOverlay))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::Checkbox("Use temporary local axes", &m_UseTemporaryLocalAxes))
+            {
+                settingsChanged = true;
+            }
+
+            if (m_UseTemporaryLocalAxes)
+            {
+                ImGui::TextUnformatted("Temporary frame: X = A -> B, C defines frame plane.");
+                ImGui::Text("A=%d  B=%d  C=%d", m_TemporaryAxisAtomA, m_TemporaryAxisAtomB, m_TemporaryAxisAtomC);
+
+                const bool hasAtLeastTwoSelected = m_SelectedAtomIndices.size() >= 2;
+                const bool hasAtLeastThreeSelected = m_SelectedAtomIndices.size() >= 3;
+
+                if (!hasAtLeastTwoSelected)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Set A/B from first->last selected") && hasAtLeastTwoSelected)
+                {
+                    m_TemporaryAxisAtomA = static_cast<int>(m_SelectedAtomIndices.front());
+                    m_TemporaryAxisAtomB = static_cast<int>(m_SelectedAtomIndices.back());
+                    if (m_TemporaryAxisAtomA == m_TemporaryAxisAtomB && m_SelectedAtomIndices.size() > 1)
+                    {
+                        m_TemporaryAxisAtomB = static_cast<int>(m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2]);
+                    }
+                    settingsChanged = true;
+                }
+                if (!hasAtLeastTwoSelected)
+                {
+                    ImGui::EndDisabled();
+                }
+
+                if (!hasAtLeastThreeSelected)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Set A/B/C from last 3 selected") && hasAtLeastThreeSelected)
+                {
+                    const std::size_t n = m_SelectedAtomIndices.size();
+                    m_TemporaryAxisAtomA = static_cast<int>(m_SelectedAtomIndices[n - 3]);
+                    m_TemporaryAxisAtomB = static_cast<int>(m_SelectedAtomIndices[n - 2]);
+                    m_TemporaryAxisAtomC = static_cast<int>(m_SelectedAtomIndices[n - 1]);
+                    settingsChanged = true;
+                }
+                if (!hasAtLeastThreeSelected)
+                {
+                    ImGui::EndDisabled();
+                }
+
+                if (ImGui::Button("Clear temporary frame"))
+                {
+                    m_TemporaryAxisAtomA = -1;
+                    m_TemporaryAxisAtomB = -1;
+                    m_TemporaryAxisAtomC = -1;
+                    settingsChanged = true;
+                }
+            }
+
+            if (ImGui::ColorEdit3("Axis X color", &m_AxisColors[0].x))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Axis Y color", &m_AxisColors[1].x))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Axis Z color", &m_AxisColors[2].x))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::Checkbox("Gizmo snap", &m_GizmoSnapEnabled))
+            {
+                settingsChanged = true;
+            }
+            if (m_GizmoOperationIndex == 0)
+            {
+                ImGui::SliderFloat("Translate snap", &m_GizmoTranslateSnap, 0.01f, 2.0f, "%.2f");
+            }
+            else if (m_GizmoOperationIndex == 1)
+            {
+                ImGui::SliderFloat("Rotate snap (deg)", &m_GizmoRotateSnapDeg, 1.0f, 90.0f, "%.1f");
             }
             else
             {
-                m_LastStructureOperationFailed = true;
-                m_LastStructureMessage = "Restore failed: no original structure captured yet.";
-                LogWarn(m_LastStructureMessage);
+                ImGui::SliderFloat("Scale snap", &m_GizmoScaleSnap, 0.01f, 1.0f, "%.2f");
             }
+
+            ImGui::SeparatorText("3D Cursor & Diagnostics");
+            if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::DragFloat3("Cursor position", &m_CursorPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f"))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Cursor color", &m_CursorColor.x))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Button("Cursor <- camera target") && m_Camera)
+            {
+                m_CursorPosition = m_Camera->GetTarget();
+                settingsChanged = true;
+            }
+
+            if (ImGui::Checkbox("Selection debug log to file", &m_SelectionDebugToFile))
+            {
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            DrawInlineHelpMarker("Detailed selection and gizmo debug logs are saved to logs/selection_debug.log.");
+            ImGui::SameLine();
+            if (ImGui::Button("Clear selection log file"))
+            {
+                std::filesystem::create_directories("logs");
+                std::ofstream clearOut("logs/selection_debug.log", std::ios::trunc);
+                if (clearOut.is_open())
+                {
+                    clearOut << "";
+                }
+                AppendSelectionDebugLog("Selection debug log file cleared");
+            }
+
+            ImGui::SeparatorText("Appearance & Camera");
+            int currentTheme = static_cast<int>(m_CurrentTheme);
+            const char *items[] = {
+                "Dark",
+                "Light",
+                "Classic",
+                "PhotoshopStyle",
+                "WarmSlate"};
+
+            if (ImGui::Combo("Style preset", &currentTheme, items, IM_ARRAYSIZE(items)))
+            {
+                m_CurrentTheme = static_cast<ThemePreset>(currentTheme);
+                ApplyTheme(m_CurrentTheme);
+                settingsChanged = true;
+            }
+
+            float uiScale = m_FontScale;
+            if (ImGui::SliderFloat("Font size scale", &uiScale, 0.7f, 2.0f, "%.2f"))
+            {
+                ApplyFontScale(uiScale);
+                settingsChanged = true;
+            }
+
+            ImGui::TextUnformatted("Camera sensitivity");
+            float orbitSensitivity = m_CameraOrbitSensitivity;
+            if (ImGui::SliderFloat("Orbit sensitivity", &orbitSensitivity, 0.05f, 4.0f, "%.2fx"))
+            {
+                m_CameraOrbitSensitivity = orbitSensitivity;
+                ApplyCameraSensitivity();
+                settingsChanged = true;
+            }
+
+            float panSensitivity = m_CameraPanSensitivity;
+            if (ImGui::SliderFloat("Pan sensitivity", &panSensitivity, 0.05f, 4.0f, "%.2fx"))
+            {
+                m_CameraPanSensitivity = panSensitivity;
+                ApplyCameraSensitivity();
+                settingsChanged = true;
+            }
+
+            float zoomSensitivity = m_CameraZoomSensitivity;
+            if (ImGui::SliderFloat("Zoom sensitivity", &zoomSensitivity, 0.05f, 4.0f, "%.2fx"))
+            {
+                m_CameraZoomSensitivity = zoomSensitivity;
+                ApplyCameraSensitivity();
+                settingsChanged = true;
+            }
+
+            if (ImGui::Button("Save UI settings"))
+            {
+                SaveSettings();
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted("(auto-save on change enabled)");
         }
 
         if (m_HasStructureLoaded)
         {
             const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
+            ImGui::Separator();
             ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
                         m_WorkingStructure.GetAtomCount(),
                         m_WorkingStructure.species.size(),
@@ -3961,6 +4567,7 @@ namespace ds
         }
         else
         {
+            ImGui::Separator();
             ImGui::TextUnformatted("Loaded: none");
         }
 
@@ -3973,66 +4580,6 @@ namespace ds
             ImGui::TextWrapped("%s", m_LastStructureMessage.c_str());
             ImGui::PopStyleColor();
         }
-
-        ImGui::SeparatorText("Appearance & Camera");
-        ImGui::TextUnformatted("Theme-Style & color customization");
-
-        int currentTheme = static_cast<int>(m_CurrentTheme);
-        const char *items[] = {
-            "Dark",
-            "Light",
-            "Classic",
-            "PhotoshopStyle",
-            "WarmSlate"};
-
-        if (ImGui::Combo("Style preset", &currentTheme, items, IM_ARRAYSIZE(items)))
-        {
-            m_CurrentTheme = static_cast<ThemePreset>(currentTheme);
-            ApplyTheme(m_CurrentTheme);
-            settingsChanged = true;
-        }
-
-        float uiScale = m_FontScale;
-        if (ImGui::SliderFloat("Font size scale", &uiScale, 0.7f, 2.0f, "%.2f"))
-        {
-            ApplyFontScale(uiScale);
-            settingsChanged = true;
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Camera sensitivity");
-
-        float orbitSensitivity = m_CameraOrbitSensitivity;
-        if (ImGui::SliderFloat("Orbit sensitivity", &orbitSensitivity, 0.05f, 4.0f, "%.2fx"))
-        {
-            m_CameraOrbitSensitivity = orbitSensitivity;
-            ApplyCameraSensitivity();
-            settingsChanged = true;
-        }
-
-        float panSensitivity = m_CameraPanSensitivity;
-        if (ImGui::SliderFloat("Pan sensitivity", &panSensitivity, 0.05f, 4.0f, "%.2fx"))
-        {
-            m_CameraPanSensitivity = panSensitivity;
-            ApplyCameraSensitivity();
-            settingsChanged = true;
-        }
-
-        float zoomSensitivity = m_CameraZoomSensitivity;
-        if (ImGui::SliderFloat("Zoom sensitivity", &zoomSensitivity, 0.05f, 4.0f, "%.2fx"))
-        {
-            m_CameraZoomSensitivity = zoomSensitivity;
-            ApplyCameraSensitivity();
-            settingsChanged = true;
-        }
-
-        if (ImGui::Button("Save UI settings"))
-        {
-            SaveSettings();
-        }
-
-        ImGui::SameLine();
-        ImGui::TextUnformatted("(auto-save on change enabled)");
 
         std::size_t errorCount = Logger::Get().GetErrorCount();
         ImGui::Separator();

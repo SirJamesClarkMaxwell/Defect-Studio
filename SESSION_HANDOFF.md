@@ -2,43 +2,57 @@
 
 ## Current state
 - Branch: task/05-editor-selection-gizmo
-- Last completed task branch: task/04-vasp-io-structure
-- Latest T04 commit: 0e98222 (POSCAR I/O, native dialogs, structure preview)
-- T05 branch created from T04 head and ready for next implementation step.
+- Latest checkpoint commit for broad T05 work: 35a2397 (`T05: stabilize gizmo workflows and add rotate cursor UX`)
+- Current working tree: modified files pending commit:
+  - SESSION_HANDOFF.md
+  - TODO.md
+  - src/Layers/EditorLayer.h
+  - src/Layers/EditorLayer.cpp
 
-## Working tree
-- Clean on branch task/05-editor-selection-gizmo at branch creation.
+## What was changed in this session
+- Global axis rendering behavior in viewport adjusted and constrained to viewport drawing context.
+- Keyboard conflict fixed: in ViewSet mode key `R` no longer forces rotate transform mode; it remains Right View key.
+- Global XYZ overlay rendering made more robust so axes do not disappear as easily with camera angle changes.
+- Tools panel reorganized for usability:
+  - collapsible `Actions`
+  - collapsible `Settings`
+  - split between operational actions and persistent configuration
+- Added inline UI help markers `(?)` with tooltips for key interactions and options.
+- Added temporary local-axis (pivot) workflow state and UI wiring in Tools settings.
+- Added transform-axis resolver for local/world/relative orientation paths.
+- Added modal translate visual guide line for `Select -> G -> X/Y/Z` (active axis line is now drawn in viewport).
+- User confirmed latest fix: local/constrained axis visual behavior for `Select -> G -> X` now works in runtime.
+- Grid plane persistence normalized to `z=0` when loading/saving settings.
+- TODO.md updated to reflect unresolved T05 scope and new requested items.
 
-## What is implemented up to T04
-- OpenGL backend abstraction with viewport rendering
-- Orbit camera controls and sensitivity tuning UI
-- POSCAR/CONTCAR parsing (VASP5/6 symbols line, Direct/Cartesian, Selective Dynamics)
-- POSCAR/CONTCAR export with precision and coordinate mode selection
-- Native Windows file dialogs wired in File menu and Tools panel
-- Original-state restore after import
-- Structure preview rendering in viewport (instanced placeholder atom geometry)
-- Added samples:
-  - assets/samples/POSCAR_Si2.vasp
-  - assets/samples/POSCAR (larger diamond-like test)
+## User-reported gaps to continue in next chat
+1. Tune local pivot authoring workflow for intended defect-editing usage (A/B/C selection ergonomics).
+2. Circle Menu feature requested and tracked.
+3. Final visual polish pass for global axis readability/consistency.
+
+## TODO status snapshot (relevant)
+- T05 currently includes these open items:
+  - Fix Blender-like global axis overlay readability/consistency.
+  - Implement atom-defined pivot workflow.
+  - Add Circle Menu for fast mode/action switching.
 
 ## Build status
 - scripts/Verify-Build.bat passes Debug and Release
-- Last verification after T04 completion: passed with 0 warnings and 0 errors
+- Latest verification in this session: passed (Debug + Release, 0 warnings, 0 errors)
 
-## Next suggested action
-1. Implement true sphere-like atom visuals (replace cube placeholder geometry)
-2. Start selection workflow for T05:
-   - click select + multi-select
-   - box select (B)
-   - context menu actions scaffolding
-3. Keep build green with scripts/Verify-Build.bat after each milestone chunk
+## Recommended next action order
+1. Implement/finish pivot authoring workflow from atom selection.
+2. Tune global-axis behavior visually with runtime checks and screenshots.
+3. Implement Circle Menu and wire it to interaction modes.
+4. Continue with focused commits for remaining T05 increments.
 
 ## Ready-to-paste starter prompt for next chat
-I am continuing work in this repository from SESSION_HANDOFF.md.
+I am continuing from SESSION_HANDOFF.md on branch task/05-editor-selection-gizmo.
 Please:
 1) read TODO.md and SESSION_HANDOFF.md,
-2) confirm current branch and git status,
-3) continue on task/05-editor-selection-gizmo,
-4) replace cube placeholder atoms with sphere-like rendering,
-5) implement initial click and box selection scaffolding,
-6) run scripts/Verify-Build.bat and report results.
+2) show git status and confirm current branch,
+3) run scripts/Verify-Build.bat,
+4) implement/finalize atom-defined pivot workflow,
+5) refine global axis behavior to match Blender usability expectations,
+6) implement Circle Menu for fast mode/action switching,
+7) summarize changes and remaining TODOs.
