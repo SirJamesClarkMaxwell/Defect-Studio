@@ -167,6 +167,63 @@ namespace ds
             return out.str();
         }
 
+        bool DrawColoredVec3Control(const char *label, glm::vec3 &value, float speed, float minValue, float maxValue, const char *format)
+        {
+            bool changed = false;
+
+            ImGui::PushID(label);
+            ImGui::Columns(2, nullptr, false);
+            ImGui::SetColumnWidth(0, 110.0f);
+            ImGui::TextUnformatted(label);
+            ImGui::NextColumn();
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{0.0f, 0.0f});
+
+            const float lineHeight = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 2.0f;
+            const ImVec2 buttonSize = {lineHeight + 2.0f, lineHeight};
+            const float itemWidth = std::max(10.0f, (ImGui::GetContentRegionAvail().x - buttonSize.x * 3.0f - 8.0f) / 3.0f);
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.23f, 0.20f, 1.0f));
+            if (ImGui::Button("X", buttonSize))
+            {
+                value.x = 0.0f;
+                changed = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(itemWidth);
+            changed |= ImGui::DragFloat("##X", &value.x, speed, minValue, maxValue, format);
+            ImGui::SameLine();
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.29f, 1.0f));
+            if (ImGui::Button("Y", buttonSize))
+            {
+                value.y = 0.0f;
+                changed = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(itemWidth);
+            changed |= ImGui::DragFloat("##Y", &value.y, speed, minValue, maxValue, format);
+            ImGui::SameLine();
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.40f, 0.75f, 1.0f));
+            if (ImGui::Button("Z", buttonSize))
+            {
+                value.z = 0.0f;
+                changed = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(itemWidth);
+            changed |= ImGui::DragFloat("##Z", &value.z, speed, minValue, maxValue, format);
+
+            ImGui::PopStyleVar();
+            ImGui::Columns(1);
+            ImGui::PopID();
+
+            return changed;
+        }
+
         float AtomicMassByElementSymbol(const std::string &symbol)
         {
             static const std::unordered_map<std::string, float> kAtomicMasses = {
@@ -2534,6 +2591,36 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_light_color_r")
+            {
+                try
+                {
+                    m_SceneSettings.lightColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_color_g")
+            {
+                try
+                {
+                    m_SceneSettings.lightColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_color_b")
+            {
+                try
+                {
+                    m_SceneSettings.lightColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "viewport_atom_scale")
             {
                 try
@@ -2583,6 +2670,16 @@ namespace ds
                 try
                 {
                     m_SceneSettings.atomBrightness = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_atom_glow")
+            {
+                try
+                {
+                    m_SceneSettings.atomGlowStrength = std::stof(value);
                 }
                 catch (...)
                 {
@@ -2963,6 +3060,10 @@ namespace ds
             m_TransformEmptyVisualScale = 0.06f;
         if (m_TransformEmptyVisualScale > 0.55f)
             m_TransformEmptyVisualScale = 0.55f;
+        if (m_SceneSettings.atomGlowStrength < 0.0f)
+            m_SceneSettings.atomGlowStrength = 0.0f;
+        if (m_SceneSettings.atomGlowStrength > 0.60f)
+            m_SceneSettings.atomGlowStrength = 0.60f;
         if (m_GizmoModeIndex < 0)
             m_GizmoModeIndex = 0;
         if (m_GizmoModeIndex > 2)
@@ -3029,12 +3130,16 @@ namespace ds
         out << "viewport_light_dir_z=" << m_SceneSettings.lightDirection.z << '\n';
         out << "viewport_light_ambient=" << m_SceneSettings.ambientStrength << '\n';
         out << "viewport_light_diffuse=" << m_SceneSettings.diffuseStrength << '\n';
+        out << "viewport_light_color_r=" << m_SceneSettings.lightColor.r << '\n';
+        out << "viewport_light_color_g=" << m_SceneSettings.lightColor.g << '\n';
+        out << "viewport_light_color_b=" << m_SceneSettings.lightColor.b << '\n';
         out << "viewport_atom_scale=" << m_SceneSettings.atomScale << '\n';
         out << "viewport_atom_override=" << (m_SceneSettings.overrideAtomColor ? "1" : "0") << '\n';
         out << "viewport_atom_override_r=" << m_SceneSettings.atomOverrideColor.r << '\n';
         out << "viewport_atom_override_g=" << m_SceneSettings.atomOverrideColor.g << '\n';
         out << "viewport_atom_override_b=" << m_SceneSettings.atomOverrideColor.b << '\n';
         out << "viewport_atom_brightness=" << m_SceneSettings.atomBrightness << '\n';
+        out << "viewport_atom_glow=" << m_SceneSettings.atomGlowStrength << '\n';
         out << "selection_color_r=" << m_SelectionColor.r << '\n';
         out << "selection_color_g=" << m_SelectionColor.g << '\n';
         out << "selection_color_b=" << m_SelectionColor.b << '\n';
@@ -5236,6 +5341,23 @@ namespace ds
                     }
                 }
 
+                {
+                    ImDrawList *overlayDraw = ImGui::GetWindowDrawList();
+                    const ImVec2 sunCenter(rectMin.x + 34.0f, rectMin.y + 34.0f);
+                    const ImU32 sunColor = ImGui::ColorConvertFloat4ToU32(
+                        ImVec4(m_SceneSettings.lightColor.r, m_SceneSettings.lightColor.g, m_SceneSettings.lightColor.b, 0.95f));
+                    overlayDraw->AddCircleFilled(sunCenter, 7.0f, sunColor, 20);
+                    overlayDraw->AddCircle(sunCenter, 9.0f, IM_COL32(255, 255, 255, 220), 20, 1.2f);
+                    for (int ray = 0; ray < 8; ++ray)
+                    {
+                        const float angle = glm::two_pi<float>() * static_cast<float>(ray) / 8.0f;
+                        const ImVec2 rayA(sunCenter.x + std::cos(angle) * 11.0f, sunCenter.y + std::sin(angle) * 11.0f);
+                        const ImVec2 rayB(sunCenter.x + std::cos(angle) * 16.0f, sunCenter.y + std::sin(angle) * 16.0f);
+                        overlayDraw->AddLine(rayA, rayB, sunColor, 1.6f);
+                    }
+                    overlayDraw->AddText(ImVec2(rectMin.x + 48.0f, rectMin.y + 24.0f), IM_COL32(235, 240, 248, 230), "Light");
+                }
+
                 if (ImGui::BeginPopupContextItem("ViewportSelectionContext", ImGuiPopupFlags_MouseButtonRight))
                 {
                     const bool hasLoadedAtoms = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
@@ -5336,6 +5458,13 @@ namespace ds
                                 AppendSelectionDebugLog("Context menu: Cursor -> Last Selected");
                                 settingsChanged = true;
                             }
+                        }
+
+                        if (ImGui::MenuItem("Origin", nullptr, false, true))
+                        {
+                            m_CursorPosition = glm::vec3(0.0f);
+                            AppendSelectionDebugLog("Context menu: Cursor -> Origin");
+                            settingsChanged = true;
                         }
 
                         if (ImGui::MenuItem("Active Empty", nullptr, false, HasActiveTransformEmpty()))
@@ -5477,17 +5606,25 @@ namespace ds
 
                     if (ImGui::BeginMenu("Selection Utilities"))
                     {
-                        if (ImGui::MenuItem("Selection center -> 3D cursor", nullptr, false, !m_SelectedAtomIndices.empty()))
+                        const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+                        if (ImGui::MenuItem("Selection center -> 3D cursor", nullptr, false, !m_SelectedAtomIndices.empty() || hasSelectedEmpty))
                         {
-                            const glm::vec3 selectionCenter = ComputeSelectionCenter();
-                            const glm::vec3 delta = m_CursorPosition - selectionCenter;
-                            for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                            if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
                             {
-                                if (atomIndex >= m_WorkingStructure.atoms.size())
+                                m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
+                            }
+                            else
+                            {
+                                const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                                const glm::vec3 delta = m_CursorPosition - selectionCenter;
+                                for (const std::size_t atomIndex : m_SelectedAtomIndices)
                                 {
-                                    continue;
+                                    if (atomIndex >= m_WorkingStructure.atoms.size())
+                                    {
+                                        continue;
+                                    }
+                                    SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
                                 }
-                                SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
                             }
                             settingsChanged = true;
                             AppendSelectionDebugLog("Context menu: Selection center -> 3D cursor");
@@ -5497,6 +5634,29 @@ namespace ds
                         {
                             SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                             AppendSelectionDebugLog("Context menu: Select active group");
+                        }
+
+                        if (ImGui::MenuItem("Move selection center -> Origin", nullptr, false, !m_SelectedAtomIndices.empty() || hasSelectedEmpty))
+                        {
+                            if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                            {
+                                m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = glm::vec3(0.0f);
+                            }
+                            else
+                            {
+                                const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                                const glm::vec3 delta = glm::vec3(0.0f) - selectionCenter;
+                                for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                                {
+                                    if (atomIndex >= m_WorkingStructure.atoms.size())
+                                    {
+                                        continue;
+                                    }
+                                    SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                                }
+                            }
+                            settingsChanged = true;
+                            AppendSelectionDebugLog("Context menu: Selection center -> Origin");
                         }
 
                         ImGui::EndMenu();
@@ -5512,7 +5672,7 @@ namespace ds
                     {
                         m_AddAtomPosition = m_CursorPosition;
                         m_AddAtomCoordinateModeIndex = 1;
-                        ImGui::OpenPopup("AddAtomSettingsPopup");
+                        m_ShowAddAtomDialog = true;
                     }
 
                     if (ImGui::MenuItem("Empty at 3D cursor", "Shift+A"))
@@ -5644,6 +5804,7 @@ namespace ds
         if (m_ViewportSettingsOpen)
         {
             ImGui::Begin("Viewport Settings", &m_ViewportSettingsOpen);
+            ImGui::PushItemWidth(210.0f);
 
             if (ImGui::ColorEdit3("Background", &m_SceneSettings.clearColor.x))
             {
@@ -5698,6 +5859,11 @@ namespace ds
                 settingsChanged = true;
             }
 
+            if (ImGui::ColorEdit3("Light color", &m_SceneSettings.lightColor.x))
+            {
+                settingsChanged = true;
+            }
+
             ImGui::Separator();
             ImGui::TextUnformatted("Projection");
 
@@ -5743,6 +5909,11 @@ namespace ds
             }
 
             if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, 0.3f, 2.2f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, 0.0f, 0.60f, "%.2f"))
             {
                 settingsChanged = true;
             }
@@ -5833,6 +6004,8 @@ namespace ds
                 ApplyCameraSensitivity();
                 settingsChanged = true;
             }
+
+            ImGui::PopItemWidth();
 
             ImGui::End();
         }
@@ -5941,28 +6114,99 @@ namespace ds
             ImGui::SameLine();
             DrawInlineHelpMarker("Transform shortcuts in viewport: G translate, R rotate, S scale.\nIn ViewSet, R works as Right View.");
 
-            const bool canMoveSelectionToCursor = !m_SelectedAtomIndices.empty();
+            const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+            const bool canMoveSelectionToCursor = !m_SelectedAtomIndices.empty() || hasSelectedEmpty;
             if (!canMoveSelectionToCursor)
             {
                 ImGui::BeginDisabled();
             }
             if (ImGui::Button("Move selection center to 3D cursor") && canMoveSelectionToCursor)
             {
-                const glm::vec3 selectionCenter = ComputeSelectionCenter();
-                const glm::vec3 delta = m_CursorPosition - selectionCenter;
-                for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
                 {
-                    if (atomIndex >= m_WorkingStructure.atoms.size())
+                    m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
+                }
+                else
+                {
+                    const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                    const glm::vec3 delta = m_CursorPosition - selectionCenter;
+                    for (const std::size_t atomIndex : m_SelectedAtomIndices)
                     {
-                        continue;
+                        if (atomIndex >= m_WorkingStructure.atoms.size())
+                        {
+                            continue;
+                        }
+                        SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
                     }
-                    SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
                 }
                 settingsChanged = true;
             }
             if (!canMoveSelectionToCursor)
             {
                 ImGui::EndDisabled();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Move selection center to Origin") && canMoveSelectionToCursor)
+            {
+                if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                {
+                    m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = glm::vec3(0.0f);
+                }
+                else
+                {
+                    const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                    const glm::vec3 delta = glm::vec3(0.0f) - selectionCenter;
+                    for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= m_WorkingStructure.atoms.size())
+                        {
+                            continue;
+                        }
+                        SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                    }
+                }
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("3D Cursor");
+            if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
+            {
+                settingsChanged = true;
+            }
+            if (DrawColoredVec3Control("Cursor position", m_CursorPosition, 0.01f, -1000.0f, 1000.0f, "%.5f"))
+            {
+                settingsChanged = true;
+            }
+
+            static float s_CursorUniformXYZ = 0.0f;
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputFloat("Cursor XYZ", &s_CursorUniformXYZ, 0.1f, 1.0f, "%.4f");
+            ImGui::SameLine();
+            if (ImGui::Button("Apply cursor XYZ"))
+            {
+                m_CursorPosition = glm::vec3(s_CursorUniformXYZ);
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Button("3D cursor to Origin"))
+            {
+                m_CursorPosition = glm::vec3(0.0f);
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cursor <- camera target") && m_Camera)
+            {
+                m_CursorPosition = m_Camera->GetTarget();
+                settingsChanged = true;
             }
 
             ImGui::SeparatorText("Add Atom");
@@ -5994,7 +6238,7 @@ namespace ds
             }
             if (ImGui::Button("Add atom"))
             {
-                ImGui::OpenPopup("AddAtomSettingsPopup");
+                m_ShowAddAtomDialog = true;
             }
             if (!canAddAtom)
             {
@@ -6285,29 +6529,6 @@ namespace ds
             else
             {
                 ImGui::SliderFloat("Scale snap", &m_GizmoScaleSnap, 0.01f, 1.0f, "%.2f");
-            }
-
-            ImGui::SeparatorText("3D Cursor & Diagnostics");
-            if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::DragFloat3("Cursor position", &m_CursorPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Button("Cursor <- camera target") && m_Camera)
-            {
-                m_CursorPosition = m_Camera->GetTarget();
-                settingsChanged = true;
             }
 
             if (ImGui::Checkbox("Selection debug log to file", &m_SelectionDebugToFile))
@@ -6717,64 +6938,74 @@ namespace ds
 
         DrawPeriodicTableWindow();
 
-        ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Appearing);
-        if (ImGui::BeginPopupModal("AddAtomSettingsPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        if (m_ShowAddAtomDialog)
         {
-            ImGui::TextUnformatted("Add Atom");
-            ImGui::Separator();
-
-            ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
-            ImGui::SameLine();
-            if (ImGui::Button("Periodic table"))
+            ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
+            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+            bool dialogOpen = m_ShowAddAtomDialog;
+            if (ImGui::Begin("Add Atom", &dialogOpen, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize))
             {
-                m_PeriodicTableOpen = true;
-            }
-
-            ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
-            ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-
-            if (ImGui::Button("Use 3D cursor"))
-            {
-                m_AddAtomPosition = m_CursorPosition;
-                m_AddAtomCoordinateModeIndex = 1;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Use camera target") && m_Camera)
-            {
-                m_AddAtomPosition = m_Camera->GetTarget();
-                m_AddAtomCoordinateModeIndex = 1;
-            }
-
-            ImGui::Separator();
-            const CoordinateMode inputMode = (m_AddAtomCoordinateModeIndex == 0)
-                                                 ? CoordinateMode::Direct
-                                                 : CoordinateMode::Cartesian;
-
-            const bool canAddAtomNow = m_HasStructureLoaded;
-            if (!canAddAtomNow)
-            {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Add atom"))
-            {
-                if (AddAtomToStructure(std::string(m_AddAtomElementBuffer.data()), m_AddAtomPosition, inputMode))
+                ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
+                ImGui::SameLine();
+                if (ImGui::Button("Periodic table"))
                 {
-                    settingsChanged = true;
-                    ImGui::CloseCurrentPopup();
+                    m_PeriodicTableOpen = true;
+                }
+
+                DrawColoredVec3Control("Position", m_AddAtomPosition, 0.01f, -1000.0f, 1000.0f, "%.5f");
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputFloat("Set XYZ", &m_AddAtomUniformPositionValue, 0.1f, 1.0f, "%.4f");
+                ImGui::SameLine();
+                if (ImGui::Button("Apply to X/Y/Z"))
+                {
+                    m_AddAtomPosition = glm::vec3(m_AddAtomUniformPositionValue);
+                }
+
+                ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+
+                if (ImGui::Button("Use 3D cursor"))
+                {
+                    m_AddAtomPosition = m_CursorPosition;
+                    m_AddAtomCoordinateModeIndex = 1;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Use camera target") && m_Camera)
+                {
+                    m_AddAtomPosition = m_Camera->GetTarget();
+                    m_AddAtomCoordinateModeIndex = 1;
+                }
+
+                ImGui::Separator();
+                const CoordinateMode inputMode = (m_AddAtomCoordinateModeIndex == 0)
+                                                     ? CoordinateMode::Direct
+                                                     : CoordinateMode::Cartesian;
+
+                const bool canAddAtomNow = m_HasStructureLoaded;
+                if (!canAddAtomNow)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Add atom"))
+                {
+                    if (AddAtomToStructure(std::string(m_AddAtomElementBuffer.data()), m_AddAtomPosition, inputMode))
+                    {
+                        settingsChanged = true;
+                        dialogOpen = false;
+                    }
+                }
+                if (!canAddAtomNow)
+                {
+                    ImGui::EndDisabled();
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Close"))
+                {
+                    dialogOpen = false;
                 }
             }
-            if (!canAddAtomNow)
-            {
-                ImGui::EndDisabled();
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel"))
-            {
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
+            ImGui::End();
+            m_ShowAddAtomDialog = dialogOpen;
         }
 
         if (settingsChanged)

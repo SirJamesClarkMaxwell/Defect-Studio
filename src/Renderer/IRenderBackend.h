@@ -22,6 +22,7 @@ namespace ds
         float gridOpacity = 0.50f;
 
         glm::vec3 lightDirection = glm::vec3(-0.5f, -1.0f, -0.4f);
+        glm::vec3 lightColor = glm::vec3(1.0f, 0.98f, 0.92f);
         float ambientStrength = 0.45f;
         float diffuseStrength = 0.85f;
 
@@ -29,6 +30,7 @@ namespace ds
         bool overrideAtomColor = false;
         glm::vec3 atomOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
         float atomBrightness = 1.0f;
+        float atomGlowStrength = 0.08f;
         bool atomWireframe = false;
         float atomWireframeWidth = 1.0f;
     };

@@ -4,7 +4,7 @@
 - One feature branch per task: `task/NN-short-name`
 - Merge to `main` only after build and basic verification pass
 - Keep `scripts/Setup.bat` as the canonical local setup entrypoint
-- If a new feature is requested in chat, add it to this TODO first, then implement it
+- Track only significant tasks/features in this TODO; do not add tiny fixes
 
 ## Milestones
 

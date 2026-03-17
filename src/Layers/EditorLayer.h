@@ -172,8 +172,10 @@ namespace ds
         int m_ExportCoordinateModeIndex = 0;
         std::array<char, 16> m_AddAtomElementBuffer = {'S', 'i', '\0'};
         glm::vec3 m_AddAtomPosition = glm::vec3(0.0f);
+        float m_AddAtomUniformPositionValue = 0.0f;
         int m_AddAtomCoordinateModeIndex = 1;
         bool m_PeriodicTableOpen = false;
+        bool m_ShowAddAtomDialog = false;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
         std::vector<SceneUUID> m_AtomNodeIds;

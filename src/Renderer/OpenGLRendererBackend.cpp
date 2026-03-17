@@ -362,6 +362,8 @@ namespace ds
         m_Shader.SetMat4("u_ViewProjection", viewProjection);
         m_Shader.SetFloat3("u_LightDirection", glm::normalize(settings.lightDirection));
         m_Shader.SetFloat3("u_LightFactors", glm::vec3(settings.ambientStrength, settings.diffuseStrength, settings.atomBrightness));
+        m_Shader.SetFloat3("u_LightColor", settings.lightColor);
+        m_Shader.SetFloat("u_GlowStrength", settings.atomGlowStrength);
 
         bool wireframeEnabled = false;
         if (settings.atomWireframe)
