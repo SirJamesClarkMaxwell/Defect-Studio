@@ -2,12 +2,9 @@
 
 ## Current state
 - Branch: task/05-editor-selection-gizmo
-- Latest checkpoint commit for broad T05 work: 35a2397 (`T05: stabilize gizmo workflows and add rotate cursor UX`)
-- Current working tree: modified files pending commit:
-  - SESSION_HANDOFF.md
-  - TODO.md
-  - src/Layers/EditorLayer.h
-  - src/Layers/EditorLayer.cpp
+- Latest session commit: 6fb2c31 (`T05: finalize constrained axis flow and handoff`)
+- Previous broad T05 checkpoint: 35a2397 (`T05: stabilize gizmo workflows and add rotate cursor UX`)
+- Current working tree: clean for tracked files (only untracked `exports/` present).
 
 ## What was changed in this session
 - Global axis rendering behavior in viewport adjusted and constrained to viewport drawing context.
