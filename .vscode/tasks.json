@@ -1,0 +1,76 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "setup: generate vs2022 solution",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/Setup.ps1"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "verify: full build check",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}/scripts/Verify-Build.ps1"
+            ],
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "build: debug x64",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$vswhere='${env:ProgramFiles(x86)}\\Microsoft Visual Studio\\Installer\\vswhere.exe'; $install=& $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath; $msbuild=Join-Path $install 'MSBuild\\Current\\Bin\\MSBuild.exe'; & $msbuild '${workspaceFolder}\\DefectsStudio.sln' /m /t:Build /p:Configuration=Debug /p:Platform=x64"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "build: release x64",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$vswhere='${env:ProgramFiles(x86)}\\Microsoft Visual Studio\\Installer\\vswhere.exe'; $install=& $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath; $msbuild=Join-Path $install 'MSBuild\\Current\\Bin\\MSBuild.exe'; & $msbuild '${workspaceFolder}\\DefectsStudio.sln' /m /t:Build /p:Configuration=Release /p:Platform=x64"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "run: debug exe",
+            "type": "shell",
+            "command": "${workspaceFolder}/bin/Debug-windows-x86_64/DefectsStudio/DefectsStudio.exe",
+            "dependsOn": "build: debug x64",
+            "problemMatcher": []
+        },
+        {
+            "label": "clean: build artifacts",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "if (Test-Path '${workspaceFolder}\\bin') { Remove-Item '${workspaceFolder}\\bin' -Recurse -Force }; if (Test-Path '${workspaceFolder}\\bin-int') { Remove-Item '${workspaceFolder}\\bin-int' -Recurse -Force }"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

@@ -1,0 +1,11 @@
+app:
+  window:
+    width: 1600
+    height: 900
+    title: DefectsStudio
+  camera:
+    orbitSensitivity: 1.0
+    panSensitivity: 1.0
+    zoomSensitivity: 1.0
+  rendering:
+    vsync: true
