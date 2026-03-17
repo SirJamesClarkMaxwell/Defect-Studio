@@ -241,6 +241,9 @@ namespace ds
         glm::vec3 m_RotatePivot = glm::vec3(0.0f);
         float m_RotateCurrentAngle = 0.0f;
         glm::vec2 m_ModePiePopupPos = glm::vec2(0.0f, 0.0f);
+        bool m_ModePieActive = false;
+        int m_ModePieHoveredSlice = -1;
+        glm::vec2 m_AddMenuPopupPos = glm::vec2(0.0f, 0.0f);
         glm::vec2 m_FallbackLastMousePos = glm::vec2(0.0f, 0.0f);
         glm::vec2 m_FallbackPivotScreen = glm::vec2(0.0f, 0.0f);
         int m_FallbackGizmoOperation = -1;
@@ -278,6 +281,7 @@ namespace ds
         float m_CameraTransitionEndPitch = 0.0f;
 
         SceneRenderSettings m_SceneSettings;
+        float m_ViewportRenderScale = 1.0f;
         int m_ProjectionModeIndex = 0;
         bool m_ViewportSettingsOpen = true;
 

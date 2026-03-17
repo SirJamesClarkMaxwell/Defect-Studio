@@ -57,6 +57,25 @@ namespace ds
         return true;
     }
 
+    bool SceneGroupingBackend::DeleteGroup(EditorLayer &editor, int groupIndex)
+    {
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(editor.m_ObjectGroups.size()))
+        {
+            return false;
+        }
+
+        editor.m_ObjectGroups.erase(editor.m_ObjectGroups.begin() + groupIndex);
+        if (editor.m_ObjectGroups.empty())
+        {
+            editor.m_ActiveGroupIndex = -1;
+        }
+        else
+        {
+            editor.m_ActiveGroupIndex = std::min(groupIndex, static_cast<int>(editor.m_ObjectGroups.size()) - 1);
+        }
+        return true;
+    }
+
     void SceneGroupingBackend::SanitizeGroup(EditorLayer &editor, int groupIndex)
     {
         if (groupIndex < 0 || groupIndex >= static_cast<int>(editor.m_ObjectGroups.size()))

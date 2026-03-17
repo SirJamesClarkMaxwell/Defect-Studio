@@ -8,6 +8,7 @@ namespace ds
     {
     public:
         static bool CreateGroupFromCurrentSelection(EditorLayer &editor);
+        static bool DeleteGroup(EditorLayer &editor, int groupIndex);
         static void SanitizeGroup(EditorLayer &editor, int groupIndex);
         static void SelectGroup(EditorLayer &editor, int groupIndex);
         static void AddCurrentSelectionToGroup(EditorLayer &editor, int groupIndex);

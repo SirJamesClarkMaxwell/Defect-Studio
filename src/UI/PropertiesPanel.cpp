@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <numeric>
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -204,7 +205,7 @@ namespace ds
                 }
             }
 
-            if (ImGui::BeginCombo("Parent", currentParentName))
+            if (ImGui::BeginCombo("Parent Empty", currentParentName))
             {
                 if (ImGui::Selectable("(none)", selectedEmpty.parentEmptyId == 0))
                 {
@@ -236,6 +237,12 @@ namespace ds
                     }
                 }
                 ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            {
+                ImGui::SetTooltip("Parent Empty defines hierarchy for this Empty.\nChild follows parent transform and appears under it in Scene tree.");
             }
 
             const char *currentCollectionName =
@@ -288,11 +295,79 @@ namespace ds
                 editor.DeleteTransformEmptyAtIndex(editor.m_SelectedTransformEmptyIndex);
                 settingsChanged = true;
             }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Move Empty to 3D Cursor"))
+            {
+                selectedEmpty.position = editor.m_CursorPosition;
+                settingsChanged = true;
+            }
         }
         else
         {
-            ImGui::TextUnformatted("No Empty selected");
+            ImGui::TextUnformatted("Entity");
+            ImGui::Separator();
+            ImGui::TextDisabled("Type: Atoms / Group");
             ImGui::Text("Selected atoms: %zu", editor.m_SelectedAtomIndices.size());
+
+            if (!editor.m_SelectedAtomIndices.empty())
+            {
+                ImGui::SeparatorText("Atoms");
+
+                if (editor.m_SelectedAtomIndices.size() == 1)
+                {
+                    const std::size_t atomIndex = editor.m_SelectedAtomIndices.front();
+                    if (atomIndex < editor.m_WorkingStructure.atoms.size())
+                    {
+                        auto &atom = editor.m_WorkingStructure.atoms[atomIndex];
+                        std::array<char, 16> elementBuffer = {};
+                        std::snprintf(elementBuffer.data(), elementBuffer.size(), "%s", atom.element.c_str());
+                        if (ImGui::InputText("Element", elementBuffer.data(), elementBuffer.size()))
+                        {
+                            atom.element = std::string(elementBuffer.data());
+                            editor.m_WorkingStructure.RebuildSpeciesFromAtoms();
+                            settingsChanged = true;
+                        }
+
+                        glm::vec3 atomPosition = editor.GetAtomCartesianPosition(atomIndex);
+                        if (DrawVec3Control("Atom Position", atomPosition, 0.0f, 0.01f))
+                        {
+                            editor.SetAtomCartesianPosition(atomIndex, atomPosition);
+                            settingsChanged = true;
+                        }
+                    }
+                }
+
+                if (ImGui::Button(editor.m_SelectedAtomIndices.size() == 1 ? "Move Atom to 3D Cursor" : "Move Atoms to 3D Cursor"))
+                {
+                    glm::vec3 selectionCenter = glm::vec3(0.0f);
+                    std::size_t validCount = 0;
+                    for (std::size_t atomIndex : editor.m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= editor.m_WorkingStructure.atoms.size())
+                        {
+                            continue;
+                        }
+                        selectionCenter += editor.GetAtomCartesianPosition(atomIndex);
+                        ++validCount;
+                    }
+
+                    if (validCount > 0)
+                    {
+                        selectionCenter /= static_cast<float>(validCount);
+                        const glm::vec3 delta = editor.m_CursorPosition - selectionCenter;
+                        for (std::size_t atomIndex : editor.m_SelectedAtomIndices)
+                        {
+                            if (atomIndex >= editor.m_WorkingStructure.atoms.size())
+                            {
+                                continue;
+                            }
+                            editor.SetAtomCartesianPosition(atomIndex, editor.GetAtomCartesianPosition(atomIndex) + delta);
+                        }
+                        settingsChanged = true;
+                    }
+                }
+            }
 
             if (!editor.m_SelectedAtomIndices.empty())
             {
@@ -347,16 +422,7 @@ namespace ds
 
                 if (ImGui::Button("Delete Group"))
                 {
-                    editor.m_ObjectGroups.erase(editor.m_ObjectGroups.begin() + editor.m_ActiveGroupIndex);
-                    if (editor.m_ObjectGroups.empty())
-                    {
-                        editor.m_ActiveGroupIndex = -1;
-                    }
-                    else
-                    {
-                        editor.m_ActiveGroupIndex = std::min(editor.m_ActiveGroupIndex, static_cast<int>(editor.m_ObjectGroups.size()) - 1);
-                    }
-                    settingsChanged = true;
+                    settingsChanged |= SceneGroupingBackend::DeleteGroup(editor, editor.m_ActiveGroupIndex);
                 }
             }
         }

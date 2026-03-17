@@ -4,6 +4,7 @@
 - One feature branch per task: `task/NN-short-name`
 - Merge to `main` only after build and basic verification pass
 - Keep `scripts/Setup.bat` as the canonical local setup entrypoint
+- If a new feature is requested in chat, add it to this TODO first, then implement it
 
 ## Milestones
 
@@ -45,17 +46,20 @@
 #### [ ] T05a - Scene object system (Blender-like, in-progress under T05)
 - [x] Fix crash on deleting Empty and stabilize Empty lifecycle
 - [x] Fix Empty re-selection after lifecycle operations (add/delete/clear)
-- [ ] Add Scene Outliner panel (tree view, Blender-like workflow)
-- [ ] Add Object Properties panel for selected object
-- [ ] Introduce scene Collections model and visibility/selectability controls
-- [ ] Introduce Grouping model (create/select/manage groups)
-- [ ] Add "Align Empty Z axis to atoms" workflow
+- [x] Add Scene Outliner panel (tree view, Blender-like workflow)
+- [x] Add Object Properties panel for selected object
+- [x] Introduce scene Collections model and visibility/selectability controls
+- [x] Introduce Grouping model (create/select/manage groups)
+- [x] Add "Align Empty Z axis to atoms" workflow
 
 #### [ ] T05b - Transform UX polish (under T05)
 - [ ] Iterate UX polish for Empty transform interactions
 - [x] Fix keyboard transform flow: `G` then `X/Y/Z` should start constrained move and show active axis
 - [x] Implement atom-defined pivot workflow (create/manage local pivot axes from selected atoms)
-- [ ] Add Circle Menu for fast mode/action switching (selection, transform, view)
+- [x] Add Circle Menu for fast mode/action switching (selection, transform, view)
+- [x] Add Blender-like `Shift+A` add menu for scene items (Atoms, Empty)
+- [x] Add `Delete` hotkey for selected scene items (atoms/empty/group)
+- [x] Add atom add popup with configurable insert options before creation
 
 
 ### [ ] T06 - Bonds and measurements (`task/06-bonds-tools`)
