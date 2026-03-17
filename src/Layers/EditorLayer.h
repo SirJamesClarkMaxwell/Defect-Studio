@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,8 +19,13 @@
 
 namespace ds
 {
+    using SceneUUID = std::uint64_t;
+
     class IRenderBackend;
     class OrbitCamera;
+    class PropertiesPanel;
+    class SettingsPanel;
+    class SceneGroupingBackend;
 
     class EditorLayer : public Layer
     {
@@ -33,6 +39,10 @@ namespace ds
         void OnImGuiRender() override;
 
     private:
+        friend class PropertiesPanel;
+        friend class SettingsPanel;
+        friend class SceneGroupingBackend;
+
         enum class ThemePreset
         {
             Dark = 0,
@@ -59,12 +69,15 @@ namespace ds
 
         struct TransformEmpty
         {
+            SceneUUID id = 0;
             std::string name;
             glm::vec3 position = glm::vec3(0.0f);
             std::array<glm::vec3, 3> axes = {
                 glm::vec3(1.0f, 0.0f, 0.0f),
                 glm::vec3(0.0f, 1.0f, 0.0f),
                 glm::vec3(0.0f, 0.0f, 1.0f)};
+            SceneUUID parentEmptyId = 0;
+            SceneUUID collectionId = 0;
             int collectionIndex = 0;
             int groupIndex = -1;
             bool visible = true;
@@ -73,6 +86,7 @@ namespace ds
 
         struct SceneCollection
         {
+            SceneUUID id = 0;
             std::string name;
             bool visible = true;
             bool selectable = true;
@@ -80,18 +94,30 @@ namespace ds
 
         struct SceneGroup
         {
+            SceneUUID id = 0;
             std::string name;
+            std::vector<SceneUUID> atomIds;
             std::vector<std::size_t> atomIndices;
+            std::vector<SceneUUID> emptyIds;
             std::vector<int> emptyIndices;
         };
 
+        enum class SpecialNodeSelection
+        {
+            None = 0,
+            Light
+        };
+
         static constexpr const char *kSettingsPath = "config/editor_ui_settings.ini";
+        static constexpr const char *kSceneStatePath = "config/scene_state.ini";
 
         void ApplyTheme(ThemePreset preset);
         void ApplyFontScale(float scale);
         void ApplyCameraSensitivity();
         void SaveSettings() const;
         void LoadSettings();
+        void SaveSceneState() const;
+        void LoadSceneState();
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
@@ -118,6 +144,7 @@ namespace ds
         bool ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const;
         bool Set3DCursorToSelectionCenterOfMass();
         bool Set3DCursorToSelectedAtom(bool useLastSelected);
+        void EnsureAtomNodeIds();
         bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
         void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
         void DrawPeriodicTableWindow();
@@ -153,10 +180,16 @@ namespace ds
         int m_ExportCoordinateModeIndex = 0;
         std::array<char, 16> m_AddAtomElementBuffer = {'S', 'i', '\0'};
         glm::vec3 m_AddAtomPosition = glm::vec3(0.0f);
+        float m_AddAtomUniformPositionValue = 0.0f;
         int m_AddAtomCoordinateModeIndex = 1;
         bool m_PeriodicTableOpen = false;
+        bool m_ShowAddAtomDialog = false;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
+        SpecialNodeSelection m_SelectedSpecialNode = SpecialNodeSelection::None;
+        glm::vec3 m_SceneOriginPosition = glm::vec3(0.0f);
+        glm::vec3 m_LightPosition = glm::vec3(3.0f, -2.0f, 2.5f);
+        std::vector<SceneUUID> m_AtomNodeIds;
         std::vector<std::size_t> m_SelectedAtomIndices;
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
         glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);
@@ -182,6 +215,7 @@ namespace ds
         int m_GroupCounter = 1;
         bool m_ShowSceneOutlinerPanel = true;
         bool m_ShowObjectPropertiesPanel = true;
+        bool m_ShowSettingsPanel = true;
         bool m_ShowTransformEmpties = true;
         float m_TransformEmptyVisualScale = 0.20f;
         std::array<glm::vec3, 3> m_AxisColors = {
@@ -201,12 +235,14 @@ namespace ds
         bool m_BoxSelectArmed = false;
         bool m_BoxSelecting = false;
         bool m_BlockSelectionThisFrame = false;
+        bool m_ShowToolsPanel = true;
         bool m_GizmoConsumedMouseThisFrame = false;
         bool m_FallbackGizmoDragging = false;
         float m_FallbackGizmoVisualScale = 2.0f;
         bool m_TranslateModeActive = false;
         int m_TranslateConstraintAxis = -1;
         int m_TranslatePlaneLockAxis = -1;
+        int m_TranslateSpecialNode = 0;
         glm::vec2 m_TranslateLastMousePos = glm::vec2(0.0f, 0.0f);
         std::vector<std::size_t> m_TranslateIndices;
         std::vector<glm::vec3> m_TranslateInitialCartesian;
@@ -221,6 +257,14 @@ namespace ds
         glm::vec3 m_RotatePivot = glm::vec3(0.0f);
         float m_RotateCurrentAngle = 0.0f;
         glm::vec2 m_ModePiePopupPos = glm::vec2(0.0f, 0.0f);
+        bool m_ModePieActive = false;
+        int m_ModePieHoveredSlice = -1;
+        glm::vec2 m_AddMenuPopupPos = glm::vec2(0.0f, 0.0f);
+        bool m_ViewGizmoDragMode = false;
+        bool m_ViewGizmoDragging = false;
+        glm::vec2 m_ViewGizmoDragAnchor = glm::vec2(0.0f, 0.0f);
+        float m_ViewGizmoStartOffsetRight = 0.0f;
+        float m_ViewGizmoStartOffsetTop = 0.0f;
         glm::vec2 m_FallbackLastMousePos = glm::vec2(0.0f, 0.0f);
         glm::vec2 m_FallbackPivotScreen = glm::vec2(0.0f, 0.0f);
         int m_FallbackGizmoOperation = -1;
@@ -258,6 +302,8 @@ namespace ds
         float m_CameraTransitionEndPitch = 0.0f;
 
         SceneRenderSettings m_SceneSettings;
+        float m_ViewportRenderScale = 1.0f;
+        float m_UiSpacingScale = 1.0f;
         int m_ProjectionModeIndex = 0;
         bool m_ViewportSettingsOpen = true;
 

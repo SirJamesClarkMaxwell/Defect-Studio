@@ -2,8 +2,11 @@
 
 #include "Core/ApplicationContext.h"
 #include "Core/Logger.h"
+#include "Editor/SceneGroupingBackend.h"
 #include "Renderer/OpenGLRendererBackend.h"
 #include "Renderer/OrbitCamera.h"
+#include "UI/PropertiesPanel.h"
+#include "UI/SettingsPanel.h"
 
 #include <algorithm>
 
@@ -19,17 +22,21 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <glm/geometric.hpp>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/matrix.hpp>
@@ -52,6 +59,15 @@ namespace ds
         constexpr float kBasePanSensitivity = 0.18f;
         constexpr float kBaseZoomSensitivity = 0.17f;
         constexpr const char *kSelectionDebugLogPath = "logs/selection_debug.log";
+
+        SceneUUID GenerateSceneUUID()
+        {
+            static std::mt19937_64 rng(std::random_device{}());
+            static std::uniform_int_distribution<std::uint64_t> dist(
+                std::numeric_limits<std::uint64_t>::min() + 1,
+                std::numeric_limits<std::uint64_t>::max());
+            return dist(rng);
+        }
 
         float NormalizeAngleRadians(float angle)
         {
@@ -112,6 +128,101 @@ namespace ds
             }
 
             return normalized;
+        }
+
+        std::vector<std::string> SplitCsv(const std::string &value)
+        {
+            std::vector<std::string> items;
+            if (value.empty())
+            {
+                return items;
+            }
+
+            std::size_t start = 0;
+            while (start <= value.size())
+            {
+                const std::size_t sep = value.find(',', start);
+                if (sep == std::string::npos)
+                {
+                    items.push_back(value.substr(start));
+                    break;
+                }
+                items.push_back(value.substr(start, sep - start));
+                start = sep + 1;
+            }
+            return items;
+        }
+
+        template <typename T>
+        std::string JoinCsv(const std::vector<T> &values)
+        {
+            std::ostringstream out;
+            for (std::size_t i = 0; i < values.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    out << ',';
+                }
+                out << values[i];
+            }
+            return out.str();
+        }
+
+        bool DrawColoredVec3Control(const char *label, glm::vec3 &value, float speed, float minValue, float maxValue, const char *format)
+        {
+            bool changed = false;
+
+            ImGui::PushID(label);
+            ImGui::Columns(2, nullptr, false);
+            ImGui::SetColumnWidth(0, 110.0f);
+            ImGui::TextUnformatted(label);
+            ImGui::NextColumn();
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{0.0f, 0.0f});
+
+            const float lineHeight = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 2.0f;
+            const ImVec2 buttonSize = {lineHeight + 2.0f, lineHeight};
+            const float itemWidth = std::max(10.0f, (ImGui::GetContentRegionAvail().x - buttonSize.x * 3.0f - 8.0f) / 3.0f);
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.23f, 0.20f, 1.0f));
+            if (ImGui::Button("X", buttonSize))
+            {
+                value.x = 0.0f;
+                changed = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(itemWidth);
+            changed |= ImGui::DragFloat("##X", &value.x, speed, minValue, maxValue, format);
+            ImGui::SameLine();
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.62f, 0.29f, 1.0f));
+            if (ImGui::Button("Y", buttonSize))
+            {
+                value.y = 0.0f;
+                changed = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(itemWidth);
+            changed |= ImGui::DragFloat("##Y", &value.y, speed, minValue, maxValue, format);
+            ImGui::SameLine();
+
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.40f, 0.75f, 1.0f));
+            if (ImGui::Button("Z", buttonSize))
+            {
+                value.z = 0.0f;
+                changed = true;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(itemWidth);
+            changed |= ImGui::DragFloat("##Z", &value.z, speed, minValue, maxValue, format);
+
+            ImGui::PopStyleVar();
+            ImGui::Columns(1);
+            ImGui::PopID();
+
+            return changed;
         }
 
         float AtomicMassByElementSymbol(const std::string &symbol)
@@ -272,17 +383,32 @@ namespace ds
 
     void EditorLayer::OnAttach()
     {
-        EnsureSceneDefaults();
+        LogInfo("EditorLayer::OnAttach begin");
+
+        LogInfo("Loading editor settings from config/editor_ui_settings.ini");
         LoadSettings();
+
+        LogInfo("Loading scene state from config/scene_state.ini");
+        LoadSceneState();
+
+        LogInfo("Applying scene defaults and validation");
+        EnsureSceneDefaults();
         ApplyTheme(m_CurrentTheme);
         ApplyFontScale(m_FontScale);
+
+        LogInfo("Initializing render backend");
 
         m_RenderBackend = std::make_unique<OpenGLRendererBackend>();
         if (!m_RenderBackend->Initialize())
         {
             LogError("Failed to initialize OpenGL backend.");
         }
+        else
+        {
+            LogInfo("OpenGL backend initialized successfully");
+        }
 
+        LogInfo("Creating orbit camera");
         m_Camera = std::make_unique<OrbitCamera>();
         m_Camera->SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
         m_Camera->SetProjectionMode(m_ProjectionModeIndex == 0 ? OrbitCamera::ProjectionMode::Perspective : OrbitCamera::ProjectionMode::Orthographic);
@@ -295,6 +421,7 @@ namespace ds
         const std::string startupImportPath = std::string(m_ImportPathBuffer.data());
         if (!startupImportPath.empty() && std::filesystem::exists(startupImportPath))
         {
+            LogInfo("Attempting startup import: " + startupImportPath);
             LoadStructureFromPath(startupImportPath);
         }
         else if (!startupImportPath.empty())
@@ -304,7 +431,10 @@ namespace ds
             LogWarn(m_LastStructureMessage);
         }
 
-        LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)));
+        LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)) +
+                ", collections=" + std::to_string(m_Collections.size()) +
+                ", empties=" + std::to_string(m_TransformEmpties.size()) +
+                ", groups=" + std::to_string(m_ObjectGroups.size()));
     }
 
     void EditorLayer::OnDetach()
@@ -339,7 +469,18 @@ namespace ds
         }
         UpdateCameraOrbitTransition(deltaTime);
 
-        m_RenderBackend->ResizeViewport(static_cast<std::uint32_t>(m_ViewportSize.x), static_cast<std::uint32_t>(m_ViewportSize.y));
+        const float clampedRenderScale = glm::clamp(m_ViewportRenderScale, 0.25f, 1.0f);
+        const std::uint32_t renderWidth = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.x * clampedRenderScale));
+        const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.y * clampedRenderScale));
+
+        m_SceneOriginPosition = glm::vec3(0.0f);
+        const glm::vec3 lightToOrigin = m_SceneOriginPosition - m_LightPosition;
+        if (glm::length2(lightToOrigin) > 1e-8f)
+        {
+            m_SceneSettings.lightDirection = glm::normalize(lightToOrigin);
+        }
+
+        m_RenderBackend->ResizeViewport(renderWidth, renderHeight);
         m_RenderBackend->BeginFrame(m_SceneSettings);
         if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
         {
@@ -405,6 +546,24 @@ namespace ds
             cursorSettings.atomWireframe = true;
             cursorSettings.atomWireframeWidth = std::max(1.0f, m_SelectionOutlineThickness);
             m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), cursorPosition, cursorColor, cursorSettings);
+        }
+
+        {
+            const std::vector<glm::vec3> helperPositions = {m_LightPosition};
+            std::vector<glm::vec3> helperColors;
+            helperColors.reserve(1);
+
+            const bool lightSelected = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
+            helperColors.push_back(lightSelected ? glm::vec3(1.0f, 0.95f, 0.92f) : glm::vec3(1.0f, 0.82f, 0.55f));
+
+            SceneRenderSettings helperSettings = m_SceneSettings;
+            helperSettings.drawGrid = false;
+            helperSettings.overrideAtomColor = false;
+            helperSettings.atomScale = std::max(0.08f, m_CursorVisualScale * 0.85f);
+            helperSettings.atomBrightness = std::max(1.1f, m_SceneSettings.atomBrightness + 0.15f);
+            helperSettings.atomWireframe = true;
+            helperSettings.atomWireframeWidth = 1.7f;
+            m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), helperPositions, helperColors, helperSettings);
         }
 
         m_RenderBackend->EndFrame();
@@ -771,15 +930,57 @@ namespace ds
         return m_Collections[static_cast<std::size_t>(collectionIndex)].selectable;
     }
 
+    void EditorLayer::EnsureAtomNodeIds()
+    {
+        if (!m_HasStructureLoaded)
+        {
+            return;
+        }
+
+        const std::size_t atomCount = m_WorkingStructure.atoms.size();
+        if (m_AtomNodeIds.size() < atomCount)
+        {
+            const std::size_t oldSize = m_AtomNodeIds.size();
+            m_AtomNodeIds.resize(atomCount, 0);
+            for (std::size_t i = oldSize; i < atomCount; ++i)
+            {
+                m_AtomNodeIds[i] = GenerateSceneUUID();
+            }
+        }
+        else if (m_AtomNodeIds.size() > atomCount)
+        {
+            m_AtomNodeIds.resize(atomCount);
+        }
+
+        for (SceneUUID &id : m_AtomNodeIds)
+        {
+            if (id == 0)
+            {
+                id = GenerateSceneUUID();
+            }
+        }
+    }
+
     void EditorLayer::EnsureSceneDefaults()
     {
+        EnsureAtomNodeIds();
+
         if (m_Collections.empty())
         {
             SceneCollection rootCollection;
+            rootCollection.id = GenerateSceneUUID();
             rootCollection.name = "Scene Collection";
             rootCollection.visible = true;
             rootCollection.selectable = true;
             m_Collections.push_back(rootCollection);
+        }
+
+        for (SceneCollection &collection : m_Collections)
+        {
+            if (collection.id == 0)
+            {
+                collection.id = GenerateSceneUUID();
+            }
         }
 
         if (m_ActiveCollectionIndex < 0 || m_ActiveCollectionIndex >= static_cast<int>(m_Collections.size()))
@@ -787,11 +988,133 @@ namespace ds
             m_ActiveCollectionIndex = 0;
         }
 
+        std::unordered_set<SceneUUID> usedEmptyIds;
+
+        auto findCollectionIndexById = [&](SceneUUID collectionId) -> int
+        {
+            if (collectionId == 0)
+            {
+                return -1;
+            }
+
+            for (std::size_t i = 0; i < m_Collections.size(); ++i)
+            {
+                if (m_Collections[i].id == collectionId)
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        };
+
+        auto hasEmptyId = [&](SceneUUID emptyId) -> bool
+        {
+            if (emptyId == 0)
+            {
+                return false;
+            }
+            for (const TransformEmpty &empty : m_TransformEmpties)
+            {
+                if (empty.id == emptyId)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        auto findEmptyIndexById = [&](SceneUUID emptyId) -> int
+        {
+            if (emptyId == 0)
+            {
+                return -1;
+            }
+
+            for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+            {
+                if (m_TransformEmpties[i].id == emptyId)
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        };
+
         for (TransformEmpty &empty : m_TransformEmpties)
         {
+            if (empty.id == 0 || usedEmptyIds.find(empty.id) != usedEmptyIds.end())
+            {
+                if (empty.id != 0)
+                {
+                    LogWarn("EnsureSceneDefaults: duplicate empty UUID detected, assigning a new UUID.");
+                }
+                empty.id = GenerateSceneUUID();
+            }
+            usedEmptyIds.insert(empty.id);
+
+            if (empty.collectionId != 0)
+            {
+                const int resolvedIndex = findCollectionIndexById(empty.collectionId);
+                if (resolvedIndex >= 0)
+                {
+                    empty.collectionIndex = resolvedIndex;
+                }
+            }
+
             if (empty.collectionIndex < 0 || empty.collectionIndex >= static_cast<int>(m_Collections.size()))
             {
                 empty.collectionIndex = 0;
+            }
+
+            empty.collectionId = m_Collections[static_cast<std::size_t>(empty.collectionIndex)].id;
+
+            if (empty.parentEmptyId == empty.id || !hasEmptyId(empty.parentEmptyId))
+            {
+                empty.parentEmptyId = 0;
+            }
+        }
+
+        for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+        {
+            TransformEmpty &empty = m_TransformEmpties[i];
+            std::unordered_set<SceneUUID> chain;
+            chain.insert(empty.id);
+
+            SceneUUID parentId = empty.parentEmptyId;
+            bool hasCycle = false;
+            std::size_t guard = 0;
+
+            while (parentId != 0 && guard <= m_TransformEmpties.size())
+            {
+                if (chain.find(parentId) != chain.end())
+                {
+                    hasCycle = true;
+                    break;
+                }
+
+                chain.insert(parentId);
+                const int parentIndex = findEmptyIndexById(parentId);
+                if (parentIndex < 0)
+                {
+                    break;
+                }
+
+                parentId = m_TransformEmpties[static_cast<std::size_t>(parentIndex)].parentEmptyId;
+                ++guard;
+            }
+
+            if (hasCycle || guard > m_TransformEmpties.size())
+            {
+                LogWarn("EnsureSceneDefaults: hierarchy cycle detected for empty '" + empty.name + "'. Parent cleared.");
+                empty.parentEmptyId = 0;
+            }
+        }
+
+        for (SceneGroup &group : m_ObjectGroups)
+        {
+            if (group.id == 0)
+            {
+                group.id = GenerateSceneUUID();
             }
         }
     }
@@ -803,8 +1126,22 @@ namespace ds
             return;
         }
 
+        const SceneUUID deletedEmptyId = m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].id;
+
+        for (TransformEmpty &empty : m_TransformEmpties)
+        {
+            if (empty.parentEmptyId == deletedEmptyId)
+            {
+                empty.parentEmptyId = 0;
+            }
+        }
+
         for (SceneGroup &group : m_ObjectGroups)
         {
+            group.emptyIds.erase(
+                std::remove(group.emptyIds.begin(), group.emptyIds.end(), deletedEmptyId),
+                group.emptyIds.end());
+
             for (std::size_t i = 0; i < group.emptyIndices.size();)
             {
                 if (group.emptyIndices[i] == emptyIndex)
@@ -1536,6 +1873,80 @@ namespace ds
 
         const bool multiSelect = io.KeyCtrl;
 
+        auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen, float &outDepth) -> bool
+        {
+            const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(world, 1.0f);
+            if (clip.w <= 1e-6f)
+            {
+                return false;
+            }
+
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.1f || ndc.x > 1.1f || ndc.y < -1.1f || ndc.y > 1.1f || ndc.z < -1.0f || ndc.z > 1.0f)
+            {
+                return false;
+            }
+
+            const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+            const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+            outScreen = glm::vec2(
+                m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+            outDepth = ndc.z;
+            return true;
+        };
+
+        auto pickSpecialNode = [&](SpecialNodeSelection &outSelection) -> bool
+        {
+            outSelection = SpecialNodeSelection::None;
+            bool found = false;
+            float bestDepth = std::numeric_limits<float>::max();
+            float bestDist = std::numeric_limits<float>::max();
+            constexpr float pickRadius = 22.0f;
+
+            auto testNode = [&](SpecialNodeSelection selection, const glm::vec3 &position)
+            {
+                glm::vec2 screen(0.0f);
+                float depth = 0.0f;
+                if (!projectWorldToScreen(position, screen, depth))
+                {
+                    return;
+                }
+
+                const float dx = mousePos.x - screen.x;
+                const float dy = mousePos.y - screen.y;
+                const float dist = std::sqrt(dx * dx + dy * dy);
+                if (dist > pickRadius)
+                {
+                    return;
+                }
+
+                if (!found || depth < bestDepth - 1e-4f || (std::abs(depth - bestDepth) <= 1e-4f && dist < bestDist))
+                {
+                    found = true;
+                    bestDepth = depth;
+                    bestDist = dist;
+                    outSelection = selection;
+                }
+            };
+
+            testNode(SpecialNodeSelection::Light, m_LightPosition);
+            return found;
+        };
+
+        SpecialNodeSelection pickedSpecial = SpecialNodeSelection::None;
+        if (pickSpecialNode(pickedSpecial))
+        {
+            if (!multiSelect)
+            {
+                m_SelectedAtomIndices.clear();
+                m_SelectedTransformEmptyIndex = -1;
+            }
+            m_SelectedSpecialNode = pickedSpecial;
+            AppendSelectionDebugLog("Selection set to special node: Light");
+            return;
+        }
+
         std::size_t pickedEmptyIndex = 0;
         const bool hasEmptyHit = PickTransformEmptyAtScreenPoint(mousePos, pickedEmptyIndex);
         if (hasEmptyHit)
@@ -1547,6 +1958,7 @@ namespace ds
 
             m_SelectedTransformEmptyIndex = static_cast<int>(pickedEmptyIndex);
             m_ActiveTransformEmptyIndex = m_SelectedTransformEmptyIndex;
+            m_SelectedSpecialNode = SpecialNodeSelection::None;
             AppendSelectionDebugLog("Selection set to transform empty index=" + std::to_string(pickedEmptyIndex));
             return;
         }
@@ -1629,6 +2041,7 @@ namespace ds
 
                 m_SelectedAtomIndices.clear();
                 m_SelectedTransformEmptyIndex = -1;
+                m_SelectedSpecialNode = SpecialNodeSelection::None;
                 AppendSelectionDebugLog("Selection cleared: no hit and Ctrl not pressed");
             }
             return;
@@ -1639,6 +2052,7 @@ namespace ds
             m_SelectedAtomIndices.clear();
             m_SelectedAtomIndices.push_back(pickedAtomIndex);
             m_SelectedTransformEmptyIndex = -1;
+            m_SelectedSpecialNode = SpecialNodeSelection::None;
             AppendSelectionDebugLog("Selection set to single atom index=" + std::to_string(pickedAtomIndex));
             return;
         }
@@ -1673,6 +2087,7 @@ namespace ds
         m_WorkingStructure = parsed;
         m_OriginalStructure = parsed;
         m_HasStructureLoaded = true;
+        EnsureAtomNodeIds();
         m_SelectedAtomIndices.clear();
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Imported structure from: " + path;
@@ -1790,6 +2205,7 @@ namespace ds
         }
 
         m_WorkingStructure.atoms.push_back(atom);
+        m_AtomNodeIds.push_back(GenerateSceneUUID());
         m_WorkingStructure.RebuildSpeciesFromAtoms();
 
         m_SelectedAtomIndices.clear();
@@ -1964,6 +2380,14 @@ namespace ds
             else if (key == "show_log_panel")
             {
                 m_ShowLogPanel = (value == "1");
+            }
+            else if (key == "show_tools_panel")
+            {
+                m_ShowToolsPanel = (value == "1");
+            }
+            else if (key == "show_settings_panel")
+            {
+                m_ShowSettingsPanel = (value == "1");
             }
             else if (key == "font_scale")
             {
@@ -2279,6 +2703,36 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_light_color_r")
+            {
+                try
+                {
+                    m_SceneSettings.lightColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_color_g")
+            {
+                try
+                {
+                    m_SceneSettings.lightColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_light_color_b")
+            {
+                try
+                {
+                    m_SceneSettings.lightColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "viewport_atom_scale")
             {
                 try
@@ -2333,6 +2787,16 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_atom_glow")
+            {
+                try
+                {
+                    m_SceneSettings.atomGlowStrength = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "selection_color_r")
             {
                 try
@@ -2376,6 +2840,16 @@ namespace ds
             else if (key == "selection_debug_to_file")
             {
                 m_SelectionDebugToFile = (value == "1");
+            }
+            else if (key == "viewport_render_scale")
+            {
+                try
+                {
+                    m_ViewportRenderScale = std::stof(value);
+                }
+                catch (...)
+                {
+                }
             }
             else if (key == "viewport_projection_mode")
             {
@@ -2422,6 +2896,66 @@ namespace ds
                 {
                 }
             }
+            else if (key == "scene_origin_x")
+            {
+                try
+                {
+                    m_SceneOriginPosition.x = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "scene_origin_y")
+            {
+                try
+                {
+                    m_SceneOriginPosition.y = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "scene_origin_z")
+            {
+                try
+                {
+                    m_SceneOriginPosition.z = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "light_position_x")
+            {
+                try
+                {
+                    m_LightPosition.x = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "light_position_y")
+            {
+                try
+                {
+                    m_LightPosition.y = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "light_position_z")
+            {
+                try
+                {
+                    m_LightPosition.z = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "viewport_cursor_scale")
             {
                 try
@@ -2439,6 +2973,10 @@ namespace ds
             else if (key == "viewport_view_gizmo")
             {
                 m_ViewGuizmoEnabled = (value == "1");
+            }
+            else if (key == "viewport_view_gizmo_drag_mode")
+            {
+                m_ViewGizmoDragMode = (value == "1");
             }
             else if (key == "viewport_transform_gizmo_size")
             {
@@ -2644,6 +3182,16 @@ namespace ds
                 {
                 }
             }
+            else if (key == "ui_spacing_scale")
+            {
+                try
+                {
+                    m_UiSpacingScale = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
         }
 
         if (!hasSensitivityMode || !relativeSensitivity)
@@ -2674,6 +3222,10 @@ namespace ds
             m_CursorVisualScale = 0.05f;
         if (m_CursorVisualScale > 2.0f)
             m_CursorVisualScale = 2.0f;
+        if (m_ViewportRenderScale < 0.25f)
+            m_ViewportRenderScale = 0.25f;
+        if (m_ViewportRenderScale > 1.0f)
+            m_ViewportRenderScale = 1.0f;
         if (m_TransformGizmoSize < 0.05f)
             m_TransformGizmoSize = 0.05f;
         if (m_TransformGizmoSize > 0.35f)
@@ -2694,10 +3246,18 @@ namespace ds
             m_TransformEmptyVisualScale = 0.06f;
         if (m_TransformEmptyVisualScale > 0.55f)
             m_TransformEmptyVisualScale = 0.55f;
+        if (m_SceneSettings.atomGlowStrength < 0.0f)
+            m_SceneSettings.atomGlowStrength = 0.0f;
+        if (m_SceneSettings.atomGlowStrength > 0.60f)
+            m_SceneSettings.atomGlowStrength = 0.60f;
         if (m_GizmoModeIndex < 0)
             m_GizmoModeIndex = 0;
         if (m_GizmoModeIndex > 2)
             m_GizmoModeIndex = 2;
+        if (m_UiSpacingScale < 0.75f)
+            m_UiSpacingScale = 0.75f;
+        if (m_UiSpacingScale > 1.80f)
+            m_UiSpacingScale = 1.80f;
 
         // Keep simulation grid on the canonical XY plane.
         m_SceneSettings.gridOrigin.z = 0.0f;
@@ -2716,6 +3276,8 @@ namespace ds
         out << "theme=" << ThemeName(m_CurrentTheme) << '\n';
         out << "show_demo_window=" << (m_ShowDemoWindow ? "1" : "0") << '\n';
         out << "show_log_panel=" << (m_ShowLogPanel ? "1" : "0") << '\n';
+        out << "show_tools_panel=" << (m_ShowToolsPanel ? "1" : "0") << '\n';
+        out << "show_settings_panel=" << (m_ShowSettingsPanel ? "1" : "0") << '\n';
         out << "font_scale=" << m_FontScale << '\n';
         out << "log_filter=" << m_LogFilter << '\n';
         out << "log_auto_scroll=" << (m_LogAutoScroll ? "1" : "0") << '\n';
@@ -2760,25 +3322,37 @@ namespace ds
         out << "viewport_light_dir_z=" << m_SceneSettings.lightDirection.z << '\n';
         out << "viewport_light_ambient=" << m_SceneSettings.ambientStrength << '\n';
         out << "viewport_light_diffuse=" << m_SceneSettings.diffuseStrength << '\n';
+        out << "viewport_light_color_r=" << m_SceneSettings.lightColor.r << '\n';
+        out << "viewport_light_color_g=" << m_SceneSettings.lightColor.g << '\n';
+        out << "viewport_light_color_b=" << m_SceneSettings.lightColor.b << '\n';
         out << "viewport_atom_scale=" << m_SceneSettings.atomScale << '\n';
         out << "viewport_atom_override=" << (m_SceneSettings.overrideAtomColor ? "1" : "0") << '\n';
         out << "viewport_atom_override_r=" << m_SceneSettings.atomOverrideColor.r << '\n';
         out << "viewport_atom_override_g=" << m_SceneSettings.atomOverrideColor.g << '\n';
         out << "viewport_atom_override_b=" << m_SceneSettings.atomOverrideColor.b << '\n';
         out << "viewport_atom_brightness=" << m_SceneSettings.atomBrightness << '\n';
+        out << "viewport_atom_glow=" << m_SceneSettings.atomGlowStrength << '\n';
         out << "selection_color_r=" << m_SelectionColor.r << '\n';
         out << "selection_color_g=" << m_SelectionColor.g << '\n';
         out << "selection_color_b=" << m_SelectionColor.b << '\n';
         out << "selection_outline_thickness=" << m_SelectionOutlineThickness << '\n';
         out << "selection_debug_to_file=" << (m_SelectionDebugToFile ? "1" : "0") << '\n';
+        out << "viewport_render_scale=" << m_ViewportRenderScale << '\n';
         out << "viewport_projection_mode=" << m_ProjectionModeIndex << '\n';
         out << "viewport_cursor_show=" << (m_Show3DCursor ? "1" : "0") << '\n';
         out << "viewport_cursor_x=" << m_CursorPosition.x << '\n';
         out << "viewport_cursor_y=" << m_CursorPosition.y << '\n';
         out << "viewport_cursor_z=" << m_CursorPosition.z << '\n';
+        out << "scene_origin_x=" << m_SceneOriginPosition.x << '\n';
+        out << "scene_origin_y=" << m_SceneOriginPosition.y << '\n';
+        out << "scene_origin_z=" << m_SceneOriginPosition.z << '\n';
+        out << "light_position_x=" << m_LightPosition.x << '\n';
+        out << "light_position_y=" << m_LightPosition.y << '\n';
+        out << "light_position_z=" << m_LightPosition.z << '\n';
         out << "viewport_cursor_scale=" << m_CursorVisualScale << '\n';
         out << "viewport_cursor_snap=" << (m_CursorSnapToGrid ? "1" : "0") << '\n';
         out << "viewport_view_gizmo=" << (m_ViewGuizmoEnabled ? "1" : "0") << '\n';
+        out << "viewport_view_gizmo_drag_mode=" << (m_ViewGizmoDragMode ? "1" : "0") << '\n';
         out << "viewport_transform_gizmo_size=" << m_TransformGizmoSize << '\n';
         out << "viewport_view_gizmo_scale=" << m_ViewGizmoScale << '\n';
         out << "viewport_view_gizmo_offset_right=" << m_ViewGizmoOffsetRight << '\n';
@@ -2801,6 +3375,337 @@ namespace ds
         out << "gizmo_axis_color_z_r=" << m_AxisColors[2].r << '\n';
         out << "gizmo_axis_color_z_g=" << m_AxisColors[2].g << '\n';
         out << "gizmo_axis_color_z_b=" << m_AxisColors[2].b << '\n';
+        out << "ui_spacing_scale=" << m_UiSpacingScale << '\n';
+
+        SaveSceneState();
+    }
+
+    void EditorLayer::LoadSceneState()
+    {
+        std::ifstream in(kSceneStatePath);
+        if (!in.is_open())
+        {
+            LogInfo("LoadSceneState: no scene state file found at config/scene_state.ini");
+            return;
+        }
+
+        LogInfo("LoadSceneState: parsing config/scene_state.ini");
+
+        std::unordered_map<std::string, std::string> values;
+        std::string line;
+        while (std::getline(in, line))
+        {
+            const std::size_t sep = line.find('=');
+            if (sep == std::string::npos)
+            {
+                continue;
+            }
+            values[line.substr(0, sep)] = line.substr(sep + 1);
+        }
+
+        auto getValue = [&](const std::string &key) -> std::string
+        {
+            const auto it = values.find(key);
+            if (it == values.end())
+            {
+                return std::string();
+            }
+            return it->second;
+        };
+
+        m_Collections.clear();
+        m_TransformEmpties.clear();
+        m_ObjectGroups.clear();
+
+        int atomCount = 0;
+        try
+        {
+            atomCount = std::stoi(getValue("scene_atom_count"));
+        }
+        catch (...)
+        {
+            atomCount = 0;
+        }
+        if (atomCount > 0)
+        {
+            m_AtomNodeIds.clear();
+            m_AtomNodeIds.reserve(static_cast<std::size_t>(atomCount));
+            for (int i = 0; i < atomCount; ++i)
+            {
+                try
+                {
+                    m_AtomNodeIds.push_back(static_cast<SceneUUID>(std::stoull(getValue("scene_atom_" + std::to_string(i) + "_id"))));
+                }
+                catch (...)
+                {
+                    m_AtomNodeIds.push_back(0);
+                }
+            }
+        }
+
+        int collectionCount = 0;
+        try
+        {
+            collectionCount = std::stoi(getValue("scene_collection_count"));
+        }
+        catch (...)
+        {
+            collectionCount = 0;
+        }
+
+        for (int i = 0; i < collectionCount; ++i)
+        {
+            SceneCollection collection;
+            const std::string prefix = "scene_collection_" + std::to_string(i) + "_";
+            try
+            {
+                collection.id = static_cast<SceneUUID>(std::stoull(getValue(prefix + "id")));
+            }
+            catch (...)
+            {
+                collection.id = 0;
+            }
+            collection.name = getValue(prefix + "name");
+            if (collection.name.empty())
+            {
+                collection.name = "Collection " + std::to_string(i + 1);
+            }
+            collection.visible = (getValue(prefix + "visible") != "0");
+            collection.selectable = (getValue(prefix + "selectable") != "0");
+            m_Collections.push_back(collection);
+        }
+
+        int emptyCount = 0;
+        try
+        {
+            emptyCount = std::stoi(getValue("scene_empty_count"));
+        }
+        catch (...)
+        {
+            emptyCount = 0;
+        }
+
+        for (int i = 0; i < emptyCount; ++i)
+        {
+            TransformEmpty empty;
+            const std::string prefix = "scene_empty_" + std::to_string(i) + "_";
+            try
+            {
+                empty.id = static_cast<SceneUUID>(std::stoull(getValue(prefix + "id")));
+            }
+            catch (...)
+            {
+                empty.id = 0;
+            }
+            empty.name = getValue(prefix + "name");
+            if (empty.name.empty())
+            {
+                empty.name = "Empty " + std::to_string(i + 1);
+            }
+
+            try
+            {
+                empty.position.x = std::stof(getValue(prefix + "position_x"));
+                empty.position.y = std::stof(getValue(prefix + "position_y"));
+                empty.position.z = std::stof(getValue(prefix + "position_z"));
+            }
+            catch (...)
+            {
+                empty.position = glm::vec3(0.0f);
+            }
+
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                try
+                {
+                    empty.axes[axis].x = std::stof(getValue(prefix + "axis_" + std::to_string(axis) + "_x"));
+                    empty.axes[axis].y = std::stof(getValue(prefix + "axis_" + std::to_string(axis) + "_y"));
+                    empty.axes[axis].z = std::stof(getValue(prefix + "axis_" + std::to_string(axis) + "_z"));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            try
+            {
+                empty.collectionId = static_cast<SceneUUID>(std::stoull(getValue(prefix + "collection_id")));
+            }
+            catch (...)
+            {
+                empty.collectionId = 0;
+            }
+
+            try
+            {
+                empty.parentEmptyId = static_cast<SceneUUID>(std::stoull(getValue(prefix + "parent_empty_id")));
+            }
+            catch (...)
+            {
+                empty.parentEmptyId = 0;
+            }
+
+            try
+            {
+                empty.collectionIndex = std::stoi(getValue(prefix + "collection_index"));
+            }
+            catch (...)
+            {
+                empty.collectionIndex = 0;
+            }
+
+            empty.visible = (getValue(prefix + "visible") != "0");
+            empty.selectable = (getValue(prefix + "selectable") != "0");
+            m_TransformEmpties.push_back(empty);
+        }
+
+        int groupCount = 0;
+        try
+        {
+            groupCount = std::stoi(getValue("scene_group_count"));
+        }
+        catch (...)
+        {
+            groupCount = 0;
+        }
+
+        for (int i = 0; i < groupCount; ++i)
+        {
+            SceneGroup group;
+            const std::string prefix = "scene_group_" + std::to_string(i) + "_";
+            try
+            {
+                group.id = static_cast<SceneUUID>(std::stoull(getValue(prefix + "id")));
+            }
+            catch (...)
+            {
+                group.id = 0;
+            }
+            group.name = getValue(prefix + "name");
+            if (group.name.empty())
+            {
+                group.name = "Group " + std::to_string(i + 1);
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "atom_indices")))
+            {
+                try
+                {
+                    group.atomIndices.push_back(static_cast<std::size_t>(std::stoull(token)));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "atom_ids")))
+            {
+                try
+                {
+                    group.atomIds.push_back(static_cast<SceneUUID>(std::stoull(token)));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "empty_ids")))
+            {
+                try
+                {
+                    group.emptyIds.push_back(static_cast<SceneUUID>(std::stoull(token)));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "empty_indices")))
+            {
+                try
+                {
+                    group.emptyIndices.push_back(std::stoi(token));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            m_ObjectGroups.push_back(group);
+        }
+
+        m_CollectionCounter = std::max(1, static_cast<int>(m_Collections.size()) + 1);
+        m_GroupCounter = std::max(1, static_cast<int>(m_ObjectGroups.size()) + 1);
+        m_TransformEmptyCounter = std::max(1, static_cast<int>(m_TransformEmpties.size()) + 1);
+
+        LogInfo("LoadSceneState: loaded collections=" + std::to_string(m_Collections.size()) +
+                ", empties=" + std::to_string(m_TransformEmpties.size()) +
+                ", groups=" + std::to_string(m_ObjectGroups.size()) +
+                ", atomNodeIds=" + std::to_string(m_AtomNodeIds.size()));
+    }
+
+    void EditorLayer::SaveSceneState() const
+    {
+        std::filesystem::create_directories("config");
+
+        std::ofstream out(kSceneStatePath, std::ios::trunc);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        out << "scene_version=1\n";
+        out << "scene_atom_count=" << m_AtomNodeIds.size() << '\n';
+        for (std::size_t i = 0; i < m_AtomNodeIds.size(); ++i)
+        {
+            out << "scene_atom_" << i << "_id=" << m_AtomNodeIds[i] << '\n';
+        }
+        out << "scene_collection_count=" << m_Collections.size() << '\n';
+        for (std::size_t i = 0; i < m_Collections.size(); ++i)
+        {
+            const SceneCollection &collection = m_Collections[i];
+            const std::string prefix = "scene_collection_" + std::to_string(i) + "_";
+            out << prefix << "id=" << collection.id << '\n';
+            out << prefix << "name=" << collection.name << '\n';
+            out << prefix << "visible=" << (collection.visible ? 1 : 0) << '\n';
+            out << prefix << "selectable=" << (collection.selectable ? 1 : 0) << '\n';
+        }
+
+        out << "scene_empty_count=" << m_TransformEmpties.size() << '\n';
+        for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+        {
+            const TransformEmpty &empty = m_TransformEmpties[i];
+            const std::string prefix = "scene_empty_" + std::to_string(i) + "_";
+            out << prefix << "id=" << empty.id << '\n';
+            out << prefix << "name=" << empty.name << '\n';
+            out << prefix << "position_x=" << empty.position.x << '\n';
+            out << prefix << "position_y=" << empty.position.y << '\n';
+            out << prefix << "position_z=" << empty.position.z << '\n';
+            out << prefix << "collection_id=" << empty.collectionId << '\n';
+            out << prefix << "parent_empty_id=" << empty.parentEmptyId << '\n';
+            out << prefix << "collection_index=" << empty.collectionIndex << '\n';
+            out << prefix << "visible=" << (empty.visible ? 1 : 0) << '\n';
+            out << prefix << "selectable=" << (empty.selectable ? 1 : 0) << '\n';
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                out << prefix << "axis_" << axis << "_x=" << empty.axes[axis].x << '\n';
+                out << prefix << "axis_" << axis << "_y=" << empty.axes[axis].y << '\n';
+                out << prefix << "axis_" << axis << "_z=" << empty.axes[axis].z << '\n';
+            }
+        }
+
+        out << "scene_group_count=" << m_ObjectGroups.size() << '\n';
+        for (std::size_t i = 0; i < m_ObjectGroups.size(); ++i)
+        {
+            const SceneGroup &group = m_ObjectGroups[i];
+            const std::string prefix = "scene_group_" + std::to_string(i) + "_";
+            out << prefix << "id=" << group.id << '\n';
+            out << prefix << "name=" << group.name << '\n';
+            out << prefix << "atom_ids=" << JoinCsv(group.atomIds) << '\n';
+            out << prefix << "atom_indices=" << JoinCsv(group.atomIndices) << '\n';
+            out << prefix << "empty_ids=" << JoinCsv(group.emptyIds) << '\n';
+            out << prefix << "empty_indices=" << JoinCsv(group.emptyIndices) << '\n';
+        }
     }
 
     void EditorLayer::OnImGuiRender()
@@ -2809,99 +3714,35 @@ namespace ds
         bool settingsChanged = false;
         const ImGuiIO &io = ImGui::GetIO();
 
-        auto uniquePush = [](std::vector<std::size_t> &container, std::size_t value)
         {
-            if (std::find(container.begin(), container.end(), value) == container.end())
+            ImGuiStyle &style = ImGui::GetStyle();
+            static bool spacingInit = false;
+            static ImVec2 baseItemSpacing(8.0f, 4.0f);
+            static ImVec2 baseItemInnerSpacing(4.0f, 4.0f);
+            static ImVec2 baseFramePadding(4.0f, 3.0f);
+            static float baseIndentSpacing = 21.0f;
+            if (!spacingInit)
             {
-                container.push_back(value);
+                baseItemSpacing = style.ItemSpacing;
+                baseItemInnerSpacing = style.ItemInnerSpacing;
+                baseFramePadding = style.FramePadding;
+                baseIndentSpacing = style.IndentSpacing;
+                spacingInit = true;
             }
-        };
 
-        auto uniquePushInt = [](std::vector<int> &container, int value)
+            const float s = glm::clamp(m_UiSpacingScale, 0.75f, 1.8f);
+            style.ItemSpacing = ImVec2(baseItemSpacing.x * s, baseItemSpacing.y * s);
+            style.ItemInnerSpacing = ImVec2(baseItemInnerSpacing.x * s, baseItemInnerSpacing.y * s);
+            style.FramePadding = ImVec2(baseFramePadding.x * s, baseFramePadding.y * s);
+            style.IndentSpacing = baseIndentSpacing * s;
+        }
+
+        static bool firstFrameLogged = false;
+        if (!firstFrameLogged)
         {
-            if (std::find(container.begin(), container.end(), value) == container.end())
-            {
-                container.push_back(value);
-            }
-        };
-
-        auto sanitizeGroup = [&](SceneGroup &group)
-        {
-            group.atomIndices.erase(
-                std::remove_if(group.atomIndices.begin(), group.atomIndices.end(), [&](std::size_t atomIndex)
-                               { return atomIndex >= m_WorkingStructure.atoms.size(); }),
-                group.atomIndices.end());
-            std::sort(group.atomIndices.begin(), group.atomIndices.end());
-            group.atomIndices.erase(std::unique(group.atomIndices.begin(), group.atomIndices.end()), group.atomIndices.end());
-
-            group.emptyIndices.erase(
-                std::remove_if(group.emptyIndices.begin(), group.emptyIndices.end(), [&](int emptyIndex)
-                               { return emptyIndex < 0 || emptyIndex >= static_cast<int>(m_TransformEmpties.size()); }),
-                group.emptyIndices.end());
-            std::sort(group.emptyIndices.begin(), group.emptyIndices.end());
-            group.emptyIndices.erase(std::unique(group.emptyIndices.begin(), group.emptyIndices.end()), group.emptyIndices.end());
-        };
-
-        auto selectGroup = [&](int groupIndex)
-        {
-            if (groupIndex < 0 || groupIndex >= static_cast<int>(m_ObjectGroups.size()))
-            {
-                return;
-            }
-
-            SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(groupIndex)];
-            sanitizeGroup(group);
-
-            m_SelectedAtomIndices = group.atomIndices;
-            m_SelectedTransformEmptyIndex = group.emptyIndices.empty() ? -1 : group.emptyIndices.front();
-            if (m_SelectedTransformEmptyIndex >= 0)
-            {
-                m_ActiveTransformEmptyIndex = m_SelectedTransformEmptyIndex;
-            }
-            m_GizmoEnabled = true;
-            m_InteractionMode = InteractionMode::Select;
-        };
-
-        auto addCurrentSelectionToGroup = [&](int groupIndex)
-        {
-            if (groupIndex < 0 || groupIndex >= static_cast<int>(m_ObjectGroups.size()))
-            {
-                return;
-            }
-
-            SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(groupIndex)];
-            for (std::size_t atomIndex : m_SelectedAtomIndices)
-            {
-                if (atomIndex < m_WorkingStructure.atoms.size())
-                {
-                    uniquePush(group.atomIndices, atomIndex);
-                }
-            }
-            if (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
-            {
-                uniquePushInt(group.emptyIndices, m_SelectedTransformEmptyIndex);
-            }
-            sanitizeGroup(group);
-        };
-
-        auto removeCurrentSelectionFromGroup = [&](int groupIndex)
-        {
-            if (groupIndex < 0 || groupIndex >= static_cast<int>(m_ObjectGroups.size()))
-            {
-                return;
-            }
-
-            SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(groupIndex)];
-            for (std::size_t atomIndex : m_SelectedAtomIndices)
-            {
-                group.atomIndices.erase(std::remove(group.atomIndices.begin(), group.atomIndices.end(), atomIndex), group.atomIndices.end());
-            }
-            if (m_SelectedTransformEmptyIndex >= 0)
-            {
-                group.emptyIndices.erase(std::remove(group.emptyIndices.begin(), group.emptyIndices.end(), m_SelectedTransformEmptyIndex), group.emptyIndices.end());
-            }
-            sanitizeGroup(group);
-        };
+            firstFrameLogged = true;
+            LogInfo("OnImGuiRender: first GUI frame reached.");
+        }
 
         static bool s_LastCanRenderTransformGizmo = false;
         static bool s_LastValidPivot = false;
@@ -2976,6 +3817,10 @@ namespace ds
                 {
                     settingsChanged = true;
                 }
+                if (ImGui::MenuItem("Settings", nullptr, &m_ShowSettingsPanel))
+                {
+                    settingsChanged = true;
+                }
                 ImGui::EndMenu();
             }
 
@@ -2987,11 +3832,6 @@ namespace ds
         m_ViewportHovered = ImGui::IsWindowHovered();
         m_BlockSelectionThisFrame = false;
         m_GizmoConsumedMouseThisFrame = false;
-
-        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Tab, false))
-        {
-            ToggleInteractionMode();
-        }
 
         auto beginTranslateMode = [&]()
         {
@@ -3008,8 +3848,9 @@ namespace ds
                  m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].selectable &&
                  IsCollectionVisible(m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].collectionIndex) &&
                  IsCollectionSelectable(m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].collectionIndex));
+            const bool hasSelectedSpecial = (m_SelectedSpecialNode != SpecialNodeSelection::None);
 
-            if (!m_Camera || !m_HasStructureLoaded || (m_SelectedAtomIndices.empty() && !hasSelectedEmpty))
+            if (!m_Camera || (m_SelectedAtomIndices.empty() && !hasSelectedEmpty && !hasSelectedSpecial))
             {
                 AppendSelectionDebugLog("Translate mode start denied: missing camera/structure/atom-or-empty-selection");
                 return;
@@ -3022,6 +3863,7 @@ namespace ds
             m_TranslateCurrentOffset = glm::vec3(0.0f);
             m_TranslateConstraintAxis = -1;
             m_TranslatePlaneLockAxis = -1;
+            m_TranslateSpecialNode = 0;
 
             for (std::size_t atomIndex : m_SelectedAtomIndices)
             {
@@ -3040,7 +3882,16 @@ namespace ds
                 m_TranslateEmptyInitialPosition = m_TransformEmpties[static_cast<std::size_t>(m_TranslateEmptyIndex)].position;
             }
 
-            if (m_TranslateIndices.empty() && m_TranslateEmptyIndex < 0)
+            if (hasSelectedSpecial)
+            {
+                if (m_SelectedSpecialNode == SpecialNodeSelection::Light)
+                {
+                    m_TranslateSpecialNode = 1;
+                    m_TranslateEmptyInitialPosition = m_LightPosition;
+                }
+            }
+
+            if (m_TranslateIndices.empty() && m_TranslateEmptyIndex < 0 && m_TranslateSpecialNode == 0)
             {
                 AppendSelectionDebugLog("Translate mode start denied: no valid selected atoms/empty");
                 return;
@@ -3118,6 +3969,10 @@ namespace ds
             {
                 m_TransformEmpties[static_cast<std::size_t>(m_TranslateEmptyIndex)].position = m_TranslateEmptyInitialPosition;
             }
+            if (m_TranslateSpecialNode == 1)
+            {
+                m_LightPosition = m_TranslateEmptyInitialPosition;
+            }
 
             m_TranslateModeActive = false;
             m_InteractionMode = InteractionMode::Select;
@@ -3128,6 +3983,7 @@ namespace ds
             m_TranslateCurrentOffset = glm::vec3(0.0f);
             m_TranslateConstraintAxis = -1;
             m_TranslatePlaneLockAxis = -1;
+            m_TranslateSpecialNode = 0;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Translate mode canceled.";
             AppendSelectionDebugLog("Translate mode canceled (Esc/RMB)");
@@ -3149,6 +4005,7 @@ namespace ds
             m_TranslateCurrentOffset = glm::vec3(0.0f);
             m_TranslateConstraintAxis = -1;
             m_TranslatePlaneLockAxis = -1;
+            m_TranslateSpecialNode = 0;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Translate mode applied.";
             AppendSelectionDebugLog("Translate mode applied (LMB/Enter)");
@@ -3196,6 +4053,224 @@ namespace ds
             AppendSelectionDebugLog("Rotate mode applied (LMB/Enter/R)");
         };
 
+        auto deleteCurrentSelection = [&]()
+        {
+            if (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
+            {
+                DeleteTransformEmptyAtIndex(m_SelectedTransformEmptyIndex);
+                settingsChanged = true;
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Deleted selected Empty.";
+                LogInfo(m_LastStructureMessage);
+                return;
+            }
+
+            if (!m_SelectedAtomIndices.empty() && m_HasStructureLoaded)
+            {
+                std::vector<std::size_t> uniqueIndices = m_SelectedAtomIndices;
+                std::sort(uniqueIndices.begin(), uniqueIndices.end());
+                uniqueIndices.erase(std::unique(uniqueIndices.begin(), uniqueIndices.end()), uniqueIndices.end());
+                uniqueIndices.erase(
+                    std::remove_if(uniqueIndices.begin(), uniqueIndices.end(), [&](std::size_t atomIndex)
+                                   { return atomIndex >= m_WorkingStructure.atoms.size(); }),
+                    uniqueIndices.end());
+
+                if (uniqueIndices.empty())
+                {
+                    return;
+                }
+
+                for (auto it = uniqueIndices.rbegin(); it != uniqueIndices.rend(); ++it)
+                {
+                    const std::size_t atomIndex = *it;
+                    m_WorkingStructure.atoms.erase(m_WorkingStructure.atoms.begin() + static_cast<std::ptrdiff_t>(atomIndex));
+                    if (atomIndex < m_AtomNodeIds.size())
+                    {
+                        m_AtomNodeIds.erase(m_AtomNodeIds.begin() + static_cast<std::ptrdiff_t>(atomIndex));
+                    }
+                }
+
+                m_WorkingStructure.RebuildSpeciesFromAtoms();
+                m_SelectedAtomIndices.clear();
+                m_SelectedTransformEmptyIndex = -1;
+
+                for (int groupIndex = 0; groupIndex < static_cast<int>(m_ObjectGroups.size()); ++groupIndex)
+                {
+                    SceneGroupingBackend::SanitizeGroup(*this, groupIndex);
+                }
+
+                settingsChanged = true;
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Deleted " + std::to_string(uniqueIndices.size()) + " selected atom(s).";
+                LogInfo(m_LastStructureMessage);
+                return;
+            }
+
+            if (m_ActiveGroupIndex >= 0)
+            {
+                if (SceneGroupingBackend::DeleteGroup(*this, m_ActiveGroupIndex))
+                {
+                    settingsChanged = true;
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Deleted active group.";
+                    LogInfo(m_LastStructureMessage);
+                }
+            }
+        };
+
+        auto applyPieSelection = [&](int slice)
+        {
+            cancelTranslateMode();
+            cancelRotateMode();
+
+            if (slice == 0)
+            {
+                m_InteractionMode = InteractionMode::Select;
+                m_LastStructureMessage = "Mode: Select";
+            }
+            else if (slice == 1)
+            {
+                m_InteractionMode = InteractionMode::Navigate;
+                m_LastStructureMessage = "Mode: Navigate";
+            }
+            else if (slice == 2)
+            {
+                m_InteractionMode = InteractionMode::ViewSet;
+                m_LastStructureMessage = "Mode: ViewSet";
+            }
+            else if (slice == 3)
+            {
+                m_GizmoEnabled = true;
+                m_GizmoOperationIndex = 0;
+                m_InteractionMode = InteractionMode::Select;
+                m_LastStructureMessage = "Transform mode: Translate gizmo (T).";
+            }
+            else if (slice == 4)
+            {
+                m_GizmoEnabled = true;
+                m_GizmoOperationIndex = 1;
+                m_InteractionMode = InteractionMode::Select;
+                m_LastStructureMessage = "Transform mode: Rotate gizmo (R).";
+            }
+            else if (slice == 5)
+            {
+                m_GizmoEnabled = true;
+                m_GizmoOperationIndex = 2;
+                m_InteractionMode = InteractionMode::Select;
+                m_LastStructureMessage = "Transform mode: Scale gizmo (S).";
+            }
+        };
+
+        const bool pieHotkeyHeld = (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyDown(ImGuiKey_Tab));
+        if (pieHotkeyHeld && !m_ModePieActive)
+        {
+            m_ModePieActive = true;
+            m_ModePiePopupPos = glm::vec2(io.MousePos.x, io.MousePos.y);
+            m_ModePieHoveredSlice = -1;
+        }
+
+        if (m_ModePieActive)
+        {
+            m_BlockSelectionThisFrame = true;
+
+            static const char *kPieLabels[] = {
+                "Select",
+                "Navigate",
+                "ViewSet",
+                "Move",
+                "Rotate",
+                "Scale"};
+
+            const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
+            const glm::vec2 center = m_ModePiePopupPos;
+            const glm::vec2 delta = mousePos - center;
+            const float distance = glm::length(delta);
+            const float twoPi = glm::two_pi<float>();
+            const float step = twoPi / 6.0f;
+
+            m_ModePieHoveredSlice = -1;
+            if (distance > 36.0f)
+            {
+                float angle = std::atan2(delta.y, delta.x);
+                if (angle < 0.0f)
+                {
+                    angle += twoPi;
+                }
+                m_ModePieHoveredSlice = static_cast<int>(angle / step);
+                if (m_ModePieHoveredSlice < 0)
+                {
+                    m_ModePieHoveredSlice = 0;
+                }
+                if (m_ModePieHoveredSlice > 5)
+                {
+                    m_ModePieHoveredSlice = 5;
+                }
+            }
+
+            ImDrawList *drawList = ImGui::GetForegroundDrawList();
+            const ImVec2 drawCenter(center.x, center.y);
+            constexpr float innerRadius = 40.0f;
+            constexpr float outerRadius = 126.0f;
+            for (int i = 0; i < 6; ++i)
+            {
+                const float startAngle = step * static_cast<float>(i) - step * 0.5f;
+                const float endAngle = startAngle + step;
+                const bool hovered = (m_ModePieHoveredSlice == i);
+                const ImU32 fillColor = hovered ? IM_COL32(90, 170, 250, 230) : IM_COL32(36, 43, 54, 220);
+                const ImU32 borderColor = hovered ? IM_COL32(170, 220, 255, 255) : IM_COL32(110, 130, 150, 230);
+
+                drawList->PathClear();
+                drawList->PathArcTo(drawCenter, outerRadius, startAngle, endAngle, 20);
+                drawList->PathArcTo(drawCenter, innerRadius, endAngle, startAngle, 12);
+                drawList->PathFillConvex(fillColor);
+                drawList->PathClear();
+                drawList->PathArcTo(drawCenter, outerRadius, startAngle, endAngle, 20);
+                drawList->PathArcTo(drawCenter, innerRadius, endAngle, startAngle, 12);
+                drawList->PathStroke(borderColor, ImDrawFlags_Closed, 1.5f);
+
+                const float midAngle = (startAngle + endAngle) * 0.5f;
+                const ImVec2 labelPos(
+                    drawCenter.x + std::cos(midAngle) * ((innerRadius + outerRadius) * 0.5f),
+                    drawCenter.y + std::sin(midAngle) * ((innerRadius + outerRadius) * 0.5f));
+                const ImVec2 textSize = ImGui::CalcTextSize(kPieLabels[i]);
+                drawList->AddText(ImVec2(labelPos.x - textSize.x * 0.5f, labelPos.y - textSize.y * 0.5f), IM_COL32(240, 245, 255, 255), kPieLabels[i]);
+            }
+
+            drawList->AddCircleFilled(drawCenter, innerRadius - 2.0f, IM_COL32(20, 24, 30, 230), 32);
+            drawList->AddCircle(drawCenter, innerRadius - 2.0f, IM_COL32(140, 160, 180, 255), 32, 1.5f);
+            const ImVec2 tabTextSize = ImGui::CalcTextSize("TAB");
+            drawList->AddText(ImVec2(drawCenter.x - tabTextSize.x * 0.5f, drawCenter.y - tabTextSize.y * 0.5f), IM_COL32(210, 220, 235, 255), "TAB");
+
+            if (!pieHotkeyHeld)
+            {
+                if (m_ModePieHoveredSlice >= 0)
+                {
+                    applyPieSelection(m_ModePieHoveredSlice);
+                }
+                m_ModePieActive = false;
+                m_ModePieHoveredSlice = -1;
+            }
+        }
+
+        if (m_ViewportFocused && !io.WantTextInput && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_A, false))
+        {
+            m_AddMenuPopupPos = glm::vec2(io.MousePos.x, io.MousePos.y);
+            ImGui::OpenPopup("AddSceneObjectPopup");
+            m_BlockSelectionThisFrame = true;
+        }
+
+        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+        {
+            deleteCurrentSelection();
+            m_BlockSelectionThisFrame = true;
+        }
+
+        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_N, false))
+        {
+            m_ShowToolsPanel = !m_ShowToolsPanel;
+            settingsChanged = true;
+        }
+
         const bool translateModalHotkey = ImGui::IsKeyPressed(ImGuiKey_G, false);
         const bool translateGizmoHotkey = (m_InteractionMode != InteractionMode::ViewSet && ImGui::IsKeyPressed(ImGuiKey_T, false));
 
@@ -3204,11 +4279,10 @@ namespace ds
             cancelTranslateMode();
             cancelRotateMode();
             beginTranslateMode();
-            m_GizmoEnabled = false;
             m_LastStructureOperationFailed = false;
-            if (!m_HasStructureLoaded || m_SelectedAtomIndices.empty())
+            if (m_SelectedAtomIndices.empty() && m_SelectedTransformEmptyIndex < 0 && m_SelectedSpecialNode == SpecialNodeSelection::None)
             {
-                m_LastStructureMessage = "Translate mode unavailable: select atoms first.";
+                m_LastStructureMessage = "Translate mode unavailable: select atoms, empty, or Light first.";
             }
             AppendSelectionDebugLog("Hotkey: G -> modal Translate");
         }
@@ -3259,58 +4333,6 @@ namespace ds
                 m_LastStructureMessage += " Select atoms or empty to use gizmo.";
             }
             AppendSelectionDebugLog("Hotkey: S -> gizmo Scale");
-        }
-
-        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Q, false))
-        {
-            m_ModePiePopupPos = glm::vec2(io.MousePos.x, io.MousePos.y);
-            ImGui::OpenPopup("InteractionModePie");
-        }
-
-        ImGui::SetNextWindowPos(ImVec2(m_ModePiePopupPos.x, m_ModePiePopupPos.y), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        if (ImGui::BeginPopup("InteractionModePie"))
-        {
-            ImGui::TextUnformatted("Interaction Mode");
-            ImGui::Separator();
-
-            if (ImGui::Selectable("Select"))
-            {
-                m_InteractionMode = InteractionMode::Select;
-                m_TranslateModeActive = false;
-            }
-            if (ImGui::Selectable("Navigate"))
-            {
-                m_InteractionMode = InteractionMode::Navigate;
-                m_TranslateModeActive = false;
-            }
-            if (ImGui::Selectable("ViewSet"))
-            {
-                m_InteractionMode = InteractionMode::ViewSet;
-                m_TranslateModeActive = false;
-            }
-            if (ImGui::Selectable("Gizmo: Translate (G)"))
-            {
-                m_GizmoEnabled = true;
-                m_GizmoOperationIndex = 0;
-                m_InteractionMode = InteractionMode::Select;
-            }
-            if (ImGui::Selectable("Gizmo: Rotate around 3D Cursor (R)"))
-            {
-                m_GizmoEnabled = true;
-                m_GizmoOperationIndex = 1;
-                m_InteractionMode = InteractionMode::Select;
-            }
-            if (ImGui::Selectable("Gizmo: Scale (S)"))
-            {
-                m_GizmoEnabled = true;
-                m_GizmoOperationIndex = 2;
-                m_InteractionMode = InteractionMode::Select;
-            }
-
-            ImGui::Separator();
-            ImGui::TextUnformatted("Q: open pie");
-            ImGui::TextUnformatted("G/T/R/S: switch transform gizmo");
-            ImGui::EndPopup();
         }
 
         if (m_TranslateModeActive && m_Camera)
@@ -3395,6 +4417,10 @@ namespace ds
                     }
                     translatePivot /= static_cast<float>(m_TranslateInitialCartesian.size());
                 }
+                else if (m_TranslateSpecialNode == 1)
+                {
+                    translatePivot = m_TranslateEmptyInitialPosition;
+                }
 
                 std::array<glm::vec3, 3> transformAxes = ResolveTransformAxes(translatePivot);
                 if (m_TranslateEmptyIndex >= 0 && m_TranslateEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
@@ -3440,7 +4466,52 @@ namespace ds
 
                 if (m_TranslateConstraintAxis >= 0 && m_TranslateConstraintAxis < 3)
                 {
-                    frameDelta = axis[m_TranslateConstraintAxis] * glm::dot(frameDelta, axis[m_TranslateConstraintAxis]);
+                    glm::vec3 axisWorld = axis[m_TranslateConstraintAxis];
+                    if (glm::length2(axisWorld) > 1e-8f)
+                    {
+                        axisWorld = glm::normalize(axisWorld);
+
+                        auto projectToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen) -> bool
+                        {
+                            const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(world, 1.0f);
+                            if (clip.w <= 1e-6f)
+                            {
+                                return false;
+                            }
+
+                            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                            const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                            const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                            outScreen = glm::vec2(
+                                m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                                m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+                            return true;
+                        };
+
+                        const float axisProbe = std::max(0.25f, m_Camera->GetDistance() * 0.2f);
+                        glm::vec2 axisA(0.0f);
+                        glm::vec2 axisB(0.0f);
+                        if (projectToScreen(translatePivot - axisWorld * axisProbe, axisA) && projectToScreen(translatePivot + axisWorld * axisProbe, axisB))
+                        {
+                            const glm::vec2 axisScreen = axisB - axisA;
+                            const float axisScreenLen = glm::length(axisScreen);
+                            if (axisScreenLen > 1.0f)
+                            {
+                                const glm::vec2 axisDirScreen = axisScreen / axisScreenLen;
+                                const float worldPerPixel = (2.0f * axisProbe) / axisScreenLen;
+                                const float mouseSigned = glm::dot(mouseDelta, axisDirScreen);
+                                frameDelta = axisWorld * (mouseSigned * worldPerPixel);
+                            }
+                            else
+                            {
+                                frameDelta = axisWorld * glm::dot(frameDelta, axisWorld);
+                            }
+                        }
+                        else
+                        {
+                            frameDelta = axisWorld * glm::dot(frameDelta, axisWorld);
+                        }
+                    }
                 }
                 else if (m_TranslatePlaneLockAxis >= 0 && m_TranslatePlaneLockAxis < 3)
                 {
@@ -3487,6 +4558,10 @@ namespace ds
                 if (m_TranslateEmptyIndex >= 0 && m_TranslateEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
                 {
                     m_TransformEmpties[static_cast<std::size_t>(m_TranslateEmptyIndex)].position = m_TranslateEmptyInitialPosition + appliedOffset;
+                }
+                if (m_TranslateSpecialNode == 1)
+                {
+                    m_LightPosition = m_TranslateEmptyInitialPosition + appliedOffset;
                 }
 
                 m_BlockSelectionThisFrame = true;
@@ -3657,7 +4732,7 @@ namespace ds
 
                 if (m_ShowGlobalAxesOverlay && m_Camera)
                 {
-                    const glm::vec3 origin(0.0f, 0.0f, 0.0f);
+                    const glm::vec3 origin = m_SceneOriginPosition;
                     const float sceneExtent = std::max(3.0f, m_SceneSettings.gridSpacing * static_cast<float>(std::max(2, m_SceneSettings.gridHalfExtent)));
                     const float axisLen = std::max(sceneExtent * 2.0f, m_Camera->GetDistance() * 2.4f);
                     auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen) -> bool
@@ -3870,7 +4945,8 @@ namespace ds
                      m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].selectable &&
                      IsCollectionVisible(m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].collectionIndex) &&
                      IsCollectionSelectable(m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].collectionIndex));
-                const bool canRenderTransformGizmo = m_GizmoEnabled && m_Camera && ((m_HasStructureLoaded && !m_SelectedAtomIndices.empty()) || hasSelectedEmpty);
+                const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
+                const bool canRenderTransformGizmo = m_GizmoEnabled && m_Camera && ((m_HasStructureLoaded && !m_SelectedAtomIndices.empty()) || hasSelectedEmpty || hasSelectedLight);
                 if (canRenderTransformGizmo != s_LastCanRenderTransformGizmo || m_SelectedAtomIndices.size() != s_LastSelectedCount)
                 {
                     std::ostringstream gizmoPreconditionsLog;
@@ -3879,7 +4955,8 @@ namespace ds
                                           << " hasCamera=" << (m_Camera ? "1" : "0")
                                           << " hasStructure=" << (m_HasStructureLoaded ? "1" : "0")
                                           << " selectedCount=" << m_SelectedAtomIndices.size()
-                                          << " selectedEmpty=" << (hasSelectedEmpty ? "1" : "0");
+                                          << " selectedEmpty=" << (hasSelectedEmpty ? "1" : "0")
+                                          << " selectedLight=" << (hasSelectedLight ? "1" : "0");
                     AppendSelectionDebugLog(gizmoPreconditionsLog.str());
                     s_LastCanRenderTransformGizmo = canRenderTransformGizmo;
                     s_LastSelectedCount = m_SelectedAtomIndices.size();
@@ -3893,6 +4970,11 @@ namespace ds
                     if (hasSelectedEmpty)
                     {
                         pivot = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position;
+                        validCount = 1;
+                    }
+                    else if (hasSelectedLight)
+                    {
+                        pivot = m_LightPosition;
                         validCount = 1;
                     }
                     else if (m_RotateModeActive || m_GizmoOperationIndex == 1)
@@ -4346,6 +5428,11 @@ namespace ds
                                             m_LastStructureOperationFailed = false;
                                             m_LastStructureMessage = "Fallback rotate applied to selected empty.";
                                         }
+                                        else if (hasSelectedLight)
+                                        {
+                                            m_LastStructureOperationFailed = false;
+                                            m_LastStructureMessage = "Fallback rotate skipped for light (position-only helper).";
+                                        }
                                         else
                                             for (std::size_t atomIndex : m_SelectedAtomIndices)
                                             {
@@ -4360,7 +5447,7 @@ namespace ds
                                                 SetAtomCartesianPosition(atomIndex, pivot + rotated);
                                             }
 
-                                        if (!hasSelectedEmpty)
+                                        if (!hasSelectedEmpty && !hasSelectedLight)
                                         {
                                             m_LastStructureOperationFailed = false;
                                             m_LastStructureMessage = "Fallback rotate applied to selection (" + std::to_string(m_SelectedAtomIndices.size()) + " atoms).";
@@ -4396,6 +5483,12 @@ namespace ds
                                                 m_LastStructureOperationFailed = false;
                                                 m_LastStructureMessage = "Fallback scale applied to selected empty.";
                                             }
+                                            else if (hasSelectedLight)
+                                            {
+                                                m_LightPosition = pivot + (m_LightPosition - pivot) * factor;
+                                                m_LastStructureOperationFailed = false;
+                                                m_LastStructureMessage = "Fallback scale applied to light helper.";
+                                            }
                                             else
                                                 for (std::size_t atomIndex : m_SelectedAtomIndices)
                                                 {
@@ -4412,7 +5505,7 @@ namespace ds
                                                     SetAtomCartesianPosition(atomIndex, pivot + scaled);
                                                 }
 
-                                            if (!hasSelectedEmpty)
+                                            if (!hasSelectedEmpty && !hasSelectedLight)
                                             {
                                                 m_LastStructureOperationFailed = false;
                                                 m_LastStructureMessage = "Fallback scale applied to selection (" + std::to_string(m_SelectedAtomIndices.size()) + " atoms).";
@@ -4431,6 +5524,12 @@ namespace ds
                                                 m_LastStructureOperationFailed = false;
                                                 m_LastStructureMessage = "Fallback translate applied to selected empty.";
                                             }
+                                            else if (hasSelectedLight)
+                                            {
+                                                m_LightPosition += worldDelta;
+                                                m_LastStructureOperationFailed = false;
+                                                m_LastStructureMessage = "Fallback translate applied to light helper.";
+                                            }
                                             else
                                                 for (std::size_t atomIndex : m_SelectedAtomIndices)
                                                 {
@@ -4443,7 +5542,7 @@ namespace ds
                                                     SetAtomCartesianPosition(atomIndex, atomCartesian + worldDelta);
                                                 }
 
-                                            if (!hasSelectedEmpty)
+                                            if (!hasSelectedEmpty && !hasSelectedLight)
                                             {
                                                 m_LastStructureOperationFailed = false;
                                                 m_LastStructureMessage = "Fallback gizmo drag applied to selection (" + std::to_string(m_SelectedAtomIndices.size()) + " atoms).";
@@ -4483,6 +5582,12 @@ namespace ds
                                 m_LastStructureOperationFailed = false;
                                 m_LastStructureMessage = "Gizmo transform applied to selected empty.";
                             }
+                            else if (hasSelectedLight)
+                            {
+                                m_LightPosition = glm::vec3(gizmoTransform[3]);
+                                m_LastStructureOperationFailed = false;
+                                m_LastStructureMessage = "Gizmo transform applied to light helper.";
+                            }
                             else
                                 for (std::size_t atomIndex : m_SelectedAtomIndices)
                                 {
@@ -4496,7 +5601,7 @@ namespace ds
                                     SetAtomCartesianPosition(atomIndex, transformed);
                                 }
 
-                            if (!hasSelectedEmpty)
+                            if (!hasSelectedEmpty && !hasSelectedLight)
                             {
                                 m_LastStructureOperationFailed = false;
                                 m_LastStructureMessage = "Gizmo transform applied to selection (" + std::to_string(m_SelectedAtomIndices.size()) + " atoms).";
@@ -4549,6 +5654,40 @@ namespace ds
                     const float rotateWidgetWidth = 256.0f * m_ViewGizmoScale;
                     const ImVec2 rotatePos(rectMax.x - rotateWidgetWidth - m_ViewGizmoOffsetRight, rectMin.y + m_ViewGizmoOffsetTop);
 
+                    if (m_ViewGizmoDragMode)
+                    {
+                        const ImVec2 dragMin = rotatePos;
+                        const ImVec2 dragMax(rotatePos.x + rotateWidgetWidth, rotatePos.y + rotateWidgetWidth);
+                        const bool mouseInDragZone =
+                            io.MousePos.x >= dragMin.x && io.MousePos.x <= dragMax.x &&
+                            io.MousePos.y >= dragMin.y && io.MousePos.y <= dragMax.y;
+
+                        if (!m_ViewGizmoDragging && mouseInDragZone && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                        {
+                            m_ViewGizmoDragging = true;
+                            m_ViewGizmoDragAnchor = glm::vec2(io.MousePos.x, io.MousePos.y);
+                            m_ViewGizmoStartOffsetRight = m_ViewGizmoOffsetRight;
+                            m_ViewGizmoStartOffsetTop = m_ViewGizmoOffsetTop;
+                            m_BlockSelectionThisFrame = true;
+                        }
+
+                        if (m_ViewGizmoDragging)
+                        {
+                            if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                            {
+                                const glm::vec2 delta = glm::vec2(io.MousePos.x, io.MousePos.y) - m_ViewGizmoDragAnchor;
+                                m_ViewGizmoOffsetRight = glm::max(0.0f, m_ViewGizmoStartOffsetRight - delta.x);
+                                m_ViewGizmoOffsetTop = glm::max(0.0f, m_ViewGizmoStartOffsetTop + delta.y);
+                                m_BlockSelectionThisFrame = true;
+                                settingsChanged = true;
+                            }
+                            else
+                            {
+                                m_ViewGizmoDragging = false;
+                            }
+                        }
+                    }
+
                     bool viewChanged = false;
                     viewChanged |= ImViewGuizmo::Rotate(cameraPosition, cameraRotation, target, rotatePos, 0.0125f);
 
@@ -4568,6 +5707,49 @@ namespace ds
                     }
                 }
 
+                {
+                    ImDrawList *overlayDraw = ImGui::GetWindowDrawList();
+                    auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen) -> bool
+                    {
+                        const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(world, 1.0f);
+                        if (clip.w <= 0.0001f)
+                        {
+                            return false;
+                        }
+
+                        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                        if (ndc.x < -1.05f || ndc.x > 1.05f || ndc.y < -1.05f || ndc.y > 1.05f || ndc.z < -1.0f || ndc.z > 1.0f)
+                        {
+                            return false;
+                        }
+
+                        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                        outScreen = glm::vec2(
+                            m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                            m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+                        return true;
+                    };
+
+                    glm::vec2 originScreen(0.0f);
+                    if (projectWorldToScreen(m_SceneOriginPosition, originScreen))
+                    {
+                        const ImU32 originColor = IM_COL32(235, 200, 65, 235);
+                        overlayDraw->AddCircleFilled(ImVec2(originScreen.x, originScreen.y), 5.0f, originColor, 20);
+                        overlayDraw->AddText(ImVec2(originScreen.x + 8.0f, originScreen.y - 8.0f), IM_COL32(242, 235, 205, 230), "Origin");
+                    }
+
+                    glm::vec2 lightScreen(0.0f);
+                    if (projectWorldToScreen(m_LightPosition, lightScreen))
+                    {
+                        const ImU32 sunColor = ImGui::ColorConvertFloat4ToU32(
+                            ImVec4(m_SceneSettings.lightColor.r, m_SceneSettings.lightColor.g, m_SceneSettings.lightColor.b, 0.95f));
+                        overlayDraw->AddCircleFilled(ImVec2(lightScreen.x, lightScreen.y), 7.0f, sunColor, 20);
+                        overlayDraw->AddCircle(ImVec2(lightScreen.x, lightScreen.y), 9.0f, IM_COL32(255, 255, 255, 220), 20, 1.2f);
+                        overlayDraw->AddText(ImVec2(lightScreen.x + 10.0f, lightScreen.y - 8.0f), IM_COL32(235, 240, 248, 230), "Light");
+                    }
+                }
+
                 if (ImGui::BeginPopupContextItem("ViewportSelectionContext", ImGuiPopupFlags_MouseButtonRight))
                 {
                     const bool hasLoadedAtoms = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
@@ -4577,6 +5759,7 @@ namespace ds
                     {
                         m_SelectedAtomIndices.clear();
                         m_SelectedTransformEmptyIndex = -1;
+                        m_SelectedSpecialNode = SpecialNodeSelection::None;
                         m_SelectedAtomIndices.reserve(m_WorkingStructure.atoms.size());
                         for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
                         {
@@ -4589,6 +5772,7 @@ namespace ds
                     {
                         m_SelectedAtomIndices.clear();
                         m_SelectedTransformEmptyIndex = -1;
+                        m_SelectedSpecialNode = SpecialNodeSelection::None;
                         AppendSelectionDebugLog("Context menu: Clear Selection");
                     }
 
@@ -4605,6 +5789,7 @@ namespace ds
                         }
                         m_SelectedAtomIndices = std::move(inverted);
                         m_SelectedTransformEmptyIndex = -1;
+                        m_SelectedSpecialNode = SpecialNodeSelection::None;
                         AppendSelectionDebugLog("Context menu: Invert Selection");
                     }
 
@@ -4670,6 +5855,20 @@ namespace ds
                             }
                         }
 
+                        if (ImGui::MenuItem("Origin", nullptr, false, true))
+                        {
+                            m_CursorPosition = m_SceneOriginPosition;
+                            AppendSelectionDebugLog("Context menu: Cursor -> Origin");
+                            settingsChanged = true;
+                        }
+
+                        if (ImGui::MenuItem("Active Empty", nullptr, false, HasActiveTransformEmpty()))
+                        {
+                            m_CursorPosition = m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].position;
+                            AppendSelectionDebugLog("Context menu: Cursor -> Active Empty");
+                            settingsChanged = true;
+                        }
+
                         ImGui::EndMenu();
                     }
 
@@ -4678,8 +5877,10 @@ namespace ds
                         if (ImGui::MenuItem("Add at 3D cursor", nullptr, false, m_HasStructureLoaded))
                         {
                             TransformEmpty empty;
+                            empty.id = GenerateSceneUUID();
                             empty.position = m_CursorPosition;
                             empty.collectionIndex = m_ActiveCollectionIndex;
+                            empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
                             char label[32] = {};
                             std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
                             empty.name = label;
@@ -4692,9 +5893,11 @@ namespace ds
                         if (ImGui::MenuItem("Add at selection center", nullptr, false, m_HasStructureLoaded && !m_SelectedAtomIndices.empty()))
                         {
                             TransformEmpty empty;
+                            empty.id = GenerateSceneUUID();
                             empty.position = ComputeSelectionCenter();
                             ComputeSelectionAxesAround(empty.position, empty.axes);
                             empty.collectionIndex = m_ActiveCollectionIndex;
+                            empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
                             char label[32] = {};
                             std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
                             empty.name = label;
@@ -4713,6 +5916,47 @@ namespace ds
                             AppendSelectionDebugLog("Context menu: Active Empty -> temporary transform");
                         }
 
+                        if (ImGui::MenuItem("Select active empty", nullptr, false, HasActiveTransformEmpty()))
+                        {
+                            m_SelectedTransformEmptyIndex = m_ActiveTransformEmptyIndex;
+                            m_SelectedAtomIndices.clear();
+                            AppendSelectionDebugLog("Context menu: Select active empty");
+                        }
+
+                        if (ImGui::MenuItem("Move active empty to 3D cursor", nullptr, false, HasActiveTransformEmpty()))
+                        {
+                            m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].position = m_CursorPosition;
+                            settingsChanged = true;
+                            AppendSelectionDebugLog("Context menu: Move active empty -> 3D cursor");
+                        }
+
+                        if (ImGui::MenuItem("Move active empty to selection center", nullptr, false, HasActiveTransformEmpty() && !m_SelectedAtomIndices.empty()))
+                        {
+                            m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].position = ComputeSelectionCenter();
+                            settingsChanged = true;
+                            AppendSelectionDebugLog("Context menu: Move active empty -> selection center");
+                        }
+
+                        if (ImGui::MenuItem("Align active empty axes to world", nullptr, false, HasActiveTransformEmpty()))
+                        {
+                            TransformEmpty &activeEmpty = m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)];
+                            activeEmpty.axes = {
+                                glm::vec3(1.0f, 0.0f, 0.0f),
+                                glm::vec3(0.0f, 1.0f, 0.0f),
+                                glm::vec3(0.0f, 0.0f, 1.0f)};
+                            settingsChanged = true;
+                            AppendSelectionDebugLog("Context menu: Align active empty axes -> world");
+                        }
+
+                        if (ImGui::MenuItem("Align active empty Z to selected atoms", nullptr, false, HasActiveTransformEmpty() && m_SelectedAtomIndices.size() >= 2))
+                        {
+                            if (AlignEmptyZAxisFromSelectedAtoms(m_ActiveTransformEmptyIndex))
+                            {
+                                settingsChanged = true;
+                                AppendSelectionDebugLog("Context menu: Align active empty Z -> selected atoms");
+                            }
+                        }
+
                         if (ImGui::MenuItem("Delete active empty", nullptr, false, HasActiveTransformEmpty()))
                         {
                             DeleteTransformEmptyAtIndex(m_ActiveTransformEmptyIndex);
@@ -4727,35 +5971,146 @@ namespace ds
                         const bool hasSelection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
                         if (ImGui::MenuItem("Create group from selection", nullptr, false, hasSelection))
                         {
-                            SceneGroup group;
-                            char label[48] = {};
-                            std::snprintf(label, sizeof(label), "Group %d", m_GroupCounter++);
-                            group.name = label;
-                            group.atomIndices = m_SelectedAtomIndices;
-                            if (m_SelectedTransformEmptyIndex >= 0)
-                            {
-                                group.emptyIndices.push_back(m_SelectedTransformEmptyIndex);
-                            }
-                            m_ObjectGroups.push_back(group);
-                            m_ActiveGroupIndex = static_cast<int>(m_ObjectGroups.size()) - 1;
+                            settingsChanged |= SceneGroupingBackend::CreateGroupFromCurrentSelection(*this);
                         }
 
                         if (ImGui::MenuItem("Add selection to active group", nullptr, false, hasSelection && m_ActiveGroupIndex >= 0))
                         {
-                            addCurrentSelectionToGroup(m_ActiveGroupIndex);
+                            SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
+                            settingsChanged = true;
                         }
 
                         if (ImGui::MenuItem("Remove selection from active group", nullptr, false, hasSelection && m_ActiveGroupIndex >= 0))
                         {
-                            removeCurrentSelectionFromGroup(m_ActiveGroupIndex);
+                            SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
+                            settingsChanged = true;
                         }
 
                         if (ImGui::MenuItem("Select active group", nullptr, false, m_ActiveGroupIndex >= 0))
                         {
-                            selectGroup(m_ActiveGroupIndex);
+                            SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
+                        }
+
+                        if (ImGui::MenuItem("Delete active group", nullptr, false, m_ActiveGroupIndex >= 0))
+                        {
+                            settingsChanged |= SceneGroupingBackend::DeleteGroup(*this, m_ActiveGroupIndex);
                         }
 
                         ImGui::EndMenu();
+                    }
+
+                    if (ImGui::BeginMenu("Selection Utilities"))
+                    {
+                        const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+                        const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
+                        if (ImGui::MenuItem("Move selected objects to 3D cursor", nullptr, false, !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight))
+                        {
+                            if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                            {
+                                m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
+                            }
+                            else if (hasSelectedLight && m_SelectedAtomIndices.empty())
+                            {
+                                m_LightPosition = m_CursorPosition;
+                            }
+                            else
+                            {
+                                const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                                const glm::vec3 delta = m_CursorPosition - selectionCenter;
+                                for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                                {
+                                    if (atomIndex >= m_WorkingStructure.atoms.size())
+                                    {
+                                        continue;
+                                    }
+                                    SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                                }
+                            }
+                            settingsChanged = true;
+                            AppendSelectionDebugLog("Context menu: Selection center -> 3D cursor");
+                        }
+
+                        if (ImGui::MenuItem("Select active group", nullptr, false, m_ActiveGroupIndex >= 0))
+                        {
+                            SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
+                            AppendSelectionDebugLog("Context menu: Select active group");
+                        }
+
+                        if (ImGui::MenuItem("Move selected to Origin", nullptr, false, !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight))
+                        {
+                            if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                            {
+                                m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_SceneOriginPosition;
+                            }
+                            else if (hasSelectedLight && m_SelectedAtomIndices.empty())
+                            {
+                                m_LightPosition = m_SceneOriginPosition;
+                            }
+                            else
+                            {
+                                const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                                const glm::vec3 delta = m_SceneOriginPosition - selectionCenter;
+                                for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                                {
+                                    if (atomIndex >= m_WorkingStructure.atoms.size())
+                                    {
+                                        continue;
+                                    }
+                                    SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                                }
+                            }
+                            settingsChanged = true;
+                            AppendSelectionDebugLog("Context menu: Selection center -> Origin");
+                        }
+
+                        ImGui::EndMenu();
+                    }
+
+                    ImGui::EndPopup();
+                }
+
+                ImGui::SetNextWindowPos(ImVec2(m_AddMenuPopupPos.x, m_AddMenuPopupPos.y), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                if (ImGui::BeginPopup("AddSceneObjectPopup"))
+                {
+                    if (ImGui::MenuItem("Atom...", "Shift+A"))
+                    {
+                        m_AddAtomPosition = m_CursorPosition;
+                        m_AddAtomCoordinateModeIndex = 1;
+                        m_ShowAddAtomDialog = true;
+                    }
+
+                    if (ImGui::MenuItem("Empty at 3D cursor", "Shift+A"))
+                    {
+                        TransformEmpty empty;
+                        empty.id = GenerateSceneUUID();
+                        empty.position = m_CursorPosition;
+                        empty.collectionIndex = m_ActiveCollectionIndex;
+                        empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
+                        char label[32] = {};
+                        std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
+                        empty.name = label;
+                        m_TransformEmpties.push_back(empty);
+                        m_ActiveTransformEmptyIndex = static_cast<int>(m_TransformEmpties.size()) - 1;
+                        m_SelectedTransformEmptyIndex = m_ActiveTransformEmptyIndex;
+                        settingsChanged = true;
+                    }
+
+                    const bool canAddFromSelection = m_HasStructureLoaded && !m_SelectedAtomIndices.empty();
+                    if (ImGui::MenuItem("Empty at selection center", "Shift+A", false, canAddFromSelection))
+                    {
+                        TransformEmpty empty;
+                        empty.id = GenerateSceneUUID();
+                        empty.position = ComputeSelectionCenter();
+                        ComputeSelectionAxesAround(empty.position, empty.axes);
+                        empty.collectionIndex = m_ActiveCollectionIndex;
+                        empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
+                        char label[32] = {};
+                        std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
+                        empty.name = label;
+                        m_TransformEmpties.push_back(empty);
+                        m_ActiveTransformEmptyIndex = static_cast<int>(m_TransformEmpties.size()) - 1;
+                        m_SelectedTransformEmptyIndex = m_ActiveTransformEmptyIndex;
+                        settingsChanged = true;
                     }
 
                     ImGui::EndPopup();
@@ -4833,6 +6188,10 @@ namespace ds
 
         ImGui::Begin("Viewport Info");
         ImGui::Text("Size: %.0f x %.0f", size.x, size.y);
+        ImGui::Text("Render: %u x %u (%.0f%%)",
+                    static_cast<unsigned int>(std::max(1.0f, m_ViewportSize.x * m_ViewportRenderScale)),
+                    static_cast<unsigned int>(std::max(1.0f, m_ViewportSize.y * m_ViewportRenderScale)),
+                    m_ViewportRenderScale * 100.0f);
         ImGui::Text("Focused: %s | Hovered: %s", m_ViewportFocused ? "yes" : "no", m_ViewportHovered ? "yes" : "no");
         ImGui::Text("ImGui capture: mouse=%s keyboard=%s", io.WantCaptureMouse ? "yes" : "no", io.WantCaptureKeyboard ? "yes" : "no");
         ImGui::Text("3D Cursor: (%.3f, %.3f, %.3f)", m_CursorPosition.x, m_CursorPosition.y, m_CursorPosition.z);
@@ -4849,6 +6208,7 @@ namespace ds
         if (m_ViewportSettingsOpen)
         {
             ImGui::Begin("Viewport Settings", &m_ViewportSettingsOpen);
+            ImGui::PushItemWidth(210.0f);
 
             if (ImGui::ColorEdit3("Background", &m_SceneSettings.clearColor.x))
             {
@@ -4903,8 +6263,18 @@ namespace ds
                 settingsChanged = true;
             }
 
+            if (ImGui::ColorEdit3("Light color", &m_SceneSettings.lightColor.x))
+            {
+                settingsChanged = true;
+            }
+
             ImGui::Separator();
             ImGui::TextUnformatted("Projection");
+
+            if (ImGui::SliderFloat("Render scale", &m_ViewportRenderScale, 0.25f, 1.0f, "%.2fx"))
+            {
+                settingsChanged = true;
+            }
 
             const char *projectionModes[] = {"Perspective", "Orthographic"};
             if (ImGui::Combo("Mode", &m_ProjectionModeIndex, projectionModes, IM_ARRAYSIZE(projectionModes)))
@@ -4947,6 +6317,11 @@ namespace ds
                 settingsChanged = true;
             }
 
+            if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, 0.0f, 0.60f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
             if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
             {
                 settingsChanged = true;
@@ -4968,17 +6343,107 @@ namespace ds
                 settingsChanged = true;
             }
 
+            ImGui::SeparatorText("Axis & Cursor Colors");
+            constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
+            if (ImGui::ColorEdit3("Axis X color", &m_AxisColors[0].x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Axis Y color", &m_AxisColors[1].x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Axis Z color", &m_AxisColors[2].x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Cursor color", &m_CursorColor.x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("Camera & UI");
+            int currentTheme = static_cast<int>(m_CurrentTheme);
+            const char *items[] = {
+                "Dark",
+                "Light",
+                "Classic",
+                "PhotoshopStyle",
+                "WarmSlate"};
+
+            if (ImGui::Combo("Style preset", &currentTheme, items, IM_ARRAYSIZE(items)))
+            {
+                m_CurrentTheme = static_cast<ThemePreset>(currentTheme);
+                ApplyTheme(m_CurrentTheme);
+                settingsChanged = true;
+            }
+
+            float uiScale = m_FontScale;
+            if (ImGui::SliderFloat("Font size scale", &uiScale, 0.7f, 2.0f, "%.2f"))
+            {
+                ApplyFontScale(uiScale);
+                settingsChanged = true;
+            }
+
+            float orbitSensitivity = m_CameraOrbitSensitivity;
+            if (ImGui::SliderFloat("Orbit sensitivity", &orbitSensitivity, 0.05f, 4.0f, "%.2fx"))
+            {
+                m_CameraOrbitSensitivity = orbitSensitivity;
+                ApplyCameraSensitivity();
+                settingsChanged = true;
+            }
+
+            float panSensitivity = m_CameraPanSensitivity;
+            if (ImGui::SliderFloat("Pan sensitivity", &panSensitivity, 0.05f, 4.0f, "%.2fx"))
+            {
+                m_CameraPanSensitivity = panSensitivity;
+                ApplyCameraSensitivity();
+                settingsChanged = true;
+            }
+
+            float zoomSensitivity = m_CameraZoomSensitivity;
+            if (ImGui::SliderFloat("Zoom sensitivity", &zoomSensitivity, 0.05f, 4.0f, "%.2fx"))
+            {
+                m_CameraZoomSensitivity = zoomSensitivity;
+                ApplyCameraSensitivity();
+                settingsChanged = true;
+            }
+
+            ImGui::PopItemWidth();
+
             ImGui::End();
         }
 
-        ImGui::Begin("Tools");
-
-        const char *coordinateModes[] = {"Direct", "Cartesian"};
-        const char *gizmoOperations[] = {"Translate", "Rotate", "Scale"};
-        const char *gizmoModes[] = {"Local (selection)", "World", "Relative (surrounding)"};
-
-        if (ImGui::CollapsingHeader("Actions", ImGuiTreeNodeFlags_DefaultOpen))
+        if (!m_ShowToolsPanel)
         {
+            const ImVec2 workPos = viewport->WorkPos;
+            const ImVec2 workSize = viewport->WorkSize;
+            ImGui::SetNextWindowPos(ImVec2(workPos.x + workSize.x - 28.0f, workPos.y + 120.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(24.0f, 120.0f), ImGuiCond_Always);
+            ImGui::Begin("##ToolsCollapsedStrip", nullptr,
+                         ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoDocking |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoSavedSettings);
+            ImGui::Dummy(ImVec2(1.0f, 8.0f));
+            if (ImGui::Button(">", ImVec2(20.0f, 36.0f)))
+            {
+                m_ShowToolsPanel = true;
+                settingsChanged = true;
+            }
+            ImGui::Spacing();
+            ImGui::TextUnformatted("N");
+            ImGui::End();
+        }
+
+        if (m_ShowToolsPanel)
+        {
+            ImGui::SetNextWindowSize(ImVec2(460.0f, 780.0f), ImGuiCond_FirstUseEver);
+            ImGui::Begin("Tools", &m_ShowToolsPanel);
+
+            const char *coordinateModes[] = {"Direct", "Cartesian"};
+
+            ImGui::SeparatorText("Workflow");
             ImGui::SeparatorText("Structure I/O");
             ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
             ImGui::SameLine();
@@ -5060,20 +6525,139 @@ namespace ds
             {
                 ImGui::Text("Selected empty: %s", m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].name.c_str());
             }
-            if (ImGui::Button("Toggle mode (Tab)"))
+            if (ImGui::Button("Cycle mode"))
             {
                 ToggleInteractionMode();
             }
             ImGui::SameLine();
-            DrawInlineHelpMarker("Selection: LMB select, Ctrl+LMB add/remove, B then drag for box select.\nViewSet: T/B/L/R/P/K to snap camera.");
+            DrawInlineHelpMarker("Selection: LMB select, Ctrl+LMB add/remove, B then drag for box select.\nHold Tab to open radial PieMenu for mode switching.\nViewSet: T/B/L/R/P/K to snap camera.");
 
             if (ImGui::Button("Clear selection"))
             {
                 m_SelectedAtomIndices.clear();
                 m_SelectedTransformEmptyIndex = -1;
+                m_SelectedSpecialNode = SpecialNodeSelection::None;
             }
             ImGui::SameLine();
             DrawInlineHelpMarker("Transform shortcuts in viewport: G translate, R rotate, S scale.\nIn ViewSet, R works as Right View.");
+
+            const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+            const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
+            const bool canMoveSelectionToCursor = !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight;
+            if (!canMoveSelectionToCursor)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Move selected objects to 3D cursor") && canMoveSelectionToCursor)
+            {
+                if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                {
+                    m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
+                }
+                else if (hasSelectedLight && m_SelectedAtomIndices.empty())
+                {
+                    m_LightPosition = m_CursorPosition;
+                }
+                else
+                {
+                    const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                    const glm::vec3 delta = m_CursorPosition - selectionCenter;
+                    for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= m_WorkingStructure.atoms.size())
+                        {
+                            continue;
+                        }
+                        SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                    }
+                }
+                settingsChanged = true;
+            }
+            if (!canMoveSelectionToCursor)
+            {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Move selected to Origin") && canMoveSelectionToCursor)
+            {
+                if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                {
+                    m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_SceneOriginPosition;
+                }
+                else if (hasSelectedLight && m_SelectedAtomIndices.empty())
+                {
+                    m_LightPosition = m_SceneOriginPosition;
+                }
+                else
+                {
+                    const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                    const glm::vec3 delta = m_SceneOriginPosition - selectionCenter;
+                    for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= m_WorkingStructure.atoms.size())
+                        {
+                            continue;
+                        }
+                        SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                    }
+                }
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("3D Cursor");
+            if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
+            {
+                settingsChanged = true;
+            }
+            if (DrawColoredVec3Control("Cursor position", m_CursorPosition, 0.01f, -1000.0f, 1000.0f, "%.5f"))
+            {
+                settingsChanged = true;
+            }
+
+            static float s_CursorUniformXYZ = 0.0f;
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputFloat("Cursor XYZ", &s_CursorUniformXYZ, 0.1f, 1.0f, "%.4f");
+            ImGui::SameLine();
+            if (ImGui::Button("Apply cursor XYZ"))
+            {
+                m_CursorPosition = glm::vec3(s_CursorUniformXYZ);
+                settingsChanged = true;
+            }
+
+            if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("Origin & Light");
+            if (DrawColoredVec3Control("Light position", m_LightPosition, 0.01f, -1000.0f, 1000.0f, "%.5f"))
+            {
+                settingsChanged = true;
+            }
+
+            if (ImGui::Button("Select Light"))
+            {
+                m_SelectedSpecialNode = SpecialNodeSelection::Light;
+                m_SelectedAtomIndices.clear();
+                m_SelectedTransformEmptyIndex = -1;
+            }
+
+            if (ImGui::Button("3D cursor to Origin"))
+            {
+                m_CursorPosition = m_SceneOriginPosition;
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cursor <- camera target") && m_Camera)
+            {
+                m_CursorPosition = m_Camera->GetTarget();
+                settingsChanged = true;
+            }
 
             ImGui::SeparatorText("Add Atom");
             ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
@@ -5104,440 +6688,43 @@ namespace ds
             }
             if (ImGui::Button("Add atom"))
             {
-                const CoordinateMode inputMode = (m_AddAtomCoordinateModeIndex == 0)
-                                                     ? CoordinateMode::Direct
-                                                     : CoordinateMode::Cartesian;
-                AddAtomToStructure(std::string(m_AddAtomElementBuffer.data()), m_AddAtomPosition, inputMode);
+                m_ShowAddAtomDialog = true;
             }
             if (!canAddAtom)
             {
                 ImGui::EndDisabled();
             }
-        }
-
-        if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::SeparatorText("Gizmo");
-            if (ImGui::Checkbox("Enable gizmo", &m_GizmoEnabled))
+            if (m_HasStructureLoaded)
             {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Enable view gizmo overlay", &m_ViewGuizmoEnabled))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("Transform gizmo size", &m_TransformGizmoSize, 0.05f, 0.35f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("View gizmo scale", &m_ViewGizmoScale, 0.35f, 2.20f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("Fallback marker scale", &m_FallbackGizmoVisualScale, 0.5f, 6.0f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Show transform empties", &m_ShowTransformEmpties))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("Empty visual scale", &m_TransformEmptyVisualScale, 0.06f, 0.55f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("View gizmo offset right", &m_ViewGizmoOffsetRight, 0.0f, 220.0f, "%.0f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("View gizmo offset top", &m_ViewGizmoOffsetTop, 0.0f, 220.0f, "%.0f"))
-            {
-                settingsChanged = true;
-            }
-            ImGui::Combo("Gizmo operation", &m_GizmoOperationIndex, gizmoOperations, IM_ARRAYSIZE(gizmoOperations));
-            ImGui::Combo("Gizmo mode", &m_GizmoModeIndex, gizmoModes, IM_ARRAYSIZE(gizmoModes));
-            if (ImGui::Checkbox("Show global XYZ overlay", &m_ShowGlobalAxesOverlay))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::Checkbox("Use temporary local axes", &m_UseTemporaryLocalAxes))
-            {
-                settingsChanged = true;
-            }
-
-            if (m_UseTemporaryLocalAxes)
-            {
-                int temporarySourceMode = (m_TemporaryAxesSource == TemporaryAxesSource::ActiveEmpty) ? 1 : 0;
-                const char *temporarySourceModes[] = {"Selection atoms (A/B/C)", "Active Empty"};
-                if (ImGui::Combo("Temporary frame source", &temporarySourceMode, temporarySourceModes, IM_ARRAYSIZE(temporarySourceModes)))
-                {
-                    m_TemporaryAxesSource = (temporarySourceMode == 1) ? TemporaryAxesSource::ActiveEmpty : TemporaryAxesSource::SelectionAtoms;
-                    settingsChanged = true;
-                }
-
-                ImGui::SeparatorText("Transform Empty");
-                if (ImGui::Button("Add empty at 3D cursor"))
-                {
-                    TransformEmpty empty;
-                    empty.position = m_CursorPosition;
-                    empty.collectionIndex = m_ActiveCollectionIndex;
-                    char label[32] = {};
-                    std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
-                    empty.name = label;
-                    m_TransformEmpties.push_back(empty);
-                    m_ActiveTransformEmptyIndex = static_cast<int>(m_TransformEmpties.size()) - 1;
-                    m_SelectedTransformEmptyIndex = m_ActiveTransformEmptyIndex;
-                    settingsChanged = true;
-                }
-
-                ImGui::SameLine();
-                const bool canAddFromSelection = !m_SelectedAtomIndices.empty();
-                if (!canAddFromSelection)
-                {
-                    ImGui::BeginDisabled();
-                }
-                if (ImGui::Button("Add empty at selection center") && canAddFromSelection)
-                {
-                    TransformEmpty empty;
-                    empty.position = ComputeSelectionCenter();
-                    ComputeSelectionAxesAround(empty.position, empty.axes);
-                    empty.collectionIndex = m_ActiveCollectionIndex;
-                    char label[32] = {};
-                    std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
-                    empty.name = label;
-                    m_TransformEmpties.push_back(empty);
-                    m_ActiveTransformEmptyIndex = static_cast<int>(m_TransformEmpties.size()) - 1;
-                    m_SelectedTransformEmptyIndex = m_ActiveTransformEmptyIndex;
-                    settingsChanged = true;
-                }
-                if (!canAddFromSelection)
-                {
-                    ImGui::EndDisabled();
-                }
-
-                if (ImGui::BeginCombo("Active empty", HasActiveTransformEmpty() ? m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].name.c_str() : "(none)"))
-                {
-                    for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
-                    {
-                        const bool isSelected = (static_cast<int>(i) == m_ActiveTransformEmptyIndex);
-                        if (ImGui::Selectable(m_TransformEmpties[i].name.c_str(), isSelected))
-                        {
-                            m_ActiveTransformEmptyIndex = static_cast<int>(i);
-                            m_SelectedTransformEmptyIndex = m_ActiveTransformEmptyIndex;
-                            settingsChanged = true;
-                        }
-                        if (isSelected)
-                        {
-                            ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-
-                bool hasActiveEmpty = HasActiveTransformEmpty();
-                if (!hasActiveEmpty)
-                {
-                    ImGui::BeginDisabled();
-                }
-                if (ImGui::Button("Use active empty as tmp transform") && hasActiveEmpty)
-                {
-                    m_TemporaryAxesSource = TemporaryAxesSource::ActiveEmpty;
-                    m_CursorPosition = m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].position;
-                    settingsChanged = true;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Delete active empty") && hasActiveEmpty)
-                {
-                    DeleteTransformEmptyAtIndex(m_ActiveTransformEmptyIndex);
-                    settingsChanged = true;
-                    hasActiveEmpty = HasActiveTransformEmpty();
-                }
-
-                if (hasActiveEmpty)
-                {
-                    TransformEmpty &activeEmpty = m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)];
-                    ImGui::Text("Pos: (%.3f, %.3f, %.3f)", activeEmpty.position.x, activeEmpty.position.y, activeEmpty.position.z);
-
-                    if (ImGui::Button("Move empty to selection center") && canAddFromSelection)
-                    {
-                        activeEmpty.position = ComputeSelectionCenter();
-                        settingsChanged = true;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Move empty to 3D cursor"))
-                    {
-                        activeEmpty.position = m_CursorPosition;
-                        settingsChanged = true;
-                    }
-
-                    if (ImGui::Button("Align empty axes to world"))
-                    {
-                        activeEmpty.axes = {
-                            glm::vec3(1.0f, 0.0f, 0.0f),
-                            glm::vec3(0.0f, 1.0f, 0.0f),
-                            glm::vec3(0.0f, 0.0f, 1.0f)};
-                        settingsChanged = true;
-                    }
-
-                    if (ImGui::Button("Align empty axes from selection") && canAddFromSelection)
-                    {
-                        std::array<glm::vec3, 3> axes = activeEmpty.axes;
-                        if (ComputeSelectionAxesAround(activeEmpty.position, axes))
-                        {
-                            activeEmpty.axes = axes;
-                            settingsChanged = true;
-                        }
-                    }
-
-                    if (ImGui::Button("Align empty Z axis to selected atoms") && m_SelectedAtomIndices.size() >= 2)
-                    {
-                        if (AlignEmptyZAxisFromSelectedAtoms(m_ActiveTransformEmptyIndex))
-                        {
-                            settingsChanged = true;
-                        }
-                    }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button("Selection -> Add empty + tmp transform") && canAddFromSelection)
-                    {
-                        TransformEmpty empty;
-                        empty.position = ComputeSelectionCenter();
-                        ComputeSelectionAxesAround(empty.position, empty.axes);
-                        empty.collectionIndex = m_ActiveCollectionIndex;
-                        char label[32] = {};
-                        std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
-                        empty.name = label;
-                        m_TransformEmpties.push_back(empty);
-                        m_ActiveTransformEmptyIndex = static_cast<int>(m_TransformEmpties.size()) - 1;
-                        m_SelectedTransformEmptyIndex = m_ActiveTransformEmptyIndex;
-                        m_TemporaryAxesSource = TemporaryAxesSource::ActiveEmpty;
-                        m_CursorPosition = empty.position;
-                        settingsChanged = true;
-                    }
-                }
-
-                if (!hasActiveEmpty)
-                {
-                    ImGui::EndDisabled();
-                }
-
-                if (m_TemporaryAxesSource == TemporaryAxesSource::SelectionAtoms)
-                {
-                    ImGui::SeparatorText("Selection-axes authoring");
-                    ImGui::TextUnformatted("Temporary frame: X = A -> B, C defines frame plane.");
-                    ImGui::Text("A=%d  B=%d  C=%d", m_TemporaryAxisAtomA, m_TemporaryAxisAtomB, m_TemporaryAxisAtomC);
-
-                    const bool hasAtLeastTwoSelected = m_SelectedAtomIndices.size() >= 2;
-                    const bool hasAtLeastThreeSelected = m_SelectedAtomIndices.size() >= 3;
-
-                    if (!hasAtLeastTwoSelected)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Set A/B from first->last selected") && hasAtLeastTwoSelected)
-                    {
-                        m_TemporaryAxisAtomA = static_cast<int>(m_SelectedAtomIndices.front());
-                        m_TemporaryAxisAtomB = static_cast<int>(m_SelectedAtomIndices.back());
-                        if (m_TemporaryAxisAtomA == m_TemporaryAxisAtomB && m_SelectedAtomIndices.size() > 1)
-                        {
-                            m_TemporaryAxisAtomB = static_cast<int>(m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2]);
-                        }
-                        settingsChanged = true;
-                    }
-                    if (!hasAtLeastTwoSelected)
-                    {
-                        ImGui::EndDisabled();
-                    }
-
-                    if (!hasAtLeastThreeSelected)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Set A/B/C from last 3 selected") && hasAtLeastThreeSelected)
-                    {
-                        const std::size_t n = m_SelectedAtomIndices.size();
-                        m_TemporaryAxisAtomA = static_cast<int>(m_SelectedAtomIndices[n - 3]);
-                        m_TemporaryAxisAtomB = static_cast<int>(m_SelectedAtomIndices[n - 2]);
-                        m_TemporaryAxisAtomC = static_cast<int>(m_SelectedAtomIndices[n - 1]);
-                        settingsChanged = true;
-                    }
-                    if (!hasAtLeastThreeSelected)
-                    {
-                        ImGui::EndDisabled();
-                    }
-
-                    if (ImGui::Button("Clear temporary frame"))
-                    {
-                        m_TemporaryAxisAtomA = -1;
-                        m_TemporaryAxisAtomB = -1;
-                        m_TemporaryAxisAtomC = -1;
-                        settingsChanged = true;
-                    }
-                }
-            }
-
-            if (ImGui::ColorEdit3("Axis X color", &m_AxisColors[0].x))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::ColorEdit3("Axis Y color", &m_AxisColors[1].x))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::ColorEdit3("Axis Z color", &m_AxisColors[2].x))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::Checkbox("Gizmo snap", &m_GizmoSnapEnabled))
-            {
-                settingsChanged = true;
-            }
-            if (m_GizmoOperationIndex == 0)
-            {
-                ImGui::SliderFloat("Translate snap", &m_GizmoTranslateSnap, 0.01f, 2.0f, "%.2f");
-            }
-            else if (m_GizmoOperationIndex == 1)
-            {
-                ImGui::SliderFloat("Rotate snap (deg)", &m_GizmoRotateSnapDeg, 1.0f, 90.0f, "%.1f");
+                const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
+                ImGui::Separator();
+                ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
+                            m_WorkingStructure.GetAtomCount(),
+                            m_WorkingStructure.species.size(),
+                            modeLabel);
+                ImGui::Text("Title: %s", m_WorkingStructure.title.empty() ? "(empty)" : m_WorkingStructure.title.c_str());
             }
             else
             {
-                ImGui::SliderFloat("Scale snap", &m_GizmoScaleSnap, 0.01f, 1.0f, "%.2f");
+                ImGui::Separator();
+                ImGui::TextUnformatted("Loaded: none");
             }
 
-            ImGui::SeparatorText("3D Cursor & Diagnostics");
-            if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
+            if (!m_LastStructureMessage.empty())
             {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::DragFloat3("Cursor position", &m_CursorPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::ColorEdit3("Cursor color", &m_CursorColor.x))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Button("Cursor <- camera target") && m_Camera)
-            {
-                m_CursorPosition = m_Camera->GetTarget();
-                settingsChanged = true;
+                const ImVec4 color = m_LastStructureOperationFailed
+                                         ? ImVec4(0.95f, 0.35f, 0.35f, 1.0f)
+                                         : ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
+                ImGui::TextWrapped("%s", m_LastStructureMessage.c_str());
+                ImGui::PopStyleColor();
             }
 
-            if (ImGui::Checkbox("Selection debug log to file", &m_SelectionDebugToFile))
-            {
-                settingsChanged = true;
-            }
-            ImGui::SameLine();
-            DrawInlineHelpMarker("Detailed selection and gizmo debug logs are saved to logs/selection_debug.log.");
-            ImGui::SameLine();
-            if (ImGui::Button("Clear selection log file"))
-            {
-                std::filesystem::create_directories("logs");
-                std::ofstream clearOut("logs/selection_debug.log", std::ios::trunc);
-                if (clearOut.is_open())
-                {
-                    clearOut << "";
-                }
-                AppendSelectionDebugLog("Selection debug log file cleared");
-            }
-
-            ImGui::SeparatorText("Appearance & Camera");
-            int currentTheme = static_cast<int>(m_CurrentTheme);
-            const char *items[] = {
-                "Dark",
-                "Light",
-                "Classic",
-                "PhotoshopStyle",
-                "WarmSlate"};
-
-            if (ImGui::Combo("Style preset", &currentTheme, items, IM_ARRAYSIZE(items)))
-            {
-                m_CurrentTheme = static_cast<ThemePreset>(currentTheme);
-                ApplyTheme(m_CurrentTheme);
-                settingsChanged = true;
-            }
-
-            float uiScale = m_FontScale;
-            if (ImGui::SliderFloat("Font size scale", &uiScale, 0.7f, 2.0f, "%.2f"))
-            {
-                ApplyFontScale(uiScale);
-                settingsChanged = true;
-            }
-
-            ImGui::TextUnformatted("Camera sensitivity");
-            float orbitSensitivity = m_CameraOrbitSensitivity;
-            if (ImGui::SliderFloat("Orbit sensitivity", &orbitSensitivity, 0.05f, 4.0f, "%.2fx"))
-            {
-                m_CameraOrbitSensitivity = orbitSensitivity;
-                ApplyCameraSensitivity();
-                settingsChanged = true;
-            }
-
-            float panSensitivity = m_CameraPanSensitivity;
-            if (ImGui::SliderFloat("Pan sensitivity", &panSensitivity, 0.05f, 4.0f, "%.2fx"))
-            {
-                m_CameraPanSensitivity = panSensitivity;
-                ApplyCameraSensitivity();
-                settingsChanged = true;
-            }
-
-            float zoomSensitivity = m_CameraZoomSensitivity;
-            if (ImGui::SliderFloat("Zoom sensitivity", &zoomSensitivity, 0.05f, 4.0f, "%.2fx"))
-            {
-                m_CameraZoomSensitivity = zoomSensitivity;
-                ApplyCameraSensitivity();
-                settingsChanged = true;
-            }
-
-            if (ImGui::Button("Save UI settings"))
-            {
-                SaveSettings();
-            }
-            ImGui::SameLine();
-            ImGui::TextUnformatted("(auto-save on change enabled)");
-        }
-
-        if (m_HasStructureLoaded)
-        {
-            const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
+            std::size_t errorCount = Logger::Get().GetErrorCount();
             ImGui::Separator();
-            ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
-                        m_WorkingStructure.GetAtomCount(),
-                        m_WorkingStructure.species.size(),
-                        modeLabel);
-            ImGui::Text("Title: %s", m_WorkingStructure.title.empty() ? "(empty)" : m_WorkingStructure.title.c_str());
+            ImGui::Text("Errors captured: %zu", errorCount);
+            ImGui::End();
         }
-        else
-        {
-            ImGui::Separator();
-            ImGui::TextUnformatted("Loaded: none");
-        }
-
-        if (!m_LastStructureMessage.empty())
-        {
-            const ImVec4 color = m_LastStructureOperationFailed
-                                     ? ImVec4(0.95f, 0.35f, 0.35f, 1.0f)
-                                     : ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
-            ImGui::PushStyleColor(ImGuiCol_Text, color);
-            ImGui::TextWrapped("%s", m_LastStructureMessage.c_str());
-            ImGui::PopStyleColor();
-        }
-
-        std::size_t errorCount = Logger::Get().GetErrorCount();
-        ImGui::Separator();
-        ImGui::Text("Errors captured: %zu", errorCount);
-        ImGui::End();
 
         if (m_ShowSceneOutlinerPanel)
         {
@@ -5546,6 +6733,7 @@ namespace ds
             if (ImGui::Button("Add collection"))
             {
                 SceneCollection collection;
+                collection.id = GenerateSceneUUID();
                 char label[48] = {};
                 std::snprintf(label, sizeof(label), "Collection %d", m_CollectionCounter++);
                 collection.name = label;
@@ -5562,18 +6750,7 @@ namespace ds
             }
             if (ImGui::Button("Create group from selection") && canCreateGroup)
             {
-                SceneGroup group;
-                char label[48] = {};
-                std::snprintf(label, sizeof(label), "Group %d", m_GroupCounter++);
-                group.name = label;
-                group.atomIndices = m_SelectedAtomIndices;
-                if (m_SelectedTransformEmptyIndex >= 0)
-                {
-                    group.emptyIndices.push_back(m_SelectedTransformEmptyIndex);
-                }
-                m_ObjectGroups.push_back(group);
-                m_ActiveGroupIndex = static_cast<int>(m_ObjectGroups.size()) - 1;
-                settingsChanged = true;
+                settingsChanged |= SceneGroupingBackend::CreateGroupFromCurrentSelection(*this);
             }
             if (!canCreateGroup)
             {
@@ -5607,6 +6784,7 @@ namespace ds
                             if (emptyIndex >= 0 && emptyIndex < static_cast<int>(m_TransformEmpties.size()))
                             {
                                 m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].collectionIndex = static_cast<int>(collectionIndex);
+                                m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].collectionId = m_Collections[collectionIndex].id;
                                 settingsChanged = true;
                             }
                         }
@@ -5616,35 +6794,142 @@ namespace ds
 
                 if (ImGui::TreeNode("Objects"))
                 {
-                    for (std::size_t emptyIndex = 0; emptyIndex < m_TransformEmpties.size(); ++emptyIndex)
+                    std::function<void(SceneUUID)> drawEmptyHierarchy = [&](SceneUUID parentId)
                     {
-                        TransformEmpty &empty = m_TransformEmpties[emptyIndex];
-                        if (empty.collectionIndex != static_cast<int>(collectionIndex))
+                        for (std::size_t emptyIndex = 0; emptyIndex < m_TransformEmpties.size(); ++emptyIndex)
                         {
-                            continue;
-                        }
+                            TransformEmpty &empty = m_TransformEmpties[emptyIndex];
+                            if (empty.collectionIndex != static_cast<int>(collectionIndex) || empty.parentEmptyId != parentId)
+                            {
+                                continue;
+                            }
 
-                        const bool isSelected = (m_SelectedTransformEmptyIndex == static_cast<int>(emptyIndex));
-                        if (ImGui::Selectable((std::string("Empty: ") + empty.name).c_str(), isSelected))
-                        {
-                            m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
-                            m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
-                            m_SelectedAtomIndices.clear();
-                        }
+                            const bool isSelected = (m_SelectedTransformEmptyIndex == static_cast<int>(emptyIndex));
+                            const std::string label = "Empty: " + empty.name + "##empty_" + std::to_string(emptyIndex);
+                            const bool open = ImGui::TreeNodeEx(
+                                label.c_str(),
+                                (isSelected ? ImGuiTreeNodeFlags_Selected : 0) | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth);
 
-                        const int dragIndex = static_cast<int>(emptyIndex);
-                        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-                        {
-                            ImGui::SetDragDropPayload("DS_EMPTY_INDEX", &dragIndex, sizeof(int));
-                            ImGui::Text("Move Empty: %s", empty.name.c_str());
-                            ImGui::EndDragDropSource();
+                            if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                            {
+                                m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                m_SelectedAtomIndices.clear();
+                            }
+
+                            const int dragIndex = static_cast<int>(emptyIndex);
+                            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                            {
+                                ImGui::SetDragDropPayload("DS_EMPTY_INDEX", &dragIndex, sizeof(int));
+                                ImGui::Text("Move Empty: %s", empty.name.c_str());
+                                ImGui::EndDragDropSource();
+                            }
+
+                            if (ImGui::BeginDragDropTarget())
+                            {
+                                if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("DS_EMPTY_INDEX"))
+                                {
+                                    if (payload->DataSize == sizeof(int))
+                                    {
+                                        const int childIndex = *static_cast<const int *>(payload->Data);
+                                        if (childIndex >= 0 && childIndex < static_cast<int>(m_TransformEmpties.size()) && childIndex != static_cast<int>(emptyIndex))
+                                        {
+                                            m_TransformEmpties[static_cast<std::size_t>(childIndex)].parentEmptyId = empty.id;
+                                            m_TransformEmpties[static_cast<std::size_t>(childIndex)].collectionIndex = static_cast<int>(collectionIndex);
+                                            m_TransformEmpties[static_cast<std::size_t>(childIndex)].collectionId = m_Collections[collectionIndex].id;
+                                            settingsChanged = true;
+                                        }
+                                    }
+                                }
+                                ImGui::EndDragDropTarget();
+                            }
+
+                            if (open)
+                            {
+                                drawEmptyHierarchy(empty.id);
+                                ImGui::TreePop();
+                            }
                         }
-                    }
+                    };
+
+                    drawEmptyHierarchy(0);
 
                     if (collectionIndex == 0)
                     {
                         const std::string atomsLabel = "Atoms (" + std::to_string(m_WorkingStructure.atoms.size()) + ")";
-                        ImGui::Selectable(atomsLabel.c_str(), false, ImGuiSelectableFlags_Disabled);
+                        if (ImGui::TreeNode(atomsLabel.c_str()))
+                        {
+                            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+                            {
+                                const bool isSelected = IsAtomSelected(atomIndex);
+                                const std::string atomLabel =
+                                    m_WorkingStructure.atoms[atomIndex].element + " [" + std::to_string(atomIndex) + "]";
+                                if (ImGui::Selectable(atomLabel.c_str(), isSelected))
+                                {
+                                    if (io.KeyCtrl)
+                                    {
+                                        if (isSelected)
+                                        {
+                                            m_SelectedAtomIndices.erase(
+                                                std::remove(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), atomIndex),
+                                                m_SelectedAtomIndices.end());
+                                        }
+                                        else
+                                        {
+                                            m_SelectedAtomIndices.push_back(atomIndex);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        m_SelectedAtomIndices.clear();
+                                        m_SelectedAtomIndices.push_back(atomIndex);
+                                    }
+                                    m_SelectedTransformEmptyIndex = -1;
+                                }
+                            }
+                            ImGui::TreePop();
+                        }
+
+                        if (ImGui::TreeNode("Groups"))
+                        {
+                            for (std::size_t groupIndex = 0; groupIndex < m_ObjectGroups.size(); ++groupIndex)
+                            {
+                                SceneGroupingBackend::SanitizeGroup(*this, static_cast<int>(groupIndex));
+                                const SceneGroup &group = m_ObjectGroups[groupIndex];
+                                const bool isActiveGroup = (static_cast<int>(groupIndex) == m_ActiveGroupIndex);
+                                const std::string groupLabel = "Group: " + group.name;
+                                if (ImGui::Selectable(groupLabel.c_str(), isActiveGroup))
+                                {
+                                    m_ActiveGroupIndex = static_cast<int>(groupIndex);
+                                    SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
+                                }
+                                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                                {
+                                    ImGui::SetTooltip("Atoms: %zu | Empties: %zu", group.atomIndices.size(), group.emptyIndices.size());
+                                }
+                            }
+                            ImGui::TreePop();
+                        }
+                    }
+
+                    if (ImGui::BeginDragDropTarget())
+                    {
+                        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("DS_EMPTY_INDEX"))
+                        {
+                            if (payload->DataSize == sizeof(int))
+                            {
+                                const int droppedIndex = *static_cast<const int *>(payload->Data);
+                                if (droppedIndex >= 0 && droppedIndex < static_cast<int>(m_TransformEmpties.size()))
+                                {
+                                    TransformEmpty &dropped = m_TransformEmpties[static_cast<std::size_t>(droppedIndex)];
+                                    dropped.parentEmptyId = 0;
+                                    dropped.collectionIndex = static_cast<int>(collectionIndex);
+                                    dropped.collectionId = m_Collections[collectionIndex].id;
+                                    settingsChanged = true;
+                                }
+                            }
+                        }
+                        ImGui::EndDragDropTarget();
                     }
 
                     ImGui::TreePop();
@@ -5658,7 +6943,12 @@ namespace ds
             {
                 if (ImGui::Button("Select active group"))
                 {
-                    selectGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Delete active group"))
+                {
+                    settingsChanged |= SceneGroupingBackend::DeleteGroup(*this, m_ActiveGroupIndex);
                 }
                 ImGui::SameLine();
                 const bool hasSelection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
@@ -5668,13 +6958,13 @@ namespace ds
                 }
                 if (ImGui::Button("Add selection to active"))
                 {
-                    addCurrentSelectionToGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
                     settingsChanged = true;
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Remove selection from active"))
                 {
-                    removeCurrentSelectionFromGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
                     settingsChanged = true;
                 }
                 if (!hasSelection)
@@ -5686,12 +6976,12 @@ namespace ds
             for (std::size_t groupIndex = 0; groupIndex < m_ObjectGroups.size(); ++groupIndex)
             {
                 SceneGroup &group = m_ObjectGroups[groupIndex];
-                sanitizeGroup(group);
+                SceneGroupingBackend::SanitizeGroup(*this, static_cast<int>(groupIndex));
                 const bool isActiveGroup = (static_cast<int>(groupIndex) == m_ActiveGroupIndex);
                 if (ImGui::Selectable(group.name.c_str(), isActiveGroup))
                 {
                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
-                    selectGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
@@ -5704,161 +6994,12 @@ namespace ds
 
         if (m_ShowObjectPropertiesPanel)
         {
-            ImGui::Begin("Object Properties", &m_ShowObjectPropertiesPanel);
+            PropertiesPanel::Draw(*this, settingsChanged);
+        }
 
-            const bool hasSelectedEmpty =
-                m_SelectedTransformEmptyIndex >= 0 &&
-                m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size());
-
-            if (hasSelectedEmpty)
-            {
-                TransformEmpty &selectedEmpty = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)];
-                ImGui::TextUnformatted("Type: Empty");
-
-                std::array<char, 128> emptyNameBuffer = {};
-                std::snprintf(emptyNameBuffer.data(), emptyNameBuffer.size(), "%s", selectedEmpty.name.c_str());
-                if (ImGui::InputText("Name", emptyNameBuffer.data(), emptyNameBuffer.size()))
-                {
-                    selectedEmpty.name = std::string(emptyNameBuffer.data());
-                    settingsChanged = true;
-                }
-
-                if (ImGui::DragFloat3("Position", &selectedEmpty.position.x, 0.01f, -1000.0f, 1000.0f, "%.5f"))
-                {
-                    settingsChanged = true;
-                }
-
-                if (ImGui::Checkbox("Visible", &selectedEmpty.visible))
-                {
-                    settingsChanged = true;
-                }
-                if (ImGui::Checkbox("Selectable", &selectedEmpty.selectable))
-                {
-                    settingsChanged = true;
-                }
-
-                const char *currentCollectionName =
-                    (selectedEmpty.collectionIndex >= 0 && selectedEmpty.collectionIndex < static_cast<int>(m_Collections.size()))
-                        ? m_Collections[static_cast<std::size_t>(selectedEmpty.collectionIndex)].name.c_str()
-                        : "(invalid)";
-                if (ImGui::BeginCombo("Collection", currentCollectionName))
-                {
-                    for (std::size_t i = 0; i < m_Collections.size(); ++i)
-                    {
-                        const bool selected = (selectedEmpty.collectionIndex == static_cast<int>(i));
-                        if (ImGui::Selectable(m_Collections[i].name.c_str(), selected))
-                        {
-                            selectedEmpty.collectionIndex = static_cast<int>(i);
-                            settingsChanged = true;
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-
-                if (ImGui::Button("Align axes to world"))
-                {
-                    selectedEmpty.axes = {
-                        glm::vec3(1.0f, 0.0f, 0.0f),
-                        glm::vec3(0.0f, 1.0f, 0.0f),
-                        glm::vec3(0.0f, 0.0f, 1.0f)};
-                    settingsChanged = true;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Align Z to selected atoms") && m_SelectedAtomIndices.size() >= 2)
-                {
-                    if (AlignEmptyZAxisFromSelectedAtoms(m_SelectedTransformEmptyIndex))
-                    {
-                        settingsChanged = true;
-                    }
-                }
-
-                if (ImGui::Button("Delete selected empty"))
-                {
-                    const int deletedIndex = m_SelectedTransformEmptyIndex;
-                    DeleteTransformEmptyAtIndex(deletedIndex);
-                    settingsChanged = true;
-                }
-            }
-            else
-            {
-                ImGui::TextUnformatted("Type: Atoms / None");
-                ImGui::Text("Selected atoms: %zu", m_SelectedAtomIndices.size());
-                if (!m_SelectedAtomIndices.empty())
-                {
-                    if (ImGui::Button("Create group from selected atoms"))
-                    {
-                        SceneGroup group;
-                        char label[48] = {};
-                        std::snprintf(label, sizeof(label), "Group %d", m_GroupCounter++);
-                        group.name = label;
-                        group.atomIndices = m_SelectedAtomIndices;
-                        m_ObjectGroups.push_back(group);
-                        m_ActiveGroupIndex = static_cast<int>(m_ObjectGroups.size()) - 1;
-                        settingsChanged = true;
-                    }
-                }
-
-                if (m_ActiveGroupIndex >= 0 && m_ActiveGroupIndex < static_cast<int>(m_ObjectGroups.size()))
-                {
-                    ImGui::SeparatorText("Active Group");
-                    SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(m_ActiveGroupIndex)];
-                    sanitizeGroup(group);
-
-                    std::array<char, 128> groupNameBuffer = {};
-                    std::snprintf(groupNameBuffer.data(), groupNameBuffer.size(), "%s", group.name.c_str());
-                    if (ImGui::InputText("Group name", groupNameBuffer.data(), groupNameBuffer.size()))
-                    {
-                        group.name = std::string(groupNameBuffer.data());
-                        settingsChanged = true;
-                    }
-
-                    ImGui::Text("Name: %s", group.name.c_str());
-                    ImGui::Text("Atoms: %zu", group.atomIndices.size());
-                    ImGui::Text("Empties: %zu", group.emptyIndices.size());
-
-                    if (ImGui::Button("Select this group"))
-                    {
-                        selectGroup(m_ActiveGroupIndex);
-                    }
-
-                    const bool hasSelection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
-                    if (!hasSelection)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Add current selection to group"))
-                    {
-                        addCurrentSelectionToGroup(m_ActiveGroupIndex);
-                        settingsChanged = true;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Remove current selection from group"))
-                    {
-                        removeCurrentSelectionFromGroup(m_ActiveGroupIndex);
-                        settingsChanged = true;
-                    }
-                    if (!hasSelection)
-                    {
-                        ImGui::EndDisabled();
-                    }
-
-                    if (ImGui::Button("Delete group"))
-                    {
-                        m_ObjectGroups.erase(m_ObjectGroups.begin() + m_ActiveGroupIndex);
-                        if (m_ObjectGroups.empty())
-                        {
-                            m_ActiveGroupIndex = -1;
-                        }
-                        else
-                        {
-                            m_ActiveGroupIndex = std::min(m_ActiveGroupIndex, static_cast<int>(m_ObjectGroups.size()) - 1);
-                        }
-                        settingsChanged = true;
-                    }
-                }
-            }
-
-            ImGui::End();
+        if (m_ShowSettingsPanel)
+        {
+            SettingsPanel::Draw(*this, settingsChanged);
         }
 
         if (m_ShowLogPanel)
@@ -5901,7 +7042,7 @@ namespace ds
                     continue;
                 }
 
-                ImVec4 color = ImVec4(0.86f, 0.88f, 0.90f, 1.0f);
+                ImVec4 color = ImVec4(0.42f, 0.78f, 0.98f, 1.0f);
                 const char *levelText = "INFO";
 
                 if (entry.level == LogLevel::Warn)
@@ -5916,8 +7057,10 @@ namespace ds
                 }
 
                 ImGui::PushStyleColor(ImGuiCol_Text, color);
-                ImGui::Text("[%s] [%s] %s", entry.timestamp.c_str(), levelText, entry.message.c_str());
+                ImGui::TextUnformatted(levelText);
                 ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::Text("[%s] %s", entry.timestamp.c_str(), entry.message.c_str());
             }
 
             if (m_LogAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f)
@@ -5937,6 +7080,77 @@ namespace ds
         }
 
         DrawPeriodicTableWindow();
+
+        if (m_ShowAddAtomDialog)
+        {
+            const char *dialogCoordinateModes[] = {"Direct", "Cartesian"};
+            ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
+            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+            bool dialogOpen = m_ShowAddAtomDialog;
+            if (ImGui::Begin("Add Atom", &dialogOpen, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
+                ImGui::SameLine();
+                if (ImGui::Button("Periodic table"))
+                {
+                    m_PeriodicTableOpen = true;
+                }
+
+                DrawColoredVec3Control("Position", m_AddAtomPosition, 0.01f, -1000.0f, 1000.0f, "%.5f");
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputFloat("Set XYZ", &m_AddAtomUniformPositionValue, 0.1f, 1.0f, "%.4f");
+                ImGui::SameLine();
+                if (ImGui::Button("Apply to X/Y/Z"))
+                {
+                    m_AddAtomPosition = glm::vec3(m_AddAtomUniformPositionValue);
+                }
+
+                ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, dialogCoordinateModes, IM_ARRAYSIZE(dialogCoordinateModes));
+
+                if (ImGui::Button("Use 3D cursor"))
+                {
+                    m_AddAtomPosition = m_CursorPosition;
+                    m_AddAtomCoordinateModeIndex = 1;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Use camera target") && m_Camera)
+                {
+                    m_AddAtomPosition = m_Camera->GetTarget();
+                    m_AddAtomCoordinateModeIndex = 1;
+                }
+
+                ImGui::Separator();
+                const CoordinateMode inputMode = (m_AddAtomCoordinateModeIndex == 0)
+                                                     ? CoordinateMode::Direct
+                                                     : CoordinateMode::Cartesian;
+
+                const bool canAddAtomNow = m_HasStructureLoaded;
+                if (!canAddAtomNow)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Add atom"))
+                {
+                    if (AddAtomToStructure(std::string(m_AddAtomElementBuffer.data()), m_AddAtomPosition, inputMode))
+                    {
+                        settingsChanged = true;
+                        dialogOpen = false;
+                    }
+                }
+                if (!canAddAtomNow)
+                {
+                    ImGui::EndDisabled();
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Close"))
+                {
+                    dialogOpen = false;
+                }
+            }
+            ImGui::End();
+            m_ShowAddAtomDialog = dialogOpen;
+        }
 
         if (settingsChanged)
         {
