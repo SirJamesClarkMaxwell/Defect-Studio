@@ -82,10 +82,11 @@ Future development will include:
 - PowerShell
 
 ## Setup
-1. Clone the repo `git clone https://github.com/SirJamesClarkMaxwell/Defect-Studio.git`
-2. Run the setup script `./scripts/Setup.bat`
-3. Open: `DefectsStudio.sln` in **Visual Studio 2022**.
-4. Build configuration: `Debug` or `Release`
+1. Clone the repo (preferred): `git clone --recurse-submodules https://github.com/SirJamesClarkMaxwell/Defect-Studio.git`
+2. If you already cloned without submodules, run: `git submodule update --init --recursive`
+3. Run the setup script `./scripts/Setup.bat`
+4. Open: `DefectsStudio.sln` in **Visual Studio 2022**.
+5. Build configuration: `Debug` or `Release`
 
 Set **DefectsStudio** as the startup project and run the application (`F5`).
 
@@ -97,6 +98,9 @@ Helper scripts included in the repository:
 - `scripts/Verify-Build.bat` - Verifies Debug and Release builds.
 - `scripts/Verify-Build-And-Run.bat` - Builds and launches the application.
 - `scripts/Run.bat` - Launches existing Debug/Release executable.
+
+External dependencies are managed using **git submodules** (for example `vendor/glfw`, `vendor/glad`, `vendor/imgui`, `vendor/glm`).
+`scripts/Setup.bat` automatically runs submodule sync/init/update.
 
 If project resources are modified (for example `assets/icon.rc`), run the setup script again.
 

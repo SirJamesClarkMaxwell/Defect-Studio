@@ -6,6 +6,10 @@ bin-int/
 
 tools/
 vendor/*
+!vendor/glfw/
+!vendor/glad/
+!vendor/imgui/
+!vendor/glm/
 !vendor/imviewguizmo/
 !vendor/imviewguizmo/**
 
