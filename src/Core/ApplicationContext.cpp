@@ -28,4 +28,16 @@ namespace ds
         return *s_Instance;
     }
 
+    void ApplicationContext::AddScrollDelta(float delta)
+    {
+        m_ScrollDelta += delta;
+    }
+
+    float ApplicationContext::ConsumeScrollDelta()
+    {
+        const float value = m_ScrollDelta;
+        m_ScrollDelta = 0.0f;
+        return value;
+    }
+
 } // namespace ds

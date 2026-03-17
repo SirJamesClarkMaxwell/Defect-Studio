@@ -4,10 +4,10 @@
 #include "Core/Logger.h"
 #include "Layers/ImGuiLayer.h"
 
-#include <Windows.h>
-#include <GL/gl.h>
+#include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
+#include <chrono>
 #include <string>
 #include <stdexcept>
 
@@ -20,6 +20,11 @@ namespace ds
         void GLFWErrorCallback(int error, const char *description)
         {
             LogError("GLFW error " + std::to_string(error) + ": " + (description ? description : "<no description>"));
+        }
+
+        void GLFWScrollCallback(GLFWwindow * /*window*/, double /*xOffset*/, double yOffset)
+        {
+            ApplicationContext::Get().AddScrollDelta(static_cast<float>(yOffset));
         }
 
     } // namespace
@@ -50,7 +55,17 @@ namespace ds
         glfwMakeContextCurrent(m_Window);
         glfwSwapInterval(1);
 
+        const int gladVersion = gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress));
+        if (gladVersion == 0)
+        {
+            glfwDestroyWindow(m_Window);
+            glfwTerminate();
+            LogError("GLAD initialization failed");
+            throw std::runtime_error("Failed to initialize OpenGL function loader");
+        }
+
         ApplicationContext::Initialize(m_Window);
+        glfwSetScrollCallback(m_Window, GLFWScrollCallback);
 
         m_ImGuiLayer = new ImGuiLayer();
         PushLayer(m_ImGuiLayer);
@@ -73,8 +88,14 @@ namespace ds
 
     void Application::Run()
     {
+        auto lastTick = std::chrono::steady_clock::now();
+
         while (m_Running && !glfwWindowShouldClose(m_Window))
         {
+            const auto now = std::chrono::steady_clock::now();
+            const float deltaTime = std::chrono::duration<float>(now - lastTick).count();
+            lastTick = now;
+
             glfwPollEvents();
 
             int width = 0;
@@ -86,7 +107,7 @@ namespace ds
 
             for (Layer *layer : m_LayerStack.GetLayers())
             {
-                layer->OnUpdate(0.0f);
+                layer->OnUpdate(deltaTime);
             }
 
             m_ImGuiLayer->Begin();

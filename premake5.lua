@@ -14,6 +14,7 @@ IncludeDir = {}
 IncludeDir["glfw"] = "vendor/glfw/include"
 IncludeDir["imgui"] = "vendor/imgui"
 IncludeDir["glm"] = "vendor/glm"
+IncludeDir["glad"] = "vendor/glad_gen/include"
 
 group "Dependencies"
 
@@ -99,18 +100,53 @@ project "ImGui"
     {
         "%{prj.location}",
         "%{prj.location}/backends",
-        IncludeDir["glfw"]
+        IncludeDir["glfw"],
+        IncludeDir["glad"]
     }
 
     links
     {
         "GLFW",
+        "Glad",
         "opengl32.lib"
     }
 
     defines
     {
-        "IMGUI_ENABLE_DOCKING"
+        "IMGUI_ENABLE_DOCKING",
+        "IMGUI_IMPL_OPENGL_LOADER_GLAD2"
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+
+    filter "configurations:Debug"
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        runtime "Release"
+        optimize "on"
+
+project "Glad"
+    location "vendor/glad_gen"
+    kind "StaticLib"
+    language "C"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files
+    {
+        "%{prj.location}/include/glad/**.h",
+        "%{prj.location}/include/KHR/**.h",
+        "%{prj.location}/src/gl.c"
+    }
+
+    includedirs
+    {
+        "%{prj.location}/include"
     }
 
     filter "system:windows"
@@ -147,19 +183,22 @@ project "DefectsStudio"
         "src",
         IncludeDir["glfw"],
         IncludeDir["imgui"],
-        IncludeDir["glm"]
+        IncludeDir["glm"],
+        IncludeDir["glad"]
     }
 
     links
     {
         "GLFW",
         "ImGui",
+        "Glad",
         "opengl32.lib"
     }
 
     defines
     {
         "IMGUI_ENABLE_DOCKING",
+        "IMGUI_IMPL_OPENGL_LOADER_GLAD2",
         "GLFW_INCLUDE_NONE"
     }
 

@@ -22,10 +22,10 @@
 - [x] VS Code workspace integration (`.vscode` tasks/launch/settings)
 - [x] UI style presets + persistent user UI settings file
 
-### [ ] T03 - OpenGL renderer MVP (`task/03-renderer-opengl`)
-- [ ] GL context + renderer backend abstraction
-- [ ] Shader system with per-file shaders in `assets/shaders`
-- [ ] 3D viewport and camera controls (Blender-like baseline)
+### [x] T03 - OpenGL renderer MVP (`task/03-renderer-opengl`)
+- [x] GL context + renderer backend abstraction
+- [x] Shader system with per-file shaders in `assets/shaders`
+- [x] 3D viewport and camera controls (Blender-like baseline)
 
 ### [ ] T04 - Data model + POSCAR/CONTCAR import/export (`task/04-vasp-io-structure`)
 - [ ] Structure/Atom/Bond data model
@@ -65,5 +65,5 @@
 - [ ] README (build/run/controls)
 
 ## Current focus
-- Active task: **T03 - OpenGL renderer MVP**
-- Active branch: **task/01-bootstrap**
+- Active task: **T04 - Data model + POSCAR/CONTCAR import/export**
+- Active branch: **task/03-renderer-opengl**

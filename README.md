@@ -17,6 +17,9 @@ Desktop editor/visualizer for VASP structures (Windows, OpenGL + Dear ImGui dock
 - App starts with ImGui DockSpace and MVP viewport panel
 - Foundational layered architecture in place (`Core`, `Layers`, `Renderer`, `IO`, `DataModel`, `Editor`, `UI`)
 - In-app logger with `Log / Errors` panel
+- OpenGL backend abstraction with offscreen viewport rendering
+- Shader loading from files in `assets/shaders`
+- Orbit camera baseline controls in viewport
 
 ## Controls (current MVP)
 
@@ -24,6 +27,7 @@ Desktop editor/visualizer for VASP structures (Windows, OpenGL + Dear ImGui dock
 - Menu placeholders for import/export
 - Theme presets in `Tools` panel (including `PhotoshopStyle`)
 - Theme and UI toggles are persisted in `config/editor_ui_settings.ini`
+- Viewport camera: `Alt + LMB` orbit, `Alt + MMB` pan, `Alt + RMB` zoom
 
 ## VS Code integration
 
