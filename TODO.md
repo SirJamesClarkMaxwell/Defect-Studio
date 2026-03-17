@@ -71,7 +71,7 @@
 - [x] Add atom tool (insert atom into structure) 
 - [x] add rotation button on the top of the view window with specification how much the view has to be rotated
 - [x] change atom type 
-- [ ] Make POSCAR/CONTCAR export formatting exactly match sample style (e.g., `assets/samples/diamond_bulk`) to avoid noisy `diff`
+- [x] Make POSCAR/CONTCAR export formatting exactly match sample style (e.g., `assets/samples/diamond_bulk`) to avoid noisy `diff`
 - [ ] Auto bond generation and dynamic threshold updates with generated text as bond length along the bonds and easy read in camera view
 - [ ] Global cutoff + per-element-pair mode
 - [ ] Distance/angle tools and labels
