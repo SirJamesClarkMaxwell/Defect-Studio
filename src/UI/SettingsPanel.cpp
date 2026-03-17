@@ -73,6 +73,10 @@ namespace ds
         {
             settingsChanged = true;
         }
+        if (ImGui::SliderFloat("Viewport rotate step (deg)", &editor.m_ViewportRotateStepDeg, 0.1f, 180.0f, "%.1f"))
+        {
+            settingsChanged = true;
+        }
         if (ImGui::Checkbox("Drag view gizmo in viewport", &editor.m_ViewGizmoDragMode))
         {
             if (!editor.m_ViewGizmoDragMode)

@@ -3018,6 +3018,16 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_rotate_step_deg")
+            {
+                try
+                {
+                    m_ViewportRotateStepDeg = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "viewport_fallback_marker_scale")
             {
                 try
@@ -3238,6 +3248,10 @@ namespace ds
             m_ViewGizmoOffsetRight = 0.0f;
         if (m_ViewGizmoOffsetTop < 0.0f)
             m_ViewGizmoOffsetTop = 0.0f;
+        if (m_ViewportRotateStepDeg < 0.1f)
+            m_ViewportRotateStepDeg = 0.1f;
+        if (m_ViewportRotateStepDeg > 180.0f)
+            m_ViewportRotateStepDeg = 180.0f;
         if (m_FallbackGizmoVisualScale < 0.5f)
             m_FallbackGizmoVisualScale = 0.5f;
         if (m_FallbackGizmoVisualScale > 6.0f)
@@ -3357,6 +3371,7 @@ namespace ds
         out << "viewport_view_gizmo_scale=" << m_ViewGizmoScale << '\n';
         out << "viewport_view_gizmo_offset_right=" << m_ViewGizmoOffsetRight << '\n';
         out << "viewport_view_gizmo_offset_top=" << m_ViewGizmoOffsetTop << '\n';
+        out << "viewport_rotate_step_deg=" << m_ViewportRotateStepDeg << '\n';
         out << "viewport_fallback_marker_scale=" << m_FallbackGizmoVisualScale << '\n';
         out << "viewport_show_transform_empties=" << (m_ShowTransformEmpties ? "1" : "0") << '\n';
         out << "viewport_transform_empty_visual_scale=" << m_TransformEmptyVisualScale << '\n';
@@ -4729,6 +4744,92 @@ namespace ds
                 const ImVec2 rectMax = ImGui::GetItemRectMax();
                 m_ViewportRectMin = glm::vec2(rectMin.x, rectMin.y);
                 m_ViewportRectMax = glm::vec2(rectMax.x, rectMax.y);
+
+                if (m_Camera)
+                {
+                    const float toolbarWidth = std::max(320.0f, std::min(540.0f, (rectMax.x - rectMin.x) - 28.0f));
+                    ImGui::SetNextWindowPos(ImVec2(rectMin.x + 14.0f, rectMin.y + 10.0f), ImGuiCond_Always);
+                    ImGui::SetNextWindowSize(ImVec2(toolbarWidth, 0.0f), ImGuiCond_Always);
+                    ImGui::SetNextWindowBgAlpha(0.84f);
+                    ImGuiWindowFlags rotateToolbarFlags =
+                        ImGuiWindowFlags_NoDecoration |
+                        ImGuiWindowFlags_NoMove |
+                        ImGuiWindowFlags_NoSavedSettings |
+                        ImGuiWindowFlags_NoScrollbar |
+                        ImGuiWindowFlags_NoScrollWithMouse |
+                        ImGuiWindowFlags_NoNav |
+                        ImGuiWindowFlags_NoDocking;
+
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
+                    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 4.0f));
+                    if (ImGui::Begin("##ViewportTopRotateToolbar", nullptr, rotateToolbarFlags))
+                    {
+                        const float stepRad = glm::radians(glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f));
+                        const float pitchLimit = glm::half_pi<float>() - 0.01f;
+
+                        auto applyView = [&](float yaw, float pitch)
+                        {
+                            StartCameraOrbitTransition(
+                                m_Camera->GetTarget(),
+                                m_Camera->GetDistance(),
+                                yaw,
+                                glm::clamp(pitch, -pitchLimit, pitchLimit));
+                            m_LastStructureOperationFailed = false;
+                        };
+
+                        ImGui::TextUnformatted("View");
+                        ImGui::SameLine();
+                        if (ImGui::ArrowButton("##ViewLeft", ImGuiDir_Left))
+                        {
+                            applyView(m_Camera->GetYaw() - stepRad, m_Camera->GetPitch());
+                            m_LastStructureMessage = "Viewport: rotate left.";
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::ArrowButton("##ViewRight", ImGuiDir_Right))
+                        {
+                            applyView(m_Camera->GetYaw() + stepRad, m_Camera->GetPitch());
+                            m_LastStructureMessage = "Viewport: rotate right.";
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::ArrowButton("##ViewUp", ImGuiDir_Up))
+                        {
+                            applyView(m_Camera->GetYaw(), m_Camera->GetPitch() + stepRad);
+                            m_LastStructureMessage = "Viewport: tilt up.";
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::ArrowButton("##ViewDown", ImGuiDir_Down))
+                        {
+                            applyView(m_Camera->GetYaw(), m_Camera->GetPitch() - stepRad);
+                            m_LastStructureMessage = "Viewport: tilt down.";
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Front"))
+                        {
+                            applyView(0.0f, 0.0f);
+                            m_LastStructureMessage = "Viewport: front view.";
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted("Step (deg):");
+                        ImGui::SameLine();
+                        ImGui::PushItemWidth(78.0f);
+                        if (ImGui::InputFloat("##ViewportRotateStep", &m_ViewportRotateStepDeg, 1.0f, 5.0f, "%.1f"))
+                        {
+                            m_ViewportRotateStepDeg = glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f);
+                            settingsChanged = true;
+                        }
+                        ImGui::PopItemWidth();
+
+                        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+                            ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive())
+                        {
+                            m_BlockSelectionThisFrame = true;
+                            m_GizmoConsumedMouseThisFrame = true;
+                        }
+                    }
+                    ImGui::End();
+                    ImGui::PopStyleVar(3);
+                }
 
                 if (m_ShowGlobalAxesOverlay && m_Camera)
                 {

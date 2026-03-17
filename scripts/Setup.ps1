@@ -1,3 +1,7 @@
+param(
+    [switch]$SkipSubmoduleSync
+)
+
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -17,7 +21,12 @@ if (-not (Test-Path $PremakeExe)) {
     Expand-Archive -Path $PremakeZip -DestinationPath $PremakeDir -Force
 }
 
-& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "FetchDeps.ps1")
+if ($SkipSubmoduleSync) {
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "FetchDeps.ps1") -SkipSubmoduleSync
+}
+else {
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "FetchDeps.ps1")
+}
 
 Write-Host "Generating Visual Studio 2022 solution..."
 & $PremakeExe vs2022

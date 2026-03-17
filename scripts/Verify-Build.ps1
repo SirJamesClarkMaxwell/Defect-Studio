@@ -34,8 +34,29 @@ function Get-MSBuildPath {
     return $null
 }
 
+function Stop-RunningDefectsStudio {
+    $running = Get-Process -Name "DefectsStudio" -ErrorAction SilentlyContinue
+    if ($null -eq $running) {
+        return
+    }
+
+    Write-Host "Stopping running DefectsStudio instances to avoid linker file lock..." -ForegroundColor Yellow
+    foreach ($process in $running) {
+        try {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        }
+        catch {
+            throw "Failed to stop DefectsStudio process (PID $($process.Id)). Close the app and retry."
+        }
+    }
+}
+
+Invoke-Step -Name "Close running DefectsStudio" -Action {
+    Stop-RunningDefectsStudio
+}
+
 Invoke-Step -Name "Run setup" -Action {
-    & (Join-Path $Root "scripts/Setup.bat")
+    & (Join-Path $Root "scripts/Setup.bat") --skip-submodule-sync
     if ($LASTEXITCODE -ne 0) {
         throw "Setup failed"
     }

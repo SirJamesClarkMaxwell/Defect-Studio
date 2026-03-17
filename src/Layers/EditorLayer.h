@@ -231,6 +231,7 @@ namespace ds
         float m_ViewGizmoScale = 0.72f;
         float m_ViewGizmoOffsetRight = 16.0f;
         float m_ViewGizmoOffsetTop = 72.0f;
+        float m_ViewportRotateStepDeg = 15.0f;
         bool m_SelectionDebugToFile = true;
         bool m_BoxSelectArmed = false;
         bool m_BoxSelecting = false;
