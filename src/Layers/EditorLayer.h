@@ -24,6 +24,7 @@ namespace ds
     class IRenderBackend;
     class OrbitCamera;
     class PropertiesPanel;
+    class SettingsPanel;
     class SceneGroupingBackend;
 
     class EditorLayer : public Layer
@@ -39,6 +40,7 @@ namespace ds
 
     private:
         friend class PropertiesPanel;
+        friend class SettingsPanel;
         friend class SceneGroupingBackend;
 
         enum class ThemePreset
@@ -98,6 +100,12 @@ namespace ds
             std::vector<std::size_t> atomIndices;
             std::vector<SceneUUID> emptyIds;
             std::vector<int> emptyIndices;
+        };
+
+        enum class SpecialNodeSelection
+        {
+            None = 0,
+            Light
         };
 
         static constexpr const char *kSettingsPath = "config/editor_ui_settings.ini";
@@ -178,6 +186,9 @@ namespace ds
         bool m_ShowAddAtomDialog = false;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
+        SpecialNodeSelection m_SelectedSpecialNode = SpecialNodeSelection::None;
+        glm::vec3 m_SceneOriginPosition = glm::vec3(0.0f);
+        glm::vec3 m_LightPosition = glm::vec3(3.0f, -2.0f, 2.5f);
         std::vector<SceneUUID> m_AtomNodeIds;
         std::vector<std::size_t> m_SelectedAtomIndices;
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
@@ -204,6 +215,7 @@ namespace ds
         int m_GroupCounter = 1;
         bool m_ShowSceneOutlinerPanel = true;
         bool m_ShowObjectPropertiesPanel = true;
+        bool m_ShowSettingsPanel = true;
         bool m_ShowTransformEmpties = true;
         float m_TransformEmptyVisualScale = 0.20f;
         std::array<glm::vec3, 3> m_AxisColors = {
@@ -223,12 +235,14 @@ namespace ds
         bool m_BoxSelectArmed = false;
         bool m_BoxSelecting = false;
         bool m_BlockSelectionThisFrame = false;
+        bool m_ShowToolsPanel = true;
         bool m_GizmoConsumedMouseThisFrame = false;
         bool m_FallbackGizmoDragging = false;
         float m_FallbackGizmoVisualScale = 2.0f;
         bool m_TranslateModeActive = false;
         int m_TranslateConstraintAxis = -1;
         int m_TranslatePlaneLockAxis = -1;
+        int m_TranslateSpecialNode = 0;
         glm::vec2 m_TranslateLastMousePos = glm::vec2(0.0f, 0.0f);
         std::vector<std::size_t> m_TranslateIndices;
         std::vector<glm::vec3> m_TranslateInitialCartesian;
@@ -246,6 +260,11 @@ namespace ds
         bool m_ModePieActive = false;
         int m_ModePieHoveredSlice = -1;
         glm::vec2 m_AddMenuPopupPos = glm::vec2(0.0f, 0.0f);
+        bool m_ViewGizmoDragMode = false;
+        bool m_ViewGizmoDragging = false;
+        glm::vec2 m_ViewGizmoDragAnchor = glm::vec2(0.0f, 0.0f);
+        float m_ViewGizmoStartOffsetRight = 0.0f;
+        float m_ViewGizmoStartOffsetTop = 0.0f;
         glm::vec2 m_FallbackLastMousePos = glm::vec2(0.0f, 0.0f);
         glm::vec2 m_FallbackPivotScreen = glm::vec2(0.0f, 0.0f);
         int m_FallbackGizmoOperation = -1;
@@ -284,6 +303,7 @@ namespace ds
 
         SceneRenderSettings m_SceneSettings;
         float m_ViewportRenderScale = 1.0f;
+        float m_UiSpacingScale = 1.0f;
         int m_ProjectionModeIndex = 0;
         bool m_ViewportSettingsOpen = true;
 

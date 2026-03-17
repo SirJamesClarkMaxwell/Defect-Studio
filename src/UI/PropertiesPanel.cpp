@@ -83,6 +83,40 @@ namespace ds
         const bool hasSelectedEmpty =
             editor.m_SelectedTransformEmptyIndex >= 0 &&
             editor.m_SelectedTransformEmptyIndex < static_cast<int>(editor.m_TransformEmpties.size());
+        const bool hasSelectedSpecial = (editor.m_SelectedSpecialNode != EditorLayer::SpecialNodeSelection::None);
+
+        if (hasSelectedSpecial)
+        {
+            glm::vec3 &specialPosition = editor.m_LightPosition;
+
+            ImGui::TextUnformatted("Entity");
+            ImGui::Separator();
+            ImGui::TextDisabled("Type: Light");
+
+            if (DrawVec3Control("Position", specialPosition, 0.0f, 0.01f))
+            {
+                settingsChanged = true;
+            }
+
+            static float s_SpecialUniformXYZ = 0.0f;
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputFloat("Set XYZ", &s_SpecialUniformXYZ, 0.1f, 1.0f, "%.4f");
+            ImGui::SameLine();
+            if (ImGui::Button("Apply to X/Y/Z"))
+            {
+                specialPosition = glm::vec3(s_SpecialUniformXYZ);
+                settingsChanged = true;
+            }
+
+            if (ImGui::Button("Move to 3D Cursor"))
+            {
+                specialPosition = editor.m_CursorPosition;
+                settingsChanged = true;
+            }
+
+            ImGui::End();
+            return;
+        }
 
         if (hasSelectedEmpty)
         {
@@ -145,6 +179,16 @@ namespace ds
             if (DrawVec3Control("Location", location, 0.0f, 0.01f))
             {
                 selectedEmpty.position = location;
+                settingsChanged = true;
+            }
+
+            static float s_EmptyUniformXYZ = 0.0f;
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputFloat("Location XYZ", &s_EmptyUniformXYZ, 0.1f, 1.0f, "%.4f");
+            ImGui::SameLine();
+            if (ImGui::Button("Apply location X/Y/Z"))
+            {
+                selectedEmpty.position = glm::vec3(s_EmptyUniformXYZ);
                 settingsChanged = true;
             }
 
@@ -333,6 +377,16 @@ namespace ds
                         if (DrawVec3Control("Atom Position", atomPosition, 0.0f, 0.01f))
                         {
                             editor.SetAtomCartesianPosition(atomIndex, atomPosition);
+                            settingsChanged = true;
+                        }
+
+                        static float s_AtomUniformXYZ = 0.0f;
+                        ImGui::SetNextItemWidth(120.0f);
+                        ImGui::InputFloat("Atom XYZ", &s_AtomUniformXYZ, 0.1f, 1.0f, "%.4f");
+                        ImGui::SameLine();
+                        if (ImGui::Button("Apply atom X/Y/Z"))
+                        {
+                            editor.SetAtomCartesianPosition(atomIndex, glm::vec3(s_AtomUniformXYZ));
                             settingsChanged = true;
                         }
                     }
