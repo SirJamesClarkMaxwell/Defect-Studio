@@ -11,3 +11,9 @@
 [submodule "vendor/glm"]
 	path = vendor/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "vendor/imguizmo"]
+	path = vendor/imguizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo.git
+[submodule "vendor/imviewguizmo"]
+	path = vendor/imviewguizmo
+	url = https://github.com/Ka1serM/ImViewGuizmo.git

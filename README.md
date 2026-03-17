@@ -99,7 +99,7 @@ Helper scripts included in the repository:
 - `scripts/Verify-Build-And-Run.bat` - Builds and launches the application.
 - `scripts/Run.bat` - Launches existing Debug/Release executable.
 
-External dependencies are managed using **git submodules** (for example `vendor/glfw`, `vendor/glad`, `vendor/imgui`, `vendor/glm`).
+External dependencies are managed using **git submodules** (for example `vendor/glfw`, `vendor/glad`, `vendor/imgui`, `vendor/glm`, `vendor/imguizmo`, `vendor/imviewguizmo`).
 `scripts/Setup.bat` automatically runs submodule sync/init/update.
 
 If project resources are modified (for example `assets/icon.rc`), run the setup script again.

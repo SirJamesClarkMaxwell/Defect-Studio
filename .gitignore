@@ -10,8 +10,8 @@ vendor/*
 !vendor/glad/
 !vendor/imgui/
 !vendor/glm/
+!vendor/imguizmo/
 !vendor/imviewguizmo/
-!vendor/imviewguizmo/**
 
 imgui.ini
 config/editor_ui_settings.ini
