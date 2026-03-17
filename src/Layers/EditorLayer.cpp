@@ -2,8 +2,10 @@
 
 #include "Core/ApplicationContext.h"
 #include "Core/Logger.h"
+#include "Editor/SceneGroupingBackend.h"
 #include "Renderer/OpenGLRendererBackend.h"
 #include "Renderer/OrbitCamera.h"
+#include "UI/PropertiesPanel.h"
 
 #include <algorithm>
 
@@ -19,17 +21,21 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <glm/geometric.hpp>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/matrix.hpp>
@@ -52,6 +58,15 @@ namespace ds
         constexpr float kBasePanSensitivity = 0.18f;
         constexpr float kBaseZoomSensitivity = 0.17f;
         constexpr const char *kSelectionDebugLogPath = "logs/selection_debug.log";
+
+        SceneUUID GenerateSceneUUID()
+        {
+            static std::mt19937_64 rng(std::random_device{}());
+            static std::uniform_int_distribution<std::uint64_t> dist(
+                std::numeric_limits<std::uint64_t>::min() + 1,
+                std::numeric_limits<std::uint64_t>::max());
+            return dist(rng);
+        }
 
         float NormalizeAngleRadians(float angle)
         {
@@ -112,6 +127,44 @@ namespace ds
             }
 
             return normalized;
+        }
+
+        std::vector<std::string> SplitCsv(const std::string &value)
+        {
+            std::vector<std::string> items;
+            if (value.empty())
+            {
+                return items;
+            }
+
+            std::size_t start = 0;
+            while (start <= value.size())
+            {
+                const std::size_t sep = value.find(',', start);
+                if (sep == std::string::npos)
+                {
+                    items.push_back(value.substr(start));
+                    break;
+                }
+                items.push_back(value.substr(start, sep - start));
+                start = sep + 1;
+            }
+            return items;
+        }
+
+        template <typename T>
+        std::string JoinCsv(const std::vector<T> &values)
+        {
+            std::ostringstream out;
+            for (std::size_t i = 0; i < values.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    out << ',';
+                }
+                out << values[i];
+            }
+            return out.str();
         }
 
         float AtomicMassByElementSymbol(const std::string &symbol)
@@ -272,17 +325,32 @@ namespace ds
 
     void EditorLayer::OnAttach()
     {
-        EnsureSceneDefaults();
+        LogInfo("EditorLayer::OnAttach begin");
+
+        LogInfo("Loading editor settings from config/editor_ui_settings.ini");
         LoadSettings();
+
+        LogInfo("Loading scene state from config/scene_state.ini");
+        LoadSceneState();
+
+        LogInfo("Applying scene defaults and validation");
+        EnsureSceneDefaults();
         ApplyTheme(m_CurrentTheme);
         ApplyFontScale(m_FontScale);
+
+        LogInfo("Initializing render backend");
 
         m_RenderBackend = std::make_unique<OpenGLRendererBackend>();
         if (!m_RenderBackend->Initialize())
         {
             LogError("Failed to initialize OpenGL backend.");
         }
+        else
+        {
+            LogInfo("OpenGL backend initialized successfully");
+        }
 
+        LogInfo("Creating orbit camera");
         m_Camera = std::make_unique<OrbitCamera>();
         m_Camera->SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
         m_Camera->SetProjectionMode(m_ProjectionModeIndex == 0 ? OrbitCamera::ProjectionMode::Perspective : OrbitCamera::ProjectionMode::Orthographic);
@@ -295,6 +363,7 @@ namespace ds
         const std::string startupImportPath = std::string(m_ImportPathBuffer.data());
         if (!startupImportPath.empty() && std::filesystem::exists(startupImportPath))
         {
+            LogInfo("Attempting startup import: " + startupImportPath);
             LoadStructureFromPath(startupImportPath);
         }
         else if (!startupImportPath.empty())
@@ -304,7 +373,10 @@ namespace ds
             LogWarn(m_LastStructureMessage);
         }
 
-        LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)));
+        LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)) +
+                ", collections=" + std::to_string(m_Collections.size()) +
+                ", empties=" + std::to_string(m_TransformEmpties.size()) +
+                ", groups=" + std::to_string(m_ObjectGroups.size()));
     }
 
     void EditorLayer::OnDetach()
@@ -771,15 +843,57 @@ namespace ds
         return m_Collections[static_cast<std::size_t>(collectionIndex)].selectable;
     }
 
+    void EditorLayer::EnsureAtomNodeIds()
+    {
+        if (!m_HasStructureLoaded)
+        {
+            return;
+        }
+
+        const std::size_t atomCount = m_WorkingStructure.atoms.size();
+        if (m_AtomNodeIds.size() < atomCount)
+        {
+            const std::size_t oldSize = m_AtomNodeIds.size();
+            m_AtomNodeIds.resize(atomCount, 0);
+            for (std::size_t i = oldSize; i < atomCount; ++i)
+            {
+                m_AtomNodeIds[i] = GenerateSceneUUID();
+            }
+        }
+        else if (m_AtomNodeIds.size() > atomCount)
+        {
+            m_AtomNodeIds.resize(atomCount);
+        }
+
+        for (SceneUUID &id : m_AtomNodeIds)
+        {
+            if (id == 0)
+            {
+                id = GenerateSceneUUID();
+            }
+        }
+    }
+
     void EditorLayer::EnsureSceneDefaults()
     {
+        EnsureAtomNodeIds();
+
         if (m_Collections.empty())
         {
             SceneCollection rootCollection;
+            rootCollection.id = GenerateSceneUUID();
             rootCollection.name = "Scene Collection";
             rootCollection.visible = true;
             rootCollection.selectable = true;
             m_Collections.push_back(rootCollection);
+        }
+
+        for (SceneCollection &collection : m_Collections)
+        {
+            if (collection.id == 0)
+            {
+                collection.id = GenerateSceneUUID();
+            }
         }
 
         if (m_ActiveCollectionIndex < 0 || m_ActiveCollectionIndex >= static_cast<int>(m_Collections.size()))
@@ -787,11 +901,133 @@ namespace ds
             m_ActiveCollectionIndex = 0;
         }
 
+        std::unordered_set<SceneUUID> usedEmptyIds;
+
+        auto findCollectionIndexById = [&](SceneUUID collectionId) -> int
+        {
+            if (collectionId == 0)
+            {
+                return -1;
+            }
+
+            for (std::size_t i = 0; i < m_Collections.size(); ++i)
+            {
+                if (m_Collections[i].id == collectionId)
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        };
+
+        auto hasEmptyId = [&](SceneUUID emptyId) -> bool
+        {
+            if (emptyId == 0)
+            {
+                return false;
+            }
+            for (const TransformEmpty &empty : m_TransformEmpties)
+            {
+                if (empty.id == emptyId)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        auto findEmptyIndexById = [&](SceneUUID emptyId) -> int
+        {
+            if (emptyId == 0)
+            {
+                return -1;
+            }
+
+            for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+            {
+                if (m_TransformEmpties[i].id == emptyId)
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        };
+
         for (TransformEmpty &empty : m_TransformEmpties)
         {
+            if (empty.id == 0 || usedEmptyIds.find(empty.id) != usedEmptyIds.end())
+            {
+                if (empty.id != 0)
+                {
+                    LogWarn("EnsureSceneDefaults: duplicate empty UUID detected, assigning a new UUID.");
+                }
+                empty.id = GenerateSceneUUID();
+            }
+            usedEmptyIds.insert(empty.id);
+
+            if (empty.collectionId != 0)
+            {
+                const int resolvedIndex = findCollectionIndexById(empty.collectionId);
+                if (resolvedIndex >= 0)
+                {
+                    empty.collectionIndex = resolvedIndex;
+                }
+            }
+
             if (empty.collectionIndex < 0 || empty.collectionIndex >= static_cast<int>(m_Collections.size()))
             {
                 empty.collectionIndex = 0;
+            }
+
+            empty.collectionId = m_Collections[static_cast<std::size_t>(empty.collectionIndex)].id;
+
+            if (empty.parentEmptyId == empty.id || !hasEmptyId(empty.parentEmptyId))
+            {
+                empty.parentEmptyId = 0;
+            }
+        }
+
+        for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+        {
+            TransformEmpty &empty = m_TransformEmpties[i];
+            std::unordered_set<SceneUUID> chain;
+            chain.insert(empty.id);
+
+            SceneUUID parentId = empty.parentEmptyId;
+            bool hasCycle = false;
+            std::size_t guard = 0;
+
+            while (parentId != 0 && guard <= m_TransformEmpties.size())
+            {
+                if (chain.find(parentId) != chain.end())
+                {
+                    hasCycle = true;
+                    break;
+                }
+
+                chain.insert(parentId);
+                const int parentIndex = findEmptyIndexById(parentId);
+                if (parentIndex < 0)
+                {
+                    break;
+                }
+
+                parentId = m_TransformEmpties[static_cast<std::size_t>(parentIndex)].parentEmptyId;
+                ++guard;
+            }
+
+            if (hasCycle || guard > m_TransformEmpties.size())
+            {
+                LogWarn("EnsureSceneDefaults: hierarchy cycle detected for empty '" + empty.name + "'. Parent cleared.");
+                empty.parentEmptyId = 0;
+            }
+        }
+
+        for (SceneGroup &group : m_ObjectGroups)
+        {
+            if (group.id == 0)
+            {
+                group.id = GenerateSceneUUID();
             }
         }
     }
@@ -803,8 +1039,22 @@ namespace ds
             return;
         }
 
+        const SceneUUID deletedEmptyId = m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].id;
+
+        for (TransformEmpty &empty : m_TransformEmpties)
+        {
+            if (empty.parentEmptyId == deletedEmptyId)
+            {
+                empty.parentEmptyId = 0;
+            }
+        }
+
         for (SceneGroup &group : m_ObjectGroups)
         {
+            group.emptyIds.erase(
+                std::remove(group.emptyIds.begin(), group.emptyIds.end(), deletedEmptyId),
+                group.emptyIds.end());
+
             for (std::size_t i = 0; i < group.emptyIndices.size();)
             {
                 if (group.emptyIndices[i] == emptyIndex)
@@ -1673,6 +1923,7 @@ namespace ds
         m_WorkingStructure = parsed;
         m_OriginalStructure = parsed;
         m_HasStructureLoaded = true;
+        EnsureAtomNodeIds();
         m_SelectedAtomIndices.clear();
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Imported structure from: " + path;
@@ -1790,6 +2041,7 @@ namespace ds
         }
 
         m_WorkingStructure.atoms.push_back(atom);
+        m_AtomNodeIds.push_back(GenerateSceneUUID());
         m_WorkingStructure.RebuildSpeciesFromAtoms();
 
         m_SelectedAtomIndices.clear();
@@ -2801,6 +3053,336 @@ namespace ds
         out << "gizmo_axis_color_z_r=" << m_AxisColors[2].r << '\n';
         out << "gizmo_axis_color_z_g=" << m_AxisColors[2].g << '\n';
         out << "gizmo_axis_color_z_b=" << m_AxisColors[2].b << '\n';
+
+        SaveSceneState();
+    }
+
+    void EditorLayer::LoadSceneState()
+    {
+        std::ifstream in(kSceneStatePath);
+        if (!in.is_open())
+        {
+            LogInfo("LoadSceneState: no scene state file found at config/scene_state.ini");
+            return;
+        }
+
+        LogInfo("LoadSceneState: parsing config/scene_state.ini");
+
+        std::unordered_map<std::string, std::string> values;
+        std::string line;
+        while (std::getline(in, line))
+        {
+            const std::size_t sep = line.find('=');
+            if (sep == std::string::npos)
+            {
+                continue;
+            }
+            values[line.substr(0, sep)] = line.substr(sep + 1);
+        }
+
+        auto getValue = [&](const std::string &key) -> std::string
+        {
+            const auto it = values.find(key);
+            if (it == values.end())
+            {
+                return std::string();
+            }
+            return it->second;
+        };
+
+        m_Collections.clear();
+        m_TransformEmpties.clear();
+        m_ObjectGroups.clear();
+
+        int atomCount = 0;
+        try
+        {
+            atomCount = std::stoi(getValue("scene_atom_count"));
+        }
+        catch (...)
+        {
+            atomCount = 0;
+        }
+        if (atomCount > 0)
+        {
+            m_AtomNodeIds.clear();
+            m_AtomNodeIds.reserve(static_cast<std::size_t>(atomCount));
+            for (int i = 0; i < atomCount; ++i)
+            {
+                try
+                {
+                    m_AtomNodeIds.push_back(static_cast<SceneUUID>(std::stoull(getValue("scene_atom_" + std::to_string(i) + "_id"))));
+                }
+                catch (...)
+                {
+                    m_AtomNodeIds.push_back(0);
+                }
+            }
+        }
+
+        int collectionCount = 0;
+        try
+        {
+            collectionCount = std::stoi(getValue("scene_collection_count"));
+        }
+        catch (...)
+        {
+            collectionCount = 0;
+        }
+
+        for (int i = 0; i < collectionCount; ++i)
+        {
+            SceneCollection collection;
+            const std::string prefix = "scene_collection_" + std::to_string(i) + "_";
+            try
+            {
+                collection.id = static_cast<SceneUUID>(std::stoull(getValue(prefix + "id")));
+            }
+            catch (...)
+            {
+                collection.id = 0;
+            }
+            collection.name = getValue(prefix + "name");
+            if (collection.name.empty())
+            {
+                collection.name = "Collection " + std::to_string(i + 1);
+            }
+            collection.visible = (getValue(prefix + "visible") != "0");
+            collection.selectable = (getValue(prefix + "selectable") != "0");
+            m_Collections.push_back(collection);
+        }
+
+        int emptyCount = 0;
+        try
+        {
+            emptyCount = std::stoi(getValue("scene_empty_count"));
+        }
+        catch (...)
+        {
+            emptyCount = 0;
+        }
+
+        for (int i = 0; i < emptyCount; ++i)
+        {
+            TransformEmpty empty;
+            const std::string prefix = "scene_empty_" + std::to_string(i) + "_";
+            try
+            {
+                empty.id = static_cast<SceneUUID>(std::stoull(getValue(prefix + "id")));
+            }
+            catch (...)
+            {
+                empty.id = 0;
+            }
+            empty.name = getValue(prefix + "name");
+            if (empty.name.empty())
+            {
+                empty.name = "Empty " + std::to_string(i + 1);
+            }
+
+            try
+            {
+                empty.position.x = std::stof(getValue(prefix + "position_x"));
+                empty.position.y = std::stof(getValue(prefix + "position_y"));
+                empty.position.z = std::stof(getValue(prefix + "position_z"));
+            }
+            catch (...)
+            {
+                empty.position = glm::vec3(0.0f);
+            }
+
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                try
+                {
+                    empty.axes[axis].x = std::stof(getValue(prefix + "axis_" + std::to_string(axis) + "_x"));
+                    empty.axes[axis].y = std::stof(getValue(prefix + "axis_" + std::to_string(axis) + "_y"));
+                    empty.axes[axis].z = std::stof(getValue(prefix + "axis_" + std::to_string(axis) + "_z"));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            try
+            {
+                empty.collectionId = static_cast<SceneUUID>(std::stoull(getValue(prefix + "collection_id")));
+            }
+            catch (...)
+            {
+                empty.collectionId = 0;
+            }
+
+            try
+            {
+                empty.parentEmptyId = static_cast<SceneUUID>(std::stoull(getValue(prefix + "parent_empty_id")));
+            }
+            catch (...)
+            {
+                empty.parentEmptyId = 0;
+            }
+
+            try
+            {
+                empty.collectionIndex = std::stoi(getValue(prefix + "collection_index"));
+            }
+            catch (...)
+            {
+                empty.collectionIndex = 0;
+            }
+
+            empty.visible = (getValue(prefix + "visible") != "0");
+            empty.selectable = (getValue(prefix + "selectable") != "0");
+            m_TransformEmpties.push_back(empty);
+        }
+
+        int groupCount = 0;
+        try
+        {
+            groupCount = std::stoi(getValue("scene_group_count"));
+        }
+        catch (...)
+        {
+            groupCount = 0;
+        }
+
+        for (int i = 0; i < groupCount; ++i)
+        {
+            SceneGroup group;
+            const std::string prefix = "scene_group_" + std::to_string(i) + "_";
+            try
+            {
+                group.id = static_cast<SceneUUID>(std::stoull(getValue(prefix + "id")));
+            }
+            catch (...)
+            {
+                group.id = 0;
+            }
+            group.name = getValue(prefix + "name");
+            if (group.name.empty())
+            {
+                group.name = "Group " + std::to_string(i + 1);
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "atom_indices")))
+            {
+                try
+                {
+                    group.atomIndices.push_back(static_cast<std::size_t>(std::stoull(token)));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "atom_ids")))
+            {
+                try
+                {
+                    group.atomIds.push_back(static_cast<SceneUUID>(std::stoull(token)));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "empty_ids")))
+            {
+                try
+                {
+                    group.emptyIds.push_back(static_cast<SceneUUID>(std::stoull(token)));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            for (const std::string &token : SplitCsv(getValue(prefix + "empty_indices")))
+            {
+                try
+                {
+                    group.emptyIndices.push_back(std::stoi(token));
+                }
+                catch (...)
+                {
+                }
+            }
+
+            m_ObjectGroups.push_back(group);
+        }
+
+        m_CollectionCounter = std::max(1, static_cast<int>(m_Collections.size()) + 1);
+        m_GroupCounter = std::max(1, static_cast<int>(m_ObjectGroups.size()) + 1);
+        m_TransformEmptyCounter = std::max(1, static_cast<int>(m_TransformEmpties.size()) + 1);
+
+        LogInfo("LoadSceneState: loaded collections=" + std::to_string(m_Collections.size()) +
+                ", empties=" + std::to_string(m_TransformEmpties.size()) +
+                ", groups=" + std::to_string(m_ObjectGroups.size()) +
+                ", atomNodeIds=" + std::to_string(m_AtomNodeIds.size()));
+    }
+
+    void EditorLayer::SaveSceneState() const
+    {
+        std::filesystem::create_directories("config");
+
+        std::ofstream out(kSceneStatePath, std::ios::trunc);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        out << "scene_version=1\n";
+        out << "scene_atom_count=" << m_AtomNodeIds.size() << '\n';
+        for (std::size_t i = 0; i < m_AtomNodeIds.size(); ++i)
+        {
+            out << "scene_atom_" << i << "_id=" << m_AtomNodeIds[i] << '\n';
+        }
+        out << "scene_collection_count=" << m_Collections.size() << '\n';
+        for (std::size_t i = 0; i < m_Collections.size(); ++i)
+        {
+            const SceneCollection &collection = m_Collections[i];
+            const std::string prefix = "scene_collection_" + std::to_string(i) + "_";
+            out << prefix << "id=" << collection.id << '\n';
+            out << prefix << "name=" << collection.name << '\n';
+            out << prefix << "visible=" << (collection.visible ? 1 : 0) << '\n';
+            out << prefix << "selectable=" << (collection.selectable ? 1 : 0) << '\n';
+        }
+
+        out << "scene_empty_count=" << m_TransformEmpties.size() << '\n';
+        for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+        {
+            const TransformEmpty &empty = m_TransformEmpties[i];
+            const std::string prefix = "scene_empty_" + std::to_string(i) + "_";
+            out << prefix << "id=" << empty.id << '\n';
+            out << prefix << "name=" << empty.name << '\n';
+            out << prefix << "position_x=" << empty.position.x << '\n';
+            out << prefix << "position_y=" << empty.position.y << '\n';
+            out << prefix << "position_z=" << empty.position.z << '\n';
+            out << prefix << "collection_id=" << empty.collectionId << '\n';
+            out << prefix << "parent_empty_id=" << empty.parentEmptyId << '\n';
+            out << prefix << "collection_index=" << empty.collectionIndex << '\n';
+            out << prefix << "visible=" << (empty.visible ? 1 : 0) << '\n';
+            out << prefix << "selectable=" << (empty.selectable ? 1 : 0) << '\n';
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                out << prefix << "axis_" << axis << "_x=" << empty.axes[axis].x << '\n';
+                out << prefix << "axis_" << axis << "_y=" << empty.axes[axis].y << '\n';
+                out << prefix << "axis_" << axis << "_z=" << empty.axes[axis].z << '\n';
+            }
+        }
+
+        out << "scene_group_count=" << m_ObjectGroups.size() << '\n';
+        for (std::size_t i = 0; i < m_ObjectGroups.size(); ++i)
+        {
+            const SceneGroup &group = m_ObjectGroups[i];
+            const std::string prefix = "scene_group_" + std::to_string(i) + "_";
+            out << prefix << "id=" << group.id << '\n';
+            out << prefix << "name=" << group.name << '\n';
+            out << prefix << "atom_ids=" << JoinCsv(group.atomIds) << '\n';
+            out << prefix << "atom_indices=" << JoinCsv(group.atomIndices) << '\n';
+            out << prefix << "empty_ids=" << JoinCsv(group.emptyIds) << '\n';
+            out << prefix << "empty_indices=" << JoinCsv(group.emptyIndices) << '\n';
+        }
     }
 
     void EditorLayer::OnImGuiRender()
@@ -2809,99 +3391,12 @@ namespace ds
         bool settingsChanged = false;
         const ImGuiIO &io = ImGui::GetIO();
 
-        auto uniquePush = [](std::vector<std::size_t> &container, std::size_t value)
+        static bool firstFrameLogged = false;
+        if (!firstFrameLogged)
         {
-            if (std::find(container.begin(), container.end(), value) == container.end())
-            {
-                container.push_back(value);
-            }
-        };
-
-        auto uniquePushInt = [](std::vector<int> &container, int value)
-        {
-            if (std::find(container.begin(), container.end(), value) == container.end())
-            {
-                container.push_back(value);
-            }
-        };
-
-        auto sanitizeGroup = [&](SceneGroup &group)
-        {
-            group.atomIndices.erase(
-                std::remove_if(group.atomIndices.begin(), group.atomIndices.end(), [&](std::size_t atomIndex)
-                               { return atomIndex >= m_WorkingStructure.atoms.size(); }),
-                group.atomIndices.end());
-            std::sort(group.atomIndices.begin(), group.atomIndices.end());
-            group.atomIndices.erase(std::unique(group.atomIndices.begin(), group.atomIndices.end()), group.atomIndices.end());
-
-            group.emptyIndices.erase(
-                std::remove_if(group.emptyIndices.begin(), group.emptyIndices.end(), [&](int emptyIndex)
-                               { return emptyIndex < 0 || emptyIndex >= static_cast<int>(m_TransformEmpties.size()); }),
-                group.emptyIndices.end());
-            std::sort(group.emptyIndices.begin(), group.emptyIndices.end());
-            group.emptyIndices.erase(std::unique(group.emptyIndices.begin(), group.emptyIndices.end()), group.emptyIndices.end());
-        };
-
-        auto selectGroup = [&](int groupIndex)
-        {
-            if (groupIndex < 0 || groupIndex >= static_cast<int>(m_ObjectGroups.size()))
-            {
-                return;
-            }
-
-            SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(groupIndex)];
-            sanitizeGroup(group);
-
-            m_SelectedAtomIndices = group.atomIndices;
-            m_SelectedTransformEmptyIndex = group.emptyIndices.empty() ? -1 : group.emptyIndices.front();
-            if (m_SelectedTransformEmptyIndex >= 0)
-            {
-                m_ActiveTransformEmptyIndex = m_SelectedTransformEmptyIndex;
-            }
-            m_GizmoEnabled = true;
-            m_InteractionMode = InteractionMode::Select;
-        };
-
-        auto addCurrentSelectionToGroup = [&](int groupIndex)
-        {
-            if (groupIndex < 0 || groupIndex >= static_cast<int>(m_ObjectGroups.size()))
-            {
-                return;
-            }
-
-            SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(groupIndex)];
-            for (std::size_t atomIndex : m_SelectedAtomIndices)
-            {
-                if (atomIndex < m_WorkingStructure.atoms.size())
-                {
-                    uniquePush(group.atomIndices, atomIndex);
-                }
-            }
-            if (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
-            {
-                uniquePushInt(group.emptyIndices, m_SelectedTransformEmptyIndex);
-            }
-            sanitizeGroup(group);
-        };
-
-        auto removeCurrentSelectionFromGroup = [&](int groupIndex)
-        {
-            if (groupIndex < 0 || groupIndex >= static_cast<int>(m_ObjectGroups.size()))
-            {
-                return;
-            }
-
-            SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(groupIndex)];
-            for (std::size_t atomIndex : m_SelectedAtomIndices)
-            {
-                group.atomIndices.erase(std::remove(group.atomIndices.begin(), group.atomIndices.end(), atomIndex), group.atomIndices.end());
-            }
-            if (m_SelectedTransformEmptyIndex >= 0)
-            {
-                group.emptyIndices.erase(std::remove(group.emptyIndices.begin(), group.emptyIndices.end(), m_SelectedTransformEmptyIndex), group.emptyIndices.end());
-            }
-            sanitizeGroup(group);
-        };
+            firstFrameLogged = true;
+            LogInfo("OnImGuiRender: first GUI frame reached.");
+        }
 
         static bool s_LastCanRenderTransformGizmo = false;
         static bool s_LastValidPivot = false;
@@ -4678,8 +5173,10 @@ namespace ds
                         if (ImGui::MenuItem("Add at 3D cursor", nullptr, false, m_HasStructureLoaded))
                         {
                             TransformEmpty empty;
+                            empty.id = GenerateSceneUUID();
                             empty.position = m_CursorPosition;
                             empty.collectionIndex = m_ActiveCollectionIndex;
+                            empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
                             char label[32] = {};
                             std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
                             empty.name = label;
@@ -4692,9 +5189,11 @@ namespace ds
                         if (ImGui::MenuItem("Add at selection center", nullptr, false, m_HasStructureLoaded && !m_SelectedAtomIndices.empty()))
                         {
                             TransformEmpty empty;
+                            empty.id = GenerateSceneUUID();
                             empty.position = ComputeSelectionCenter();
                             ComputeSelectionAxesAround(empty.position, empty.axes);
                             empty.collectionIndex = m_ActiveCollectionIndex;
+                            empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
                             char label[32] = {};
                             std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
                             empty.name = label;
@@ -4727,32 +5226,24 @@ namespace ds
                         const bool hasSelection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
                         if (ImGui::MenuItem("Create group from selection", nullptr, false, hasSelection))
                         {
-                            SceneGroup group;
-                            char label[48] = {};
-                            std::snprintf(label, sizeof(label), "Group %d", m_GroupCounter++);
-                            group.name = label;
-                            group.atomIndices = m_SelectedAtomIndices;
-                            if (m_SelectedTransformEmptyIndex >= 0)
-                            {
-                                group.emptyIndices.push_back(m_SelectedTransformEmptyIndex);
-                            }
-                            m_ObjectGroups.push_back(group);
-                            m_ActiveGroupIndex = static_cast<int>(m_ObjectGroups.size()) - 1;
+                            settingsChanged |= SceneGroupingBackend::CreateGroupFromCurrentSelection(*this);
                         }
 
                         if (ImGui::MenuItem("Add selection to active group", nullptr, false, hasSelection && m_ActiveGroupIndex >= 0))
                         {
-                            addCurrentSelectionToGroup(m_ActiveGroupIndex);
+                            SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
+                            settingsChanged = true;
                         }
 
                         if (ImGui::MenuItem("Remove selection from active group", nullptr, false, hasSelection && m_ActiveGroupIndex >= 0))
                         {
-                            removeCurrentSelectionFromGroup(m_ActiveGroupIndex);
+                            SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
+                            settingsChanged = true;
                         }
 
                         if (ImGui::MenuItem("Select active group", nullptr, false, m_ActiveGroupIndex >= 0))
                         {
-                            selectGroup(m_ActiveGroupIndex);
+                            SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                         }
 
                         ImGui::EndMenu();
@@ -5180,8 +5671,10 @@ namespace ds
                 if (ImGui::Button("Add empty at 3D cursor"))
                 {
                     TransformEmpty empty;
+                    empty.id = GenerateSceneUUID();
                     empty.position = m_CursorPosition;
                     empty.collectionIndex = m_ActiveCollectionIndex;
+                    empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
                     char label[32] = {};
                     std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
                     empty.name = label;
@@ -5200,9 +5693,11 @@ namespace ds
                 if (ImGui::Button("Add empty at selection center") && canAddFromSelection)
                 {
                     TransformEmpty empty;
+                    empty.id = GenerateSceneUUID();
                     empty.position = ComputeSelectionCenter();
                     ComputeSelectionAxesAround(empty.position, empty.axes);
                     empty.collectionIndex = m_ActiveCollectionIndex;
+                    empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
                     char label[32] = {};
                     std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
                     empty.name = label;
@@ -5302,9 +5797,11 @@ namespace ds
                     if (ImGui::Button("Selection -> Add empty + tmp transform") && canAddFromSelection)
                     {
                         TransformEmpty empty;
+                        empty.id = GenerateSceneUUID();
                         empty.position = ComputeSelectionCenter();
                         ComputeSelectionAxesAround(empty.position, empty.axes);
                         empty.collectionIndex = m_ActiveCollectionIndex;
+                        empty.collectionId = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].id;
                         char label[32] = {};
                         std::snprintf(label, sizeof(label), "Empty %d", m_TransformEmptyCounter++);
                         empty.name = label;
@@ -5546,6 +6043,7 @@ namespace ds
             if (ImGui::Button("Add collection"))
             {
                 SceneCollection collection;
+                collection.id = GenerateSceneUUID();
                 char label[48] = {};
                 std::snprintf(label, sizeof(label), "Collection %d", m_CollectionCounter++);
                 collection.name = label;
@@ -5563,13 +6061,25 @@ namespace ds
             if (ImGui::Button("Create group from selection") && canCreateGroup)
             {
                 SceneGroup group;
+                group.id = GenerateSceneUUID();
                 char label[48] = {};
                 std::snprintf(label, sizeof(label), "Group %d", m_GroupCounter++);
                 group.name = label;
                 group.atomIndices = m_SelectedAtomIndices;
+                for (std::size_t atomIndex : group.atomIndices)
+                {
+                    if (atomIndex < m_AtomNodeIds.size())
+                    {
+                        group.atomIds.push_back(m_AtomNodeIds[atomIndex]);
+                    }
+                }
                 if (m_SelectedTransformEmptyIndex >= 0)
                 {
                     group.emptyIndices.push_back(m_SelectedTransformEmptyIndex);
+                    if (m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
+                    {
+                        group.emptyIds.push_back(m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].id);
+                    }
                 }
                 m_ObjectGroups.push_back(group);
                 m_ActiveGroupIndex = static_cast<int>(m_ObjectGroups.size()) - 1;
@@ -5607,6 +6117,7 @@ namespace ds
                             if (emptyIndex >= 0 && emptyIndex < static_cast<int>(m_TransformEmpties.size()))
                             {
                                 m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].collectionIndex = static_cast<int>(collectionIndex);
+                                m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].collectionId = m_Collections[collectionIndex].id;
                                 settingsChanged = true;
                             }
                         }
@@ -5616,35 +6127,121 @@ namespace ds
 
                 if (ImGui::TreeNode("Objects"))
                 {
-                    for (std::size_t emptyIndex = 0; emptyIndex < m_TransformEmpties.size(); ++emptyIndex)
+                    std::function<void(SceneUUID)> drawEmptyHierarchy = [&](SceneUUID parentId)
                     {
-                        TransformEmpty &empty = m_TransformEmpties[emptyIndex];
-                        if (empty.collectionIndex != static_cast<int>(collectionIndex))
+                        for (std::size_t emptyIndex = 0; emptyIndex < m_TransformEmpties.size(); ++emptyIndex)
                         {
-                            continue;
-                        }
+                            TransformEmpty &empty = m_TransformEmpties[emptyIndex];
+                            if (empty.collectionIndex != static_cast<int>(collectionIndex) || empty.parentEmptyId != parentId)
+                            {
+                                continue;
+                            }
 
-                        const bool isSelected = (m_SelectedTransformEmptyIndex == static_cast<int>(emptyIndex));
-                        if (ImGui::Selectable((std::string("Empty: ") + empty.name).c_str(), isSelected))
-                        {
-                            m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
-                            m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
-                            m_SelectedAtomIndices.clear();
-                        }
+                            const bool isSelected = (m_SelectedTransformEmptyIndex == static_cast<int>(emptyIndex));
+                            const std::string label = "Empty: " + empty.name + "##empty_" + std::to_string(emptyIndex);
+                            const bool open = ImGui::TreeNodeEx(
+                                label.c_str(),
+                                (isSelected ? ImGuiTreeNodeFlags_Selected : 0) | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth);
 
-                        const int dragIndex = static_cast<int>(emptyIndex);
-                        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-                        {
-                            ImGui::SetDragDropPayload("DS_EMPTY_INDEX", &dragIndex, sizeof(int));
-                            ImGui::Text("Move Empty: %s", empty.name.c_str());
-                            ImGui::EndDragDropSource();
+                            if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                            {
+                                m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                m_SelectedAtomIndices.clear();
+                            }
+
+                            const int dragIndex = static_cast<int>(emptyIndex);
+                            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                            {
+                                ImGui::SetDragDropPayload("DS_EMPTY_INDEX", &dragIndex, sizeof(int));
+                                ImGui::Text("Move Empty: %s", empty.name.c_str());
+                                ImGui::EndDragDropSource();
+                            }
+
+                            if (ImGui::BeginDragDropTarget())
+                            {
+                                if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("DS_EMPTY_INDEX"))
+                                {
+                                    if (payload->DataSize == sizeof(int))
+                                    {
+                                        const int childIndex = *static_cast<const int *>(payload->Data);
+                                        if (childIndex >= 0 && childIndex < static_cast<int>(m_TransformEmpties.size()) && childIndex != static_cast<int>(emptyIndex))
+                                        {
+                                            m_TransformEmpties[static_cast<std::size_t>(childIndex)].parentEmptyId = empty.id;
+                                            m_TransformEmpties[static_cast<std::size_t>(childIndex)].collectionIndex = static_cast<int>(collectionIndex);
+                                            m_TransformEmpties[static_cast<std::size_t>(childIndex)].collectionId = m_Collections[collectionIndex].id;
+                                            settingsChanged = true;
+                                        }
+                                    }
+                                }
+                                ImGui::EndDragDropTarget();
+                            }
+
+                            if (open)
+                            {
+                                drawEmptyHierarchy(empty.id);
+                                ImGui::TreePop();
+                            }
                         }
-                    }
+                    };
+
+                    drawEmptyHierarchy(0);
 
                     if (collectionIndex == 0)
                     {
                         const std::string atomsLabel = "Atoms (" + std::to_string(m_WorkingStructure.atoms.size()) + ")";
-                        ImGui::Selectable(atomsLabel.c_str(), false, ImGuiSelectableFlags_Disabled);
+                        if (ImGui::TreeNode(atomsLabel.c_str()))
+                        {
+                            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+                            {
+                                const bool isSelected = IsAtomSelected(atomIndex);
+                                const std::string atomLabel =
+                                    m_WorkingStructure.atoms[atomIndex].element + " [" + std::to_string(atomIndex) + "]";
+                                if (ImGui::Selectable(atomLabel.c_str(), isSelected))
+                                {
+                                    if (io.KeyCtrl)
+                                    {
+                                        if (isSelected)
+                                        {
+                                            m_SelectedAtomIndices.erase(
+                                                std::remove(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), atomIndex),
+                                                m_SelectedAtomIndices.end());
+                                        }
+                                        else
+                                        {
+                                            m_SelectedAtomIndices.push_back(atomIndex);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        m_SelectedAtomIndices.clear();
+                                        m_SelectedAtomIndices.push_back(atomIndex);
+                                    }
+                                    m_SelectedTransformEmptyIndex = -1;
+                                }
+                            }
+                            ImGui::TreePop();
+                        }
+                    }
+
+                    if (ImGui::BeginDragDropTarget())
+                    {
+                        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("DS_EMPTY_INDEX"))
+                        {
+                            if (payload->DataSize == sizeof(int))
+                            {
+                                const int droppedIndex = *static_cast<const int *>(payload->Data);
+                                if (droppedIndex >= 0 && droppedIndex < static_cast<int>(m_TransformEmpties.size()))
+                                {
+                                    TransformEmpty &dropped = m_TransformEmpties[static_cast<std::size_t>(droppedIndex)];
+                                    dropped.parentEmptyId = 0;
+                                    dropped.collectionIndex = static_cast<int>(collectionIndex);
+                                    dropped.collectionId = m_Collections[collectionIndex].id;
+                                    settingsChanged = true;
+                                }
+                            }
+                        }
+                        ImGui::EndDragDropTarget();
                     }
 
                     ImGui::TreePop();
@@ -5658,7 +6255,7 @@ namespace ds
             {
                 if (ImGui::Button("Select active group"))
                 {
-                    selectGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                 }
                 ImGui::SameLine();
                 const bool hasSelection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
@@ -5668,13 +6265,13 @@ namespace ds
                 }
                 if (ImGui::Button("Add selection to active"))
                 {
-                    addCurrentSelectionToGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
                     settingsChanged = true;
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Remove selection from active"))
                 {
-                    removeCurrentSelectionFromGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
                     settingsChanged = true;
                 }
                 if (!hasSelection)
@@ -5686,12 +6283,12 @@ namespace ds
             for (std::size_t groupIndex = 0; groupIndex < m_ObjectGroups.size(); ++groupIndex)
             {
                 SceneGroup &group = m_ObjectGroups[groupIndex];
-                sanitizeGroup(group);
+                SceneGroupingBackend::SanitizeGroup(*this, static_cast<int>(groupIndex));
                 const bool isActiveGroup = (static_cast<int>(groupIndex) == m_ActiveGroupIndex);
                 if (ImGui::Selectable(group.name.c_str(), isActiveGroup))
                 {
                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
-                    selectGroup(m_ActiveGroupIndex);
+                    SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
@@ -5704,161 +6301,7 @@ namespace ds
 
         if (m_ShowObjectPropertiesPanel)
         {
-            ImGui::Begin("Object Properties", &m_ShowObjectPropertiesPanel);
-
-            const bool hasSelectedEmpty =
-                m_SelectedTransformEmptyIndex >= 0 &&
-                m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size());
-
-            if (hasSelectedEmpty)
-            {
-                TransformEmpty &selectedEmpty = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)];
-                ImGui::TextUnformatted("Type: Empty");
-
-                std::array<char, 128> emptyNameBuffer = {};
-                std::snprintf(emptyNameBuffer.data(), emptyNameBuffer.size(), "%s", selectedEmpty.name.c_str());
-                if (ImGui::InputText("Name", emptyNameBuffer.data(), emptyNameBuffer.size()))
-                {
-                    selectedEmpty.name = std::string(emptyNameBuffer.data());
-                    settingsChanged = true;
-                }
-
-                if (ImGui::DragFloat3("Position", &selectedEmpty.position.x, 0.01f, -1000.0f, 1000.0f, "%.5f"))
-                {
-                    settingsChanged = true;
-                }
-
-                if (ImGui::Checkbox("Visible", &selectedEmpty.visible))
-                {
-                    settingsChanged = true;
-                }
-                if (ImGui::Checkbox("Selectable", &selectedEmpty.selectable))
-                {
-                    settingsChanged = true;
-                }
-
-                const char *currentCollectionName =
-                    (selectedEmpty.collectionIndex >= 0 && selectedEmpty.collectionIndex < static_cast<int>(m_Collections.size()))
-                        ? m_Collections[static_cast<std::size_t>(selectedEmpty.collectionIndex)].name.c_str()
-                        : "(invalid)";
-                if (ImGui::BeginCombo("Collection", currentCollectionName))
-                {
-                    for (std::size_t i = 0; i < m_Collections.size(); ++i)
-                    {
-                        const bool selected = (selectedEmpty.collectionIndex == static_cast<int>(i));
-                        if (ImGui::Selectable(m_Collections[i].name.c_str(), selected))
-                        {
-                            selectedEmpty.collectionIndex = static_cast<int>(i);
-                            settingsChanged = true;
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-
-                if (ImGui::Button("Align axes to world"))
-                {
-                    selectedEmpty.axes = {
-                        glm::vec3(1.0f, 0.0f, 0.0f),
-                        glm::vec3(0.0f, 1.0f, 0.0f),
-                        glm::vec3(0.0f, 0.0f, 1.0f)};
-                    settingsChanged = true;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Align Z to selected atoms") && m_SelectedAtomIndices.size() >= 2)
-                {
-                    if (AlignEmptyZAxisFromSelectedAtoms(m_SelectedTransformEmptyIndex))
-                    {
-                        settingsChanged = true;
-                    }
-                }
-
-                if (ImGui::Button("Delete selected empty"))
-                {
-                    const int deletedIndex = m_SelectedTransformEmptyIndex;
-                    DeleteTransformEmptyAtIndex(deletedIndex);
-                    settingsChanged = true;
-                }
-            }
-            else
-            {
-                ImGui::TextUnformatted("Type: Atoms / None");
-                ImGui::Text("Selected atoms: %zu", m_SelectedAtomIndices.size());
-                if (!m_SelectedAtomIndices.empty())
-                {
-                    if (ImGui::Button("Create group from selected atoms"))
-                    {
-                        SceneGroup group;
-                        char label[48] = {};
-                        std::snprintf(label, sizeof(label), "Group %d", m_GroupCounter++);
-                        group.name = label;
-                        group.atomIndices = m_SelectedAtomIndices;
-                        m_ObjectGroups.push_back(group);
-                        m_ActiveGroupIndex = static_cast<int>(m_ObjectGroups.size()) - 1;
-                        settingsChanged = true;
-                    }
-                }
-
-                if (m_ActiveGroupIndex >= 0 && m_ActiveGroupIndex < static_cast<int>(m_ObjectGroups.size()))
-                {
-                    ImGui::SeparatorText("Active Group");
-                    SceneGroup &group = m_ObjectGroups[static_cast<std::size_t>(m_ActiveGroupIndex)];
-                    sanitizeGroup(group);
-
-                    std::array<char, 128> groupNameBuffer = {};
-                    std::snprintf(groupNameBuffer.data(), groupNameBuffer.size(), "%s", group.name.c_str());
-                    if (ImGui::InputText("Group name", groupNameBuffer.data(), groupNameBuffer.size()))
-                    {
-                        group.name = std::string(groupNameBuffer.data());
-                        settingsChanged = true;
-                    }
-
-                    ImGui::Text("Name: %s", group.name.c_str());
-                    ImGui::Text("Atoms: %zu", group.atomIndices.size());
-                    ImGui::Text("Empties: %zu", group.emptyIndices.size());
-
-                    if (ImGui::Button("Select this group"))
-                    {
-                        selectGroup(m_ActiveGroupIndex);
-                    }
-
-                    const bool hasSelection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
-                    if (!hasSelection)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Add current selection to group"))
-                    {
-                        addCurrentSelectionToGroup(m_ActiveGroupIndex);
-                        settingsChanged = true;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Remove current selection from group"))
-                    {
-                        removeCurrentSelectionFromGroup(m_ActiveGroupIndex);
-                        settingsChanged = true;
-                    }
-                    if (!hasSelection)
-                    {
-                        ImGui::EndDisabled();
-                    }
-
-                    if (ImGui::Button("Delete group"))
-                    {
-                        m_ObjectGroups.erase(m_ObjectGroups.begin() + m_ActiveGroupIndex);
-                        if (m_ObjectGroups.empty())
-                        {
-                            m_ActiveGroupIndex = -1;
-                        }
-                        else
-                        {
-                            m_ActiveGroupIndex = std::min(m_ActiveGroupIndex, static_cast<int>(m_ObjectGroups.size()) - 1);
-                        }
-                        settingsChanged = true;
-                    }
-                }
-            }
-
-            ImGui::End();
+            PropertiesPanel::Draw(*this, settingsChanged);
         }
 
         if (m_ShowLogPanel)

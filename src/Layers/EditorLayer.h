@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,8 +19,12 @@
 
 namespace ds
 {
+    using SceneUUID = std::uint64_t;
+
     class IRenderBackend;
     class OrbitCamera;
+    class PropertiesPanel;
+    class SceneGroupingBackend;
 
     class EditorLayer : public Layer
     {
@@ -33,6 +38,9 @@ namespace ds
         void OnImGuiRender() override;
 
     private:
+        friend class PropertiesPanel;
+        friend class SceneGroupingBackend;
+
         enum class ThemePreset
         {
             Dark = 0,
@@ -59,12 +67,15 @@ namespace ds
 
         struct TransformEmpty
         {
+            SceneUUID id = 0;
             std::string name;
             glm::vec3 position = glm::vec3(0.0f);
             std::array<glm::vec3, 3> axes = {
                 glm::vec3(1.0f, 0.0f, 0.0f),
                 glm::vec3(0.0f, 1.0f, 0.0f),
                 glm::vec3(0.0f, 0.0f, 1.0f)};
+            SceneUUID parentEmptyId = 0;
+            SceneUUID collectionId = 0;
             int collectionIndex = 0;
             int groupIndex = -1;
             bool visible = true;
@@ -73,6 +84,7 @@ namespace ds
 
         struct SceneCollection
         {
+            SceneUUID id = 0;
             std::string name;
             bool visible = true;
             bool selectable = true;
@@ -80,18 +92,24 @@ namespace ds
 
         struct SceneGroup
         {
+            SceneUUID id = 0;
             std::string name;
+            std::vector<SceneUUID> atomIds;
             std::vector<std::size_t> atomIndices;
+            std::vector<SceneUUID> emptyIds;
             std::vector<int> emptyIndices;
         };
 
         static constexpr const char *kSettingsPath = "config/editor_ui_settings.ini";
+        static constexpr const char *kSceneStatePath = "config/scene_state.ini";
 
         void ApplyTheme(ThemePreset preset);
         void ApplyFontScale(float scale);
         void ApplyCameraSensitivity();
         void SaveSettings() const;
         void LoadSettings();
+        void SaveSceneState() const;
+        void LoadSceneState();
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
@@ -118,6 +136,7 @@ namespace ds
         bool ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const;
         bool Set3DCursorToSelectionCenterOfMass();
         bool Set3DCursorToSelectedAtom(bool useLastSelected);
+        void EnsureAtomNodeIds();
         bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
         void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
         void DrawPeriodicTableWindow();
@@ -157,6 +176,7 @@ namespace ds
         bool m_PeriodicTableOpen = false;
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
+        std::vector<SceneUUID> m_AtomNodeIds;
         std::vector<std::size_t> m_SelectedAtomIndices;
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
         glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);

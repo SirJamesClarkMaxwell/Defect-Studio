@@ -68,7 +68,7 @@
 - [ ] Clean view + cell edge toggle
 
 ### [ ] T07 - UI panels and UX polishing (`task/08-ui-panels-ux`)
-- [ ] Dockspace + tool panels
+- [x] Dockspace + tool panels
 - [x] Viewport settings panel: background, grid, lighting, projection mode, atom color override
 - [x] File dialogs with fallback path
 - [ ] Persist axis settings (colors + orientation) together with renderer settings

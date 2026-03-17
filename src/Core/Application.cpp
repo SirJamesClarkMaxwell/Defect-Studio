@@ -39,6 +39,7 @@ namespace ds
             std::ifstream in(kWindowStatePath);
             if (!in.is_open())
             {
+                LogInfo("Window state file not found. Using default window placement.");
                 return state;
             }
 
@@ -84,6 +85,22 @@ namespace ds
                 }
             }
 
+            // Windows can report minimized windows as (-32000, -32000) with zero size.
+            // In that case we must ignore persisted placement, otherwise the app can appear "not launching".
+            const bool invalidSize = (state.width < 640 || state.height < 480);
+            const bool minimizedSentinelPos = (state.x <= -30000 || state.y <= -30000);
+            if (invalidSize || minimizedSentinelPos)
+            {
+                LogWarn("Invalid persisted window state detected (possibly minimized snapshot). Resetting to defaults.");
+                state = WindowState{};
+            }
+
+            LogInfo("Loaded window state: x=" + std::to_string(state.x) +
+                    ", y=" + std::to_string(state.y) +
+                    ", width=" + std::to_string(state.width) +
+                    ", height=" + std::to_string(state.height) +
+                    ", maximized=" + std::string(state.maximized ? "1" : "0"));
+
             return state;
         }
 
@@ -94,6 +111,12 @@ namespace ds
                 return;
             }
 
+            if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE)
+            {
+                LogInfo("Window is minimized during shutdown. Skipping window_state.ini update.");
+                return;
+            }
+
             int x = 0;
             int y = 0;
             int width = 0;
@@ -101,6 +124,12 @@ namespace ds
             glfwGetWindowPos(window, &x, &y);
             glfwGetWindowSize(window, &width, &height);
             const bool maximized = glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
+
+            if (width < 640 || height < 480 || x <= -30000 || y <= -30000)
+            {
+                LogWarn("Refusing to save invalid window state values.");
+                return;
+            }
 
             std::filesystem::create_directories("config");
             std::ofstream out(kWindowStatePath, std::ios::trunc);
@@ -114,6 +143,12 @@ namespace ds
             out << "width=" << width << '\n';
             out << "height=" << height << '\n';
             out << "open_maximized=" << (maximized ? "1" : "0") << '\n';
+
+            LogInfo("Saved window state: x=" + std::to_string(x) +
+                    ", y=" + std::to_string(y) +
+                    ", width=" + std::to_string(width) +
+                    ", height=" + std::to_string(height) +
+                    ", maximized=" + std::string(maximized ? "1" : "0"));
         }
 
         void GLFWErrorCallback(int error, const char *description)
