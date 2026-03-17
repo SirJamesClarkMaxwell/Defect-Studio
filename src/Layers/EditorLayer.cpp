@@ -4421,7 +4421,6 @@ namespace ds
                 {
                     translatePivot = m_TranslateEmptyInitialPosition;
                 }
-                
 
                 std::array<glm::vec3, 3> transformAxes = ResolveTransformAxes(translatePivot);
                 if (m_TranslateEmptyIndex >= 0 && m_TranslateEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
@@ -6442,9 +6441,9 @@ namespace ds
             ImGui::SetNextWindowSize(ImVec2(460.0f, 780.0f), ImGuiCond_FirstUseEver);
             ImGui::Begin("Tools", &m_ShowToolsPanel);
 
-        const char *coordinateModes[] = {"Direct", "Cartesian"};
+            const char *coordinateModes[] = {"Direct", "Cartesian"};
 
-        ImGui::SeparatorText("Workflow");
+            ImGui::SeparatorText("Workflow");
             ImGui::SeparatorText("Structure I/O");
             ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
             ImGui::SameLine();
@@ -6695,36 +6694,36 @@ namespace ds
             {
                 ImGui::EndDisabled();
             }
-        if (m_HasStructureLoaded)
-        {
-            const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
-            ImGui::Separator();
-            ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
-                        m_WorkingStructure.GetAtomCount(),
-                        m_WorkingStructure.species.size(),
-                        modeLabel);
-            ImGui::Text("Title: %s", m_WorkingStructure.title.empty() ? "(empty)" : m_WorkingStructure.title.c_str());
-        }
-        else
-        {
-            ImGui::Separator();
-            ImGui::TextUnformatted("Loaded: none");
-        }
+            if (m_HasStructureLoaded)
+            {
+                const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
+                ImGui::Separator();
+                ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
+                            m_WorkingStructure.GetAtomCount(),
+                            m_WorkingStructure.species.size(),
+                            modeLabel);
+                ImGui::Text("Title: %s", m_WorkingStructure.title.empty() ? "(empty)" : m_WorkingStructure.title.c_str());
+            }
+            else
+            {
+                ImGui::Separator();
+                ImGui::TextUnformatted("Loaded: none");
+            }
 
-        if (!m_LastStructureMessage.empty())
-        {
-            const ImVec4 color = m_LastStructureOperationFailed
-                                     ? ImVec4(0.95f, 0.35f, 0.35f, 1.0f)
-                                     : ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
-            ImGui::PushStyleColor(ImGuiCol_Text, color);
-            ImGui::TextWrapped("%s", m_LastStructureMessage.c_str());
-            ImGui::PopStyleColor();
-        }
+            if (!m_LastStructureMessage.empty())
+            {
+                const ImVec4 color = m_LastStructureOperationFailed
+                                         ? ImVec4(0.95f, 0.35f, 0.35f, 1.0f)
+                                         : ImVec4(0.45f, 0.85f, 0.45f, 1.0f);
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
+                ImGui::TextWrapped("%s", m_LastStructureMessage.c_str());
+                ImGui::PopStyleColor();
+            }
 
-        std::size_t errorCount = Logger::Get().GetErrorCount();
-        ImGui::Separator();
-        ImGui::Text("Errors captured: %zu", errorCount);
-        ImGui::End();
+            std::size_t errorCount = Logger::Get().GetErrorCount();
+            ImGui::Separator();
+            ImGui::Text("Errors captured: %zu", errorCount);
+            ImGui::End();
         }
 
         if (m_ShowSceneOutlinerPanel)

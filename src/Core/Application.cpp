@@ -7,6 +7,17 @@
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <dwmapi.h>
+#include <windows.h>
+#pragma comment(lib, "dwmapi.lib")
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -21,6 +32,15 @@ namespace ds
     {
 
         constexpr const char *kWindowStatePath = "config/window_state.ini";
+        constexpr const char *kAppIconPath = "assets/icon.ico";
+
+#if defined(_WIN32)
+        HICON g_WindowIconSmall = nullptr;
+        HICON g_WindowIconBig = nullptr;
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#endif
 
         struct WindowState
         {
@@ -161,6 +181,99 @@ namespace ds
             ApplicationContext::Get().AddScrollDelta(static_cast<float>(yOffset));
         }
 
+        void ApplyWindowIcon(GLFWwindow *window)
+        {
+#if defined(_WIN32)
+            if (window == nullptr)
+            {
+                return;
+            }
+
+            HWND hwnd = glfwGetWin32Window(window);
+            if (hwnd == nullptr)
+            {
+                return;
+            }
+
+            if (g_WindowIconSmall != nullptr)
+            {
+                DestroyIcon(g_WindowIconSmall);
+                g_WindowIconSmall = nullptr;
+            }
+            if (g_WindowIconBig != nullptr)
+            {
+                DestroyIcon(g_WindowIconBig);
+                g_WindowIconBig = nullptr;
+            }
+
+            g_WindowIconSmall = static_cast<HICON>(LoadImageA(nullptr, kAppIconPath, IMAGE_ICON, 16, 16, LR_LOADFROMFILE));
+            g_WindowIconBig = static_cast<HICON>(LoadImageA(nullptr, kAppIconPath, IMAGE_ICON, 32, 32, LR_LOADFROMFILE));
+
+            if (g_WindowIconSmall != nullptr)
+            {
+                SendMessage(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(g_WindowIconSmall));
+            }
+            if (g_WindowIconBig != nullptr)
+            {
+                SendMessage(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(g_WindowIconBig));
+            }
+
+            if (g_WindowIconSmall == nullptr && g_WindowIconBig == nullptr)
+            {
+                LogWarn("Could not load app icon from assets/icon.ico");
+            }
+#else
+            (void)window;
+#endif
+        }
+
+        void ApplyDarkTitleBar(GLFWwindow *window)
+        {
+#if defined(_WIN32)
+            if (window == nullptr)
+            {
+                return;
+            }
+
+            HWND hwnd = glfwGetWin32Window(window);
+            if (hwnd == nullptr)
+            {
+                return;
+            }
+
+            BOOL enabled = TRUE;
+            HRESULT hr = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &enabled, sizeof(enabled));
+            if (FAILED(hr))
+            {
+                constexpr DWORD kLegacyDarkModeAttr = 19;
+                hr = DwmSetWindowAttribute(hwnd, kLegacyDarkModeAttr, &enabled, sizeof(enabled));
+            }
+
+            if (FAILED(hr))
+            {
+                LogWarn("Could not enable dark title bar (DWM attribute unsupported on this system)");
+            }
+#else
+            (void)window;
+#endif
+        }
+
+        void CleanupWindowIcon()
+        {
+#if defined(_WIN32)
+            if (g_WindowIconSmall != nullptr)
+            {
+                DestroyIcon(g_WindowIconSmall);
+                g_WindowIconSmall = nullptr;
+            }
+            if (g_WindowIconBig != nullptr)
+            {
+                DestroyIcon(g_WindowIconBig);
+                g_WindowIconBig = nullptr;
+            }
+#endif
+        }
+
     } // namespace
 
     Application::Application()
@@ -201,6 +314,8 @@ namespace ds
 
         glfwMakeContextCurrent(m_Window);
         glfwSwapInterval(1);
+        ApplyWindowIcon(m_Window);
+        ApplyDarkTitleBar(m_Window);
 
         const int gladVersion = gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress));
         if (gladVersion == 0)
@@ -224,6 +339,7 @@ namespace ds
     {
         LogInfo("Application shutdown");
         SaveWindowState(m_Window);
+        CleanupWindowIcon();
         glfwDestroyWindow(m_Window);
         glfwTerminate();
     }
@@ -263,6 +379,7 @@ namespace ds
             {
                 layer->OnImGuiRender();
             }
+
             m_ImGuiLayer->End();
 
             glfwSwapBuffers(m_Window);

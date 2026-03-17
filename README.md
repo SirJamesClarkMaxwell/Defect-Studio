@@ -1,72 +1,111 @@
 # DefectsStudio
 
-DefectsStudio to desktopowa aplikacja do podgladu, edycji i przygotowania struktur atomowych VASP (POSCAR/CONTCAR), tworzona jako narzedzie typu "Blender-like" dla pracy ze strukturami materialowymi.
+**DefectsStudio** is a lightweight desktop application for **visualizing, editing, and preparing atomic structures and defects for VASP simulations**.
 
-Projekt jest rozwijany na Windows, w C++23, z wykorzystaniem OpenGL i Dear ImGui (Docking).
+The goal of the project is to provide a **fast, minimal, and scientist-friendly environment** for working with crystal structures.
 
-## Czym ta aplikacja jest
+The application is written in **C++23**, uses **OpenGL** for rendering and **Dear ImGui (Docking)** for the user interface.
 
-DefectsStudio laczy:
-- wizualizacje 3D atomow,
-- narzedzia selekcji i transformacji obiektow sceny,
-- import/export danych VASP,
-- panelowy edytor sceny (Outliner, Properties, Tools, Settings),
-- workflow zblizony do DCC (krotkie skroty, gizmo, menu kontekstowe, 3D cursor).
+---
 
-Docelowo ma to byc lekkie, szybkie srodowisko do przygotowania i inspekcji struktur defektowych bez potrzeby uruchamiania ciezkich pakietow 3D.
+# Overview
 
-## Jak zbudowac i uruchomic
+Working with atomistic structures for **DFT calculations (e.g. VASP)** often requires repetitive manual editing of structures, defect manipulation, and visualization of atomic configurations.
 
-Wymagania:
-- Windows 10/11
-- Visual Studio 2022 z toolsetem C++ (v143)
-- PowerShell 5+ (dla skryptow setup/build)
+Many existing tools are either:
 
-Kroki (wariant zalecany):
-1. Uruchom `scripts/Setup.bat`.
-2. Otworz `DefectsStudio.sln` w Visual Studio 2022.
-3. Zbuduj konfiguracje `Debug|x64` albo `Release|x64`.
-4. Ustaw `DefectsStudio` jako Startup Project i uruchom (F5 lub Ctrl+F5).
+- too heavy
+- difficult to automate
+- or not well suited for defect engineering workflows
 
-Szybka weryfikacja skryptami:
-- `scripts/Verify-Build.bat` - sprawdza build Debug/Release.
-- `scripts/Verify-Build-And-Run.bat` - build + uruchomienie aplikacji.
+**DefectsStudio** aims to provide a lightweight alternative focused on:
 
-## Co juz jest
+- defect creation and manipulation
+- structure visualization
+- fast editing of POSCAR-style structures
+- preparing simulation inputs
 
-Najwazniejsze gotowe elementy:
-- system builda oparty o Premake5 + projekt VS2022,
-- architektura warstwowa (`Core`, `Layers`, `Renderer`, `IO`, `DataModel`, `Editor`, `UI`),
-- renderer OpenGL z viewportem offscreen,
-- kamera orbitalna i nawigacja viewportu,
-- import/export POSCAR/CONTCAR,
-- renderowanie instancyjne atomow,
-- selekcja kliknieciem i box-select,
-- transformacje przez gizmo i modalny workflow (`G` + osie),
-- obiekty sceny (m.in. empties), grupowanie i kolekcje,
-- panele Scene Outliner + Object Properties + Tools,
-- wydzielone okno `SettingsPanel`,
-- menu `Shift+A`, usuwanie obiektow (`Delete`), menu pie, menu kontekstowe viewportu,
-- utrwalanie ustawien UI i czesci ustawien sceny w plikach konfiguracyjnych.
+---
 
-## Co jest planowane
+# Key Features
 
-Najblizsze etapy rozwoju:
-- T06: Bonds and measurements
-   - automatyczne tworzenie wiazan,
-   - konfiguracja cutoffow (globalnych i per para pierwiastkow),
-   - narzedzia odleglosci i katow.
-- T07: Dalsze dopracowanie UX i paneli
-   - trwalsza persystencja ustawien osi i rendererowych,
-   - dopracowanie narzedzi logowania/profilowania i domyslnych konfiguracji.
-- T08: Offscreen render/F12 pipeline
-   - render do PNG/JPG w zadanej rozdzielczosci.
-- T09: Volumetrics MVP
-   - parsery CHG/CHGCAR/PARCHG,
-   - kontrola izopowierzchni.
-- T10: testy, probki i dokumentacja
-   - testy parserow i round-tripy,
-   - lepszy zestaw plikow przykladowych,
-   - dalsza dokumentacja uzytkowa.
+Current capabilities include:
 
-Szczegolowy, aktualny stan prac znajduje sie w `TODO.md`.
+- **3D visualization of atomic structures**
+- **POSCAR / CONTCAR import and export**
+- **instanced atom rendering**
+- **orbit camera navigation**
+- **gizmo-based transformations**
+---
+
+# Planned Features
+
+Future development will include:
+
+### Bonds and Measurements
+- automatic bond detection
+- configurable cutoff distances
+- element-specific bonding rules
+- bond length measurement
+- bond angle measurement
+
+### Volumetric Data
+- support for **CHGCAR**
+- support for **PARCHG**
+- isosurface visualization
+
+### Rendering
+- offscreen rendering
+- high resolution export
+- screenshot system
+
+### UI Improvements
+- better settings persistence
+- improved viewport overlays
+- logging and diagnostics tools
+
+### Testing and Documentation
+- parser validation tests
+- round-trip file validation
+- example structures and datasets
+
+---
+
+
+# Building the Project
+
+## Requirements
+
+- Windows 10 / 11
+- Visual Studio 2022
+- C++ toolset v143
+- PowerShell
+
+## Setup
+1. Clone the repo `git clone https://github.com/SirJamesClarkMaxwell/Defect-Studio.git`
+2. Run the setup script `./scripts/Setup.bat`
+3. Open: `DefectsStudio.sln` in **Visual Studio 2022**.
+4. Build configuration: `Debug` or `Release`
+
+Set **DefectsStudio** as the startup project and run the application (`F5`).
+
+---
+
+# Build Utilities
+
+Helper scripts included in the repository:
+- `scripts/Verify-Build.bat` - Verifies Debug and Release builds.
+- `scripts/Verify-Build-And-Run.bat` - Builds and launches the application.
+- `scripts/Run.bat` - Launches existing Debug/Release executable.
+
+If project resources are modified (for example `assets/icon.rc`), run the setup script again.
+
+---
+
+# Project Vision
+
+The long-term goal of **DefectsStudio** is to become a **specialized environment for defect engineering and atomistic modeling**, combining:
+
+- the usability of modern DCC tools
+- lightweight performance
+- workflows optimized for materials science

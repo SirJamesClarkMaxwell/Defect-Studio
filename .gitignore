@@ -25,3 +25,6 @@ assets/samples/config/
 
 *.log
 *.tmp
+
+TODO.md
+SESSION_HANDOFF.md
