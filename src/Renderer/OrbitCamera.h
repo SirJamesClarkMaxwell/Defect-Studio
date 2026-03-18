@@ -26,6 +26,7 @@ namespace ds
         void SetPerspectiveFovDegrees(float fovDegrees);
         void SetOrthographicSize(float orthographicSize);
         void SetOrbitState(const glm::vec3 &target, float distance, float yaw, float pitch);
+        void SetRoll(float rollRadians);
 
         const glm::mat4 &GetViewMatrix() const { return m_View; }
         const glm::mat4 &GetProjectionMatrix() const { return m_Projection; }
@@ -38,6 +39,7 @@ namespace ds
         float GetDistance() const { return m_Distance; }
         float GetYaw() const { return m_Yaw; }
         float GetPitch() const { return m_Pitch; }
+        float GetRoll() const { return m_Roll; }
 
     private:
         void RecalculateProjection();
@@ -50,6 +52,7 @@ namespace ds
         float m_Distance = 6.0f;
         float m_Yaw = 0.6f;
         float m_Pitch = 0.5f;
+        float m_Roll = 0.0f;
 
         float m_FovYDegrees = 45.0f;
         float m_OrthographicSize = 5.0f;

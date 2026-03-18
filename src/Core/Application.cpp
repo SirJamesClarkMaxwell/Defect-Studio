@@ -2,6 +2,7 @@
 
 #include "Core/ApplicationContext.h"
 #include "Core/Logger.h"
+#include "Core/Profiling.h"
 #include "Layers/ImGuiLayer.h"
 
 #include <glad/gl.h>
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -278,6 +280,7 @@ namespace ds
 
     Application::Application()
     {
+        DS_PROFILE_SCOPE_N("Application::Application");
         LogInfo("Application startup initiated");
         glfwSetErrorCallback(GLFWErrorCallback);
 
@@ -285,7 +288,7 @@ namespace ds
 
         if (!glfwInit())
         {
-            LogError("GLFW initialization failed");
+            LogFatal("GLFW initialization failed");
             throw std::runtime_error("Failed to initialize GLFW");
         }
 
@@ -298,7 +301,7 @@ namespace ds
         if (m_Window == nullptr)
         {
             glfwTerminate();
-            LogError("GLFW window creation failed");
+            LogFatal("GLFW window creation failed");
             throw std::runtime_error("Failed to create GLFW window");
         }
 
@@ -322,7 +325,7 @@ namespace ds
         {
             glfwDestroyWindow(m_Window);
             glfwTerminate();
-            LogError("GLAD initialization failed");
+            LogFatal("GLAD initialization failed");
             throw std::runtime_error("Failed to initialize OpenGL function loader");
         }
 
@@ -337,6 +340,7 @@ namespace ds
 
     Application::~Application()
     {
+        DS_PROFILE_SCOPE_N("Application::~Application");
         LogInfo("Application shutdown");
         SaveWindowState(m_Window);
         CleanupWindowIcon();
@@ -346,44 +350,79 @@ namespace ds
 
     void Application::PushLayer(Layer *layer)
     {
+        DS_PROFILE_SCOPE_N("Application::PushLayer");
         m_LayerStack.PushLayer(layer);
         LogInfo("Layer attached: " + layer->GetName());
     }
 
     void Application::Run()
     {
+        DS_PROFILE_SCOPE_N("Application::Run");
         auto lastTick = std::chrono::steady_clock::now();
+        float traceAccumulatorSec = 0.0f;
+        std::uint32_t traceFrames = 0;
+        LogTrace("Main loop started.");
 
         while (m_Running && !glfwWindowShouldClose(m_Window))
         {
+            DS_PROFILE_FRAME();
+            DS_PROFILE_SCOPE_N("Application::Frame");
             const auto now = std::chrono::steady_clock::now();
             const float deltaTime = std::chrono::duration<float>(now - lastTick).count();
             lastTick = now;
+            traceAccumulatorSec += deltaTime;
+            ++traceFrames;
 
-            glfwPollEvents();
+            if (traceAccumulatorSec >= 2.0f)
+            {
+                const float averageDt = traceAccumulatorSec / static_cast<float>(std::max<std::uint32_t>(traceFrames, 1u));
+                const float fps = averageDt > 1e-6f ? (1.0f / averageDt) : 0.0f;
+                LogTrace("Runtime perf snapshot: avg_dt=" + std::to_string(averageDt) + "s, fps=" + std::to_string(fps));
+                traceAccumulatorSec = 0.0f;
+                traceFrames = 0;
+            }
+
+            {
+                DS_PROFILE_SCOPE_N("Application::PollEvents");
+                glfwPollEvents();
+            }
 
             int width = 0;
             int height = 0;
-            glfwGetFramebufferSize(m_Window, &width, &height);
-            glViewport(0, 0, width, height);
-            glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-            for (Layer *layer : m_LayerStack.GetLayers())
             {
-                layer->OnUpdate(deltaTime);
+                DS_PROFILE_SCOPE_N("Application::PrepareFramebuffer");
+                glfwGetFramebufferSize(m_Window, &width, &height);
+                glViewport(0, 0, width, height);
+                glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             }
 
-            m_ImGuiLayer->Begin();
-            for (Layer *layer : m_LayerStack.GetLayers())
             {
-                layer->OnImGuiRender();
+                DS_PROFILE_SCOPE_N("Application::LayerUpdate");
+                for (Layer *layer : m_LayerStack.GetLayers())
+                {
+                    layer->OnUpdate(deltaTime);
+                }
             }
 
-            m_ImGuiLayer->End();
+            {
+                DS_PROFILE_SCOPE_N("Application::ImGuiFrame");
+                m_ImGuiLayer->Begin();
+                for (Layer *layer : m_LayerStack.GetLayers())
+                {
+                    layer->OnImGuiRender();
+                }
 
-            glfwSwapBuffers(m_Window);
+                m_ImGuiLayer->End();
+            }
+
+            {
+                DS_PROFILE_SCOPE_N("Application::SwapBuffers");
+                glfwSwapBuffers(m_Window);
+            }
         }
+
+        LogTrace("Main loop finished.");
     }
 
 } // namespace ds

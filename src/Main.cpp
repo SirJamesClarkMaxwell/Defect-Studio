@@ -15,7 +15,7 @@ int main()
     }
     catch (const std::exception &ex)
     {
-        ds::LogError(std::string("Fatal error: ") + ex.what());
+        ds::LogFatal(std::string("Fatal error: ") + ex.what());
         std::cerr << "Fatal error: " << ex.what() << '\n';
         return 1;
     }

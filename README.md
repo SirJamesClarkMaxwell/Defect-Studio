@@ -102,7 +102,30 @@ Helper scripts included in the repository:
 External dependencies are managed using **git submodules** (for example `vendor/glfw`, `vendor/glad`, `vendor/imgui`, `vendor/glm`, `vendor/imguizmo`, `vendor/imviewguizmo`).
 `scripts/Setup.bat` automatically runs submodule sync/init/update.
 
+Tracy profiler is integrated as a submodule: `vendor/tracy`.
+
 If project resources are modified (for example `assets/icon.rc`), run the setup script again.
+
+---
+
+# Profiling (Tracy)
+
+The app includes built-in Tracy instrumentation (CPU + OpenGL GPU zones).
+
+## Local usage
+1. Build and run DefectsStudio normally.
+2. Build and run Tracy GUI from `vendor/tracy/profiler`.
+3. Connect Tracy GUI to the running app (`localhost`, default port).
+4. Inspect frame/update/render zones and GPU timeline.
+
+## Quick launch script
+- `scripts/Run-Tracy.bat` (or `scripts/Run-Tracy.ps1`) starts DefectsStudio and Tracy GUI.
+- On first run, it builds Tracy profiler to a short Windows path: `D:\t\tracy-build`.
+- You can skip Tracy rebuild with: `scripts/Run-Tracy.ps1 -SkipTracyBuild`.
+
+## Notes
+- Instrumentation is enabled through build defines: `DS_ENABLE_TRACY`, `TRACY_ENABLE`, `TRACY_ON_DEMAND`.
+- Runtime logs are written to `logs/runtime.log` with levels: `TRACE`, `INFO`, `WARN`, `ERROR`, `FATAL`.
 
 ---
 

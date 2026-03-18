@@ -1,8 +1,12 @@
 #include "Renderer/OpenGLRendererBackend.h"
 
 #include "Core/Logger.h"
+#include "Core/Profiling.h"
 
 #include <glad/gl.h>
+#if defined(DS_ENABLE_TRACY)
+#include <tracy/TracyOpenGL.hpp>
+#endif
 
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/geometric.hpp>
@@ -14,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace ds
@@ -89,6 +94,7 @@ namespace ds
 
     bool OpenGLRendererBackend::Initialize()
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::Initialize");
         if (!m_Shader.LoadFromFiles("assets/shaders/atoms_instanced.vert", "assets/shaders/atoms_instanced.frag"))
         {
             LogError("OpenGL renderer failed to load shader files.");
@@ -161,6 +167,11 @@ namespace ds
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuContext;
+        LogInfo("Tracy GPU context initialized.");
+#endif
+
         CreateFramebuffer(m_ViewportWidth, m_ViewportHeight);
         LogInfo("OpenGL renderer backend initialized");
         return true;
@@ -168,6 +179,7 @@ namespace ds
 
     void OpenGLRendererBackend::Shutdown()
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::Shutdown");
         DestroyFramebuffer();
 
         if (m_VBO != 0)
@@ -218,6 +230,7 @@ namespace ds
 
     void OpenGLRendererBackend::ResizeViewport(std::uint32_t width, std::uint32_t height)
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::ResizeViewport");
         if (width < 1)
             width = 1;
         if (height < 1)
@@ -230,11 +243,13 @@ namespace ds
 
         m_ViewportWidth = width;
         m_ViewportHeight = height;
+        LogTrace("Renderer viewport resized to " + std::to_string(width) + "x" + std::to_string(height));
         CreateFramebuffer(m_ViewportWidth, m_ViewportHeight);
     }
 
     void OpenGLRendererBackend::CreateFramebuffer(std::uint32_t width, std::uint32_t height)
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::CreateFramebuffer");
         DestroyFramebuffer();
 
         glGenFramebuffers(1, &m_Framebuffer);
@@ -262,6 +277,7 @@ namespace ds
 
     void OpenGLRendererBackend::DestroyFramebuffer()
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::DestroyFramebuffer");
         if (m_DepthRenderbuffer != 0)
         {
             glDeleteRenderbuffers(1, &m_DepthRenderbuffer);
@@ -283,6 +299,10 @@ namespace ds
 
     void OpenGLRendererBackend::BeginFrame(const SceneRenderSettings &settings)
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::BeginFrame");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuZone("BeginFrame");
+#endif
         glBindFramebuffer(GL_FRAMEBUFFER, m_Framebuffer);
         glViewport(0, 0, static_cast<int>(m_ViewportWidth), static_cast<int>(m_ViewportHeight));
         glEnable(GL_DEPTH_TEST);
@@ -292,6 +312,7 @@ namespace ds
 
     void OpenGLRendererBackend::RenderDemoScene(const glm::mat4 &viewProjection, const SceneRenderSettings &settings)
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::RenderDemoScene");
         const glm::vec3 colors[] = {
             glm::vec3(0.44f, 0.76f, 0.97f),
             glm::vec3(0.98f, 0.66f, 0.35f),
@@ -322,6 +343,10 @@ namespace ds
         const std::vector<glm::vec3> &atomColors,
         const SceneRenderSettings &settings)
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::RenderAtomsScene");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuZone("RenderAtomsScene");
+#endif
         RenderGrid(viewProjection, settings);
 
         const std::size_t instanceCount = std::min(atomPositions.size(), atomColors.size());
@@ -408,8 +433,49 @@ namespace ds
         }
     }
 
+    void OpenGLRendererBackend::RenderLineSegments(
+        const glm::mat4 &viewProjection,
+        const std::vector<glm::vec3> &lineVertices,
+        const glm::vec3 &lineColor,
+        float lineWidth)
+    {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::RenderLineSegments");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuZone("RenderLineSegments");
+#endif
+        if (lineVertices.size() < 2)
+        {
+            return;
+        }
+
+        m_GridShader.Bind();
+        m_GridShader.SetMat4("u_ViewProjection", viewProjection);
+        m_GridShader.SetFloat3("u_GridColor", lineColor);
+
+        glBindVertexArray(m_GridVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(lineVertices.size() * sizeof(glm::vec3)),
+            lineVertices.data(),
+            GL_DYNAMIC_DRAW);
+
+        float widthRange[2] = {1.0f, 1.0f};
+        glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, widthRange);
+        const float requestedLineWidth = std::clamp(lineWidth, widthRange[0], widthRange[1]);
+        glLineWidth(requestedLineWidth);
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
+        glLineWidth(1.0f);
+
+        glBindVertexArray(0);
+    }
+
     void OpenGLRendererBackend::RenderGrid(const glm::mat4 &viewProjection, const SceneRenderSettings &settings)
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::RenderGrid");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuZone("RenderGrid");
+#endif
         if (!settings.drawGrid || settings.gridSpacing <= 0.0f)
         {
             return;
@@ -462,6 +528,10 @@ namespace ds
 
     void OpenGLRendererBackend::EndFrame()
     {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::EndFrame");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuCollect;
+#endif
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 

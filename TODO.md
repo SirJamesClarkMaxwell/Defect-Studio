@@ -72,9 +72,10 @@
 - [x] add rotation button on the top of the view window with specification how much the view has to be rotated
 - [x] change atom type 
 - [x] Make POSCAR/CONTCAR export formatting exactly match sample style (e.g., `assets/samples/diamond_bulk`) to avoid noisy `diff`
-- [ ] Auto bond generation and dynamic threshold updates with generated text as bond length along the bonds and easy read in camera view
+- [x] Auto bond generation and dynamic threshold updates with generated text as bond length along the bonds and easy read in camera view
 - [ ] Global cutoff + per-element-pair mode
 - [ ] hiding atoms bonds instead of deleting it
+- [ ] Hide selected atoms/bonds/labels with `H` and unhide all with `Alt+H`
 - [ ] Distance/angle tools and labels
 - [ ] Collections system (Blender-like outliner groups, visibility/lock/select toggles)
 - [ ] multi POSCAR import system (via multiple render targets or collections)
@@ -91,6 +92,7 @@
 - [x] Persist ImGui dock/panel layout across runs
 - [ ] Toggles, profiler integration, config defaults
 - [ ] nice logging window with icons (error, warning, info, debug, trace) ❌,⚠️(dodaj inne emotki)
+- [ ] Add editor undo/redo stack (`Ctrl+Z` / `Ctrl+Y`) for delete/hide and core scene edit actions
 
 ### [ ] T08 - Offscreen render and F12 pipeline (`task/08-offscreen-render`)
 - [ ] Render dialog and camera frame preview

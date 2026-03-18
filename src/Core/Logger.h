@@ -11,9 +11,11 @@ namespace ds
 
     enum class LogLevel
     {
+        Trace,
         Info,
         Warn,
-        Error
+        Error,
+        Fatal
     };
 
     struct LogEntry
@@ -43,7 +45,9 @@ namespace ds
     };
 
     void LogInfo(std::string_view message);
+    void LogTrace(std::string_view message);
     void LogWarn(std::string_view message);
     void LogError(std::string_view message);
+    void LogFatal(std::string_view message);
 
 } // namespace ds

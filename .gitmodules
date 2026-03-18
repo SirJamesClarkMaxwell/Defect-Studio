@@ -17,3 +17,6 @@
 [submodule "vendor/imviewguizmo"]
 	path = vendor/imviewguizmo
 	url = https://github.com/Ka1serM/ImViewGuizmo.git
+[submodule "vendor/tracy"]
+	path = vendor/tracy
+	url = https://github.com/wolfpld/tracy.git

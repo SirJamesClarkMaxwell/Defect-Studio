@@ -8,6 +8,7 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace ds
 {
@@ -123,19 +124,67 @@ namespace ds
             std::cos(m_Pitch) * std::cos(m_Yaw),
             std::sin(m_Pitch)));
         const glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
-        const glm::vec3 right = glm::normalize(glm::cross(forward, worldUp));
-        const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+        glm::vec3 right = glm::cross(forward, worldUp);
+        if (glm::dot(right, right) < 1e-8f)
+        {
+            right = glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f));
+        }
+        right = glm::normalize(right);
+        glm::vec3 up = glm::normalize(glm::cross(right, forward));
+
+        if (std::abs(m_Roll) > 1e-6f)
+        {
+            const glm::mat4 rollRotation = glm::rotate(glm::mat4(1.0f), m_Roll, forward);
+            right = glm::normalize(glm::vec3(rollRotation * glm::vec4(right, 0.0f)));
+            up = glm::normalize(glm::vec3(rollRotation * glm::vec4(up, 0.0f)));
+        }
 
         if (!shiftPressed)
         {
-            m_Yaw -= delta.x * orbitSpeed;
-            m_Pitch -= delta.y * orbitSpeed;
+            // Orbit in camera-local frame: horizontal drag rotates around current local up,
+            // vertical drag rotates around current local right.
+            const glm::quat qYaw = glm::angleAxis(-delta.x * orbitSpeed, glm::normalize(up));
+            glm::vec3 localForward = glm::normalize(qYaw * forward);
+            glm::vec3 localUp = glm::normalize(qYaw * up);
 
-            const float limit = glm::half_pi<float>() - 0.05f;
+            glm::vec3 localRight = glm::cross(localForward, localUp);
+            if (glm::dot(localRight, localRight) < 1e-8f)
+            {
+                localRight = right;
+            }
+            localRight = glm::normalize(localRight);
+
+            const glm::quat qPitch = glm::angleAxis(-delta.y * orbitSpeed, localRight);
+            localForward = glm::normalize(qPitch * localForward);
+            localUp = glm::normalize(qPitch * localUp);
+
+            m_Yaw = std::atan2(localForward.x, localForward.y);
+            m_Pitch = std::asin(glm::clamp(localForward.z, -1.0f, 1.0f));
+
+            const glm::vec3 worldUpBasis = glm::vec3(0.0f, 0.0f, 1.0f);
+            glm::vec3 baseRight = glm::cross(localForward, worldUpBasis);
+            if (glm::dot(baseRight, baseRight) < 1e-8f)
+            {
+                baseRight = glm::cross(localForward, glm::vec3(0.0f, 1.0f, 0.0f));
+            }
+            baseRight = glm::normalize(baseRight);
+            const glm::vec3 baseUp = glm::normalize(glm::cross(baseRight, localForward));
+
+            const float sinRoll = glm::dot(glm::cross(baseUp, localUp), localForward);
+            const float cosRoll = glm::dot(baseUp, localUp);
+            m_Roll = std::atan2(sinRoll, cosRoll);
+
+            const float limit = glm::half_pi<float>() - 0.0015f;
             if (m_Pitch > limit)
                 m_Pitch = limit;
             if (m_Pitch < -limit)
                 m_Pitch = -limit;
+
+            m_Roll = std::fmod(m_Roll, glm::two_pi<float>());
+            if (m_Roll > glm::pi<float>())
+                m_Roll -= glm::two_pi<float>();
+            else if (m_Roll < -glm::pi<float>())
+                m_Roll += glm::two_pi<float>();
         }
         else
         {
@@ -208,11 +257,22 @@ namespace ds
 
         m_Yaw = yaw;
         m_Pitch = pitch;
-        const float limit = glm::half_pi<float>() - 0.05f;
+        const float limit = glm::half_pi<float>() - 0.0015f;
         if (m_Pitch > limit)
             m_Pitch = limit;
         if (m_Pitch < -limit)
             m_Pitch = -limit;
+
+        RecalculateView();
+    }
+
+    void OrbitCamera::SetRoll(float rollRadians)
+    {
+        m_Roll = std::fmod(rollRadians, glm::two_pi<float>());
+        if (m_Roll > glm::pi<float>())
+            m_Roll -= glm::two_pi<float>();
+        else if (m_Roll < -glm::pi<float>())
+            m_Roll += glm::two_pi<float>();
 
         RecalculateView();
     }
@@ -239,7 +299,23 @@ namespace ds
             std::sin(m_Pitch)));
 
         const glm::vec3 position = m_Target - direction * m_Distance;
-        m_View = glm::lookAt(position, m_Target, glm::vec3(0.0f, 0.0f, 1.0f));
+
+        const glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
+        glm::vec3 right = glm::cross(direction, worldUp);
+        if (glm::dot(right, right) < 1e-8f)
+        {
+            right = glm::cross(direction, glm::vec3(0.0f, 1.0f, 0.0f));
+        }
+        right = glm::normalize(right);
+
+        glm::vec3 up = glm::normalize(glm::cross(right, direction));
+        if (std::abs(m_Roll) > 1e-6f)
+        {
+            const glm::mat4 rollRotation = glm::rotate(glm::mat4(1.0f), m_Roll, direction);
+            up = glm::normalize(glm::vec3(rollRotation * glm::vec4(up, 0.0f)));
+        }
+
+        m_View = glm::lookAt(position, m_Target, up);
     }
 
 } // namespace ds

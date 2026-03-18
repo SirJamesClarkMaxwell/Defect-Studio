@@ -2,6 +2,7 @@
 
 #include "Core/ApplicationContext.h"
 #include "Core/Logger.h"
+#include "Core/Profiling.h"
 #include "Editor/SceneGroupingBackend.h"
 #include "Renderer/OpenGLRendererBackend.h"
 #include "Renderer/OrbitCamera.h"
@@ -93,6 +94,13 @@ namespace ds
             const float x = glm::clamp(t, 0.0f, 1.0f);
             const float inv = 1.0f - x;
             return 1.0f - inv * inv * inv;
+        }
+
+        std::uint64_t MakeBondPairKey(std::size_t atomA, std::size_t atomB)
+        {
+            const std::uint64_t low = static_cast<std::uint64_t>(std::min(atomA, atomB));
+            const std::uint64_t high = static_cast<std::uint64_t>(std::max(atomA, atomB));
+            return (low << 32) | (high & 0xffffffffull);
         }
 
         std::string BuildDebugTimestampNow()
@@ -328,7 +336,7 @@ namespace ds
             dialog.hwndOwner = nullptr;
             dialog.lpstrFile = pathBuffer;
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
-            dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
+            dialog.lpstrFilter = "All files (*.*)\0VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0*.*\0";
             dialog.nFilterIndex = 1;
             dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
             dialog.lpstrDefExt = "vasp";
@@ -389,20 +397,27 @@ namespace ds
             return glm::vec3(r, g, b);
         }
 
-        float ElementRadiusScale(const std::string &element)
+        float CovalentRadiusPmByElementSymbol(const std::string &element)
         {
             static const std::unordered_map<std::string, float> kCovalentRadiusPm = {
                 {"H", 31.0f}, {"He", 28.0f}, {"Li", 128.0f}, {"Be", 96.0f}, {"B", 84.0f}, {"C", 76.0f}, {"N", 71.0f}, {"O", 66.0f}, {"F", 57.0f}, {"Ne", 58.0f}, {"Na", 166.0f}, {"Mg", 141.0f}, {"Al", 121.0f}, {"Si", 111.0f}, {"P", 107.0f}, {"S", 105.0f}, {"Cl", 102.0f}, {"Ar", 106.0f}, {"K", 203.0f}, {"Ca", 176.0f}, {"Sc", 170.0f}, {"Ti", 160.0f}, {"V", 153.0f}, {"Cr", 139.0f}, {"Mn", 139.0f}, {"Fe", 132.0f}, {"Co", 126.0f}, {"Ni", 124.0f}, {"Cu", 132.0f}, {"Zn", 122.0f}, {"Ga", 122.0f}, {"Ge", 120.0f}, {"As", 119.0f}, {"Se", 120.0f}, {"Br", 120.0f}, {"Kr", 116.0f}};
 
             const std::string normalized = NormalizeElementSymbol(element);
             const auto it = kCovalentRadiusPm.find(normalized);
-            const float baseRadiusPm = 111.0f; // Si as a neutral baseline for current default scenes.
             if (it == kCovalentRadiusPm.end())
             {
-                return 1.0f;
+                return 111.0f;
             }
 
-            return glm::clamp(it->second / baseRadiusPm, 0.45f, 1.95f);
+            return it->second;
+        }
+
+        float ElementRadiusScale(const std::string &element)
+        {
+            const float baseRadiusPm = 111.0f; // Si as a neutral baseline for current default scenes.
+            const float radiusPm = CovalentRadiusPmByElementSymbol(element);
+
+            return glm::clamp(radiusPm / baseRadiusPm, 0.45f, 1.95f);
         }
 
         void DrawInlineHelpMarker(const char *description)
@@ -422,7 +437,7 @@ namespace ds
     EditorLayer::EditorLayer()
         : Layer("EditorLayer")
     {
-        const char *defaultImportPath = "assets/samples/POSCAR";
+        const char *defaultImportPath = "assets/samples/diamond_bulk";
         const char *defaultExportPath = "exports/CONTCAR.vasp";
 
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultImportPath);
@@ -470,6 +485,7 @@ namespace ds
         if (m_HasPersistedCameraState)
         {
             m_Camera->SetOrbitState(m_CameraTargetPersisted, m_CameraDistancePersisted, m_CameraYawPersisted, m_CameraPitchPersisted);
+            m_Camera->SetRoll(m_CameraRollPersisted);
         }
         ApplyCameraSensitivity();
 
@@ -507,6 +523,7 @@ namespace ds
 
     void EditorLayer::OnUpdate(float deltaTime)
     {
+        DS_PROFILE_SCOPE_N("EditorLayer::OnUpdate");
         if (!m_RenderBackend || !m_Camera)
         {
             return;
@@ -544,6 +561,9 @@ namespace ds
             atomPositionsByElement.reserve(m_WorkingStructure.species.size() + 4);
             atomColorsByElement.reserve(m_WorkingStructure.species.size() + 4);
 
+            std::vector<glm::vec3> atomCartesianPositions;
+            atomCartesianPositions.reserve(m_WorkingStructure.atoms.size());
+
             std::vector<glm::vec3> selectedPositions;
             selectedPositions.reserve(m_SelectedAtomIndices.size());
             std::vector<glm::vec3> selectedColors;
@@ -558,6 +578,8 @@ namespace ds
                     position = m_WorkingStructure.DirectToCartesian(position);
                 }
 
+                atomCartesianPositions.push_back(position);
+
                 const std::string elementKey = NormalizeElementSymbol(atom.element);
                 atomPositionsByElement[elementKey].push_back(position);
                 atomColorsByElement[elementKey].push_back(ColorFromElement(elementKey));
@@ -566,6 +588,76 @@ namespace ds
                 {
                     selectedPositions.push_back(position);
                     selectedColors.push_back(m_SelectionColor);
+                }
+            }
+
+            if (m_AutoBondGenerationEnabled)
+            {
+                if (m_AutoBondsDirty)
+                {
+                    RebuildAutoBonds(atomCartesianPositions);
+                    m_AutoBondsDirty = false;
+                }
+            }
+            else if (!m_GeneratedBonds.empty())
+            {
+                m_GeneratedBonds.clear();
+            }
+
+            if (!m_GeneratedBonds.empty())
+            {
+                std::unordered_set<std::size_t> selectedIndices;
+                selectedIndices.reserve(m_SelectedAtomIndices.size());
+                for (std::size_t atomIndex : m_SelectedAtomIndices)
+                {
+                    selectedIndices.insert(atomIndex);
+                }
+
+                std::vector<glm::vec3> regularBondVertices;
+                std::vector<glm::vec3> selectedBondVertices;
+                regularBondVertices.reserve(m_GeneratedBonds.size() * 2);
+                selectedBondVertices.reserve(m_GeneratedBonds.size());
+
+                for (const BondSegment &bond : m_GeneratedBonds)
+                {
+                    const std::uint64_t bondKey = MakeBondPairKey(bond.atomA, bond.atomB);
+                    if (m_DeletedBondKeys.find(bondKey) != m_DeletedBondKeys.end())
+                    {
+                        continue;
+                    }
+
+                    const bool bondSelected =
+                        (selectedIndices.find(bond.atomA) != selectedIndices.end() ||
+                         selectedIndices.find(bond.atomB) != selectedIndices.end() ||
+                         m_SelectedBondKeys.find(bondKey) != m_SelectedBondKeys.end());
+                    if (bondSelected)
+                    {
+                        selectedBondVertices.push_back(bond.start);
+                        selectedBondVertices.push_back(bond.end);
+                    }
+                    else
+                    {
+                        regularBondVertices.push_back(bond.start);
+                        regularBondVertices.push_back(bond.end);
+                    }
+                }
+
+                if (!regularBondVertices.empty())
+                {
+                    m_RenderBackend->RenderLineSegments(
+                        m_Camera->GetViewProjectionMatrix(),
+                        regularBondVertices,
+                        m_BondColor,
+                        m_BondLineWidth);
+                }
+
+                if (!selectedBondVertices.empty())
+                {
+                    m_RenderBackend->RenderLineSegments(
+                        m_Camera->GetViewProjectionMatrix(),
+                        selectedBondVertices,
+                        m_BondSelectedColor,
+                        m_BondLineWidth + 0.8f);
                 }
             }
 
@@ -594,6 +686,8 @@ namespace ds
         }
         else
         {
+            m_GeneratedBonds.clear();
+            m_AutoBondsDirty = true;
             m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix(), m_SceneSettings);
         }
 
@@ -690,7 +784,7 @@ namespace ds
         AppendSelectionDebugLog("Mode switched to Navigate");
     }
 
-    void EditorLayer::StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch)
+    void EditorLayer::StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll)
     {
         if (!m_Camera)
         {
@@ -711,6 +805,10 @@ namespace ds
 
         m_CameraTransitionStartPitch = m_Camera->GetPitch();
         m_CameraTransitionEndPitch = pitch;
+
+        const float currentRoll = m_Camera->GetRoll();
+        m_CameraTransitionStartRoll = currentRoll;
+        m_CameraTransitionEndRoll = roll.value_or(currentRoll);
     }
 
     void EditorLayer::UpdateCameraOrbitTransition(float deltaTime)
@@ -729,8 +827,10 @@ namespace ds
         const float distance = glm::mix(m_CameraTransitionStartDistance, m_CameraTransitionEndDistance, t);
         const float yaw = LerpAngleRadians(m_CameraTransitionStartYaw, m_CameraTransitionEndYaw, t);
         const float pitch = LerpAngleRadians(m_CameraTransitionStartPitch, m_CameraTransitionEndPitch, t);
+        const float roll = LerpAngleRadians(m_CameraTransitionStartRoll, m_CameraTransitionEndRoll, t);
 
         m_Camera->SetOrbitState(target, distance, yaw, pitch);
+        m_Camera->SetRoll(roll);
 
         if (alpha >= 1.0f)
         {
@@ -812,6 +912,84 @@ namespace ds
                 bestDepth = ndc.z;
                 bestDistancePixels = distPixels;
                 outAtomIndex = i;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    bool EditorLayer::PickBondAtScreenPoint(const glm::vec2 &mousePos, std::uint64_t &outBondKey) const
+    {
+        if (!m_Camera || m_GeneratedBonds.empty())
+        {
+            return false;
+        }
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return false;
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        bool found = false;
+        float bestDepth = std::numeric_limits<float>::max();
+        float bestDistanceSq = std::numeric_limits<float>::max();
+        const float pickRadius = 8.0f;
+        const float pickRadiusSq = pickRadius * pickRadius;
+
+        for (const BondSegment &bond : m_GeneratedBonds)
+        {
+            const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
+            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+            {
+                continue;
+            }
+
+            const glm::vec4 clipA = viewProjection * glm::vec4(bond.start, 1.0f);
+            const glm::vec4 clipB = viewProjection * glm::vec4(bond.end, 1.0f);
+            if (clipA.w <= 1e-6f || clipB.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndcA = glm::vec3(clipA) / clipA.w;
+            const glm::vec3 ndcB = glm::vec3(clipB) / clipB.w;
+            if (ndcA.z < -1.0f || ndcA.z > 1.0f || ndcB.z < -1.0f || ndcB.z > 1.0f)
+            {
+                continue;
+            }
+
+            const glm::vec2 screenA(
+                m_ViewportRectMin.x + (ndcA.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndcA.y * 0.5f + 0.5f)) * height);
+            const glm::vec2 screenB(
+                m_ViewportRectMin.x + (ndcB.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndcB.y * 0.5f + 0.5f)) * height);
+
+            const glm::vec2 seg = screenB - screenA;
+            const float segLenSq = glm::dot(seg, seg);
+            if (segLenSq < 1e-6f)
+            {
+                continue;
+            }
+
+            const float t = glm::clamp(glm::dot(mousePos - screenA, seg) / segLenSq, 0.0f, 1.0f);
+            const glm::vec2 closest = screenA + seg * t;
+            const float distSq = glm::length2(mousePos - closest);
+            if (distSq > pickRadiusSq)
+            {
+                continue;
+            }
+
+            const float depth = glm::mix(ndcA.z, ndcB.z, t);
+            if (!found || depth < bestDepth - 1e-4f || (std::abs(depth - bestDepth) <= 1e-4f && distSq < bestDistanceSq))
+            {
+                bestDepth = depth;
+                bestDistanceSq = distSq;
+                outBondKey = key;
                 found = true;
             }
         }
@@ -1938,6 +2116,217 @@ namespace ds
             " added=" + std::to_string(addedCount));
     }
 
+    void EditorLayer::SelectBondsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection)
+    {
+        if (!m_Camera || m_GeneratedBonds.empty())
+        {
+            return;
+        }
+
+        const float left = std::min(screenStart.x, screenEnd.x);
+        const float right = std::max(screenStart.x, screenEnd.x);
+        const float top = std::min(screenStart.y, screenEnd.y);
+        const float bottom = std::max(screenStart.y, screenEnd.y);
+
+        if (!additiveSelection)
+        {
+            m_SelectedBondKeys.clear();
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return;
+        }
+
+        std::size_t addedCount = 0;
+        for (const BondSegment &bond : m_GeneratedBonds)
+        {
+            const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
+            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+            {
+                continue;
+            }
+
+            const glm::vec4 clipA = viewProjection * glm::vec4(bond.start, 1.0f);
+            const glm::vec4 clipB = viewProjection * glm::vec4(bond.end, 1.0f);
+            if (clipA.w <= 1e-6f || clipB.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndcA = glm::vec3(clipA) / clipA.w;
+            const glm::vec3 ndcB = glm::vec3(clipB) / clipB.w;
+            if (ndcA.z < -1.0f || ndcA.z > 1.0f || ndcB.z < -1.0f || ndcB.z > 1.0f)
+            {
+                continue;
+            }
+
+            const glm::vec2 screenA(
+                m_ViewportRectMin.x + (ndcA.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndcA.y * 0.5f + 0.5f)) * height);
+            const glm::vec2 screenB(
+                m_ViewportRectMin.x + (ndcB.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndcB.y * 0.5f + 0.5f)) * height);
+
+            const bool endpointInside =
+                ((screenA.x >= left && screenA.x <= right && screenA.y >= top && screenA.y <= bottom) ||
+                 (screenB.x >= left && screenB.x <= right && screenB.y >= top && screenB.y <= bottom));
+            if (!endpointInside)
+            {
+                const glm::vec2 mid = (screenA + screenB) * 0.5f;
+                if (!(mid.x >= left && mid.x <= right && mid.y >= top && mid.y <= bottom))
+                {
+                    continue;
+                }
+            }
+
+            const auto [it, inserted] = m_SelectedBondKeys.insert(key);
+            (void)it;
+            if (inserted)
+            {
+                ++addedCount;
+            }
+        }
+
+        AppendSelectionDebugLog(
+            "Bond box selection: additive=" + std::string(additiveSelection ? "1" : "0") +
+            " selected=" + std::to_string(m_SelectedBondKeys.size()) +
+            " added=" + std::to_string(addedCount));
+    }
+
+    void EditorLayer::SelectAtomsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection)
+    {
+        if (!m_Camera || !m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            return;
+        }
+
+        const float radius = std::max(1.0f, screenRadius);
+        const float radiusSq = radius * radius;
+        if (!additiveSelection)
+        {
+            m_SelectedAtomIndices.clear();
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return;
+        }
+
+        std::size_t addedCount = 0;
+        for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
+        {
+            glm::vec3 center = m_WorkingStructure.atoms[i].position;
+            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+            {
+                center = m_WorkingStructure.DirectToCartesian(center);
+            }
+
+            const glm::vec4 clip = viewProjection * glm::vec4(center, 1.0f);
+            if (clip.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f || ndc.z < -1.0f || ndc.z > 1.0f)
+            {
+                continue;
+            }
+
+            const glm::vec2 screenPos(
+                m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+
+            if (glm::length2(screenPos - screenCenter) <= radiusSq)
+            {
+                if (!IsAtomSelected(i))
+                {
+                    m_SelectedAtomIndices.push_back(i);
+                    ++addedCount;
+                }
+            }
+        }
+
+        AppendSelectionDebugLog(
+            "Circle atom selection: center=(" + std::to_string(screenCenter.x) + "," + std::to_string(screenCenter.y) + ")" +
+            " radius=" + std::to_string(radius) +
+            " selected=" + std::to_string(m_SelectedAtomIndices.size()) +
+            " added=" + std::to_string(addedCount));
+    }
+
+    void EditorLayer::SelectBondsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection)
+    {
+        if (!m_Camera || m_GeneratedBonds.empty())
+        {
+            return;
+        }
+
+        const float radius = std::max(1.0f, screenRadius);
+        const float radiusSq = radius * radius;
+        if (!additiveSelection)
+        {
+            m_SelectedBondKeys.clear();
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return;
+        }
+
+        std::size_t addedCount = 0;
+        for (const BondSegment &bond : m_GeneratedBonds)
+        {
+            const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
+            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+            {
+                continue;
+            }
+
+            const glm::vec4 clip = viewProjection * glm::vec4(bond.midpoint, 1.0f);
+            if (clip.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f || ndc.z < -1.0f || ndc.z > 1.0f)
+            {
+                continue;
+            }
+
+            const glm::vec2 screenPos(
+                m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height);
+            if (glm::length2(screenPos - screenCenter) > radiusSq)
+            {
+                continue;
+            }
+
+            const auto [it, inserted] = m_SelectedBondKeys.insert(key);
+            (void)it;
+            if (inserted)
+            {
+                ++addedCount;
+            }
+        }
+
+        AppendSelectionDebugLog(
+            "Circle bond selection: center=(" + std::to_string(screenCenter.x) + "," + std::to_string(screenCenter.y) + ")" +
+            " radius=" + std::to_string(radius) +
+            " selected=" + std::to_string(m_SelectedBondKeys.size()) +
+            " added=" + std::to_string(addedCount));
+    }
+
     void EditorLayer::HandleViewportSelection()
     {
         if (m_TranslateModeActive || m_RotateModeActive)
@@ -1955,7 +2344,7 @@ namespace ds
             return;
         }
 
-        if (m_BoxSelectArmed)
+        if (m_BoxSelectArmed || m_CircleSelectArmed)
         {
             return;
         }
@@ -1997,7 +2386,7 @@ namespace ds
             return;
         }
 
-        if ((!m_HasStructureLoaded || m_WorkingStructure.atoms.empty()) && m_TransformEmpties.empty())
+        if ((!m_HasStructureLoaded || m_WorkingStructure.atoms.empty()) && m_TransformEmpties.empty() && m_GeneratedBonds.empty())
         {
             AppendSelectionDebugLog("Ignored click: no structure/atoms and no empties");
             return;
@@ -2014,6 +2403,7 @@ namespace ds
         }
 
         const bool multiSelect = io.KeyCtrl;
+        const bool bondsOnlySelection = (m_SelectionFilter == SelectionFilter::BondsOnly);
 
         auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen, float &outDepth) -> bool
         {
@@ -2076,32 +2466,82 @@ namespace ds
             return found;
         };
 
-        SpecialNodeSelection pickedSpecial = SpecialNodeSelection::None;
-        if (pickSpecialNode(pickedSpecial))
+        if (!bondsOnlySelection)
+        {
+            SpecialNodeSelection pickedSpecial = SpecialNodeSelection::None;
+            if (pickSpecialNode(pickedSpecial))
+            {
+                if (!multiSelect)
+                {
+                    m_SelectedAtomIndices.clear();
+                    m_SelectedTransformEmptyIndex = -1;
+                    m_SelectedBondKeys.clear();
+                }
+                m_SelectedSpecialNode = pickedSpecial;
+                AppendSelectionDebugLog("Selection set to special node: Light");
+                return;
+            }
+
+            std::size_t pickedEmptyIndex = 0;
+            const bool hasEmptyHit = PickTransformEmptyAtScreenPoint(mousePos, pickedEmptyIndex);
+            if (hasEmptyHit)
+            {
+                if (!multiSelect)
+                {
+                    m_SelectedAtomIndices.clear();
+                    m_SelectedBondKeys.clear();
+                }
+
+                m_SelectedTransformEmptyIndex = static_cast<int>(pickedEmptyIndex);
+                m_ActiveTransformEmptyIndex = m_SelectedTransformEmptyIndex;
+                m_SelectedSpecialNode = SpecialNodeSelection::None;
+                AppendSelectionDebugLog("Selection set to transform empty index=" + std::to_string(pickedEmptyIndex));
+                return;
+            }
+        }
+
+        std::uint64_t pickedBondKey = 0;
+        const bool hasBondHit = PickBondAtScreenPoint(mousePos, pickedBondKey);
+        if (hasBondHit && bondsOnlySelection)
         {
             if (!multiSelect)
             {
+                m_SelectedBondKeys.clear();
                 m_SelectedAtomIndices.clear();
                 m_SelectedTransformEmptyIndex = -1;
+                m_SelectedSpecialNode = SpecialNodeSelection::None;
             }
-            m_SelectedSpecialNode = pickedSpecial;
-            AppendSelectionDebugLog("Selection set to special node: Light");
+
+            if (multiSelect)
+            {
+                auto selectedIt = m_SelectedBondKeys.find(pickedBondKey);
+                if (selectedIt != m_SelectedBondKeys.end())
+                {
+                    m_SelectedBondKeys.erase(selectedIt);
+                }
+                else
+                {
+                    m_SelectedBondKeys.insert(pickedBondKey);
+                }
+            }
+            else
+            {
+                m_SelectedBondKeys.insert(pickedBondKey);
+            }
+
+            m_SelectedBondLabelKey = pickedBondKey;
+            AppendSelectionDebugLog("Selection set to bond key=" + std::to_string(pickedBondKey));
             return;
         }
 
-        std::size_t pickedEmptyIndex = 0;
-        const bool hasEmptyHit = PickTransformEmptyAtScreenPoint(mousePos, pickedEmptyIndex);
-        if (hasEmptyHit)
+        if (bondsOnlySelection)
         {
             if (!multiSelect)
             {
-                m_SelectedAtomIndices.clear();
+                m_SelectedBondKeys.clear();
+                m_SelectedBondLabelKey = 0;
+                AppendSelectionDebugLog("Selection cleared: bond-only mode and no bond hit");
             }
-
-            m_SelectedTransformEmptyIndex = static_cast<int>(pickedEmptyIndex);
-            m_ActiveTransformEmptyIndex = m_SelectedTransformEmptyIndex;
-            m_SelectedSpecialNode = SpecialNodeSelection::None;
-            AppendSelectionDebugLog("Selection set to transform empty index=" + std::to_string(pickedEmptyIndex));
             return;
         }
 
@@ -2117,6 +2557,38 @@ namespace ds
 
         if (!hasHit)
         {
+            if (hasBondHit)
+            {
+                if (!multiSelect)
+                {
+                    m_SelectedBondKeys.clear();
+                    m_SelectedAtomIndices.clear();
+                    m_SelectedTransformEmptyIndex = -1;
+                    m_SelectedSpecialNode = SpecialNodeSelection::None;
+                }
+
+                if (multiSelect)
+                {
+                    auto selectedIt = m_SelectedBondKeys.find(pickedBondKey);
+                    if (selectedIt != m_SelectedBondKeys.end())
+                    {
+                        m_SelectedBondKeys.erase(selectedIt);
+                    }
+                    else
+                    {
+                        m_SelectedBondKeys.insert(pickedBondKey);
+                    }
+                }
+                else
+                {
+                    m_SelectedBondKeys.insert(pickedBondKey);
+                }
+
+                m_SelectedBondLabelKey = pickedBondKey;
+                AppendSelectionDebugLog("Selection set to bond key=" + std::to_string(pickedBondKey));
+                return;
+            }
+
             if (!multiSelect)
             {
                 bool preserveSelectionForGizmo = false;
@@ -2184,6 +2656,8 @@ namespace ds
                 m_SelectedAtomIndices.clear();
                 m_SelectedTransformEmptyIndex = -1;
                 m_SelectedSpecialNode = SpecialNodeSelection::None;
+                m_SelectedBondKeys.clear();
+                m_SelectedBondLabelKey = 0;
                 AppendSelectionDebugLog("Selection cleared: no hit and Ctrl not pressed");
             }
             return;
@@ -2193,6 +2667,8 @@ namespace ds
         {
             m_SelectedAtomIndices.clear();
             m_SelectedAtomIndices.push_back(pickedAtomIndex);
+            m_SelectedBondKeys.clear();
+            m_SelectedBondLabelKey = 0;
             m_SelectedTransformEmptyIndex = -1;
             m_SelectedSpecialNode = SpecialNodeSelection::None;
             AppendSelectionDebugLog("Selection set to single atom index=" + std::to_string(pickedAtomIndex));
@@ -2231,6 +2707,11 @@ namespace ds
         m_HasStructureLoaded = true;
         EnsureAtomNodeIds();
         m_SelectedAtomIndices.clear();
+        m_SelectedBondKeys.clear();
+        m_DeletedBondKeys.clear();
+        m_BondLabelStates.clear();
+        m_SelectedBondLabelKey = 0;
+        m_AutoBondsDirty = true;
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Imported structure from: " + path;
 
@@ -2334,6 +2815,7 @@ namespace ds
         m_WorkingStructure.atoms.push_back(atom);
         m_AtomNodeIds.push_back(GenerateSceneUUID());
         m_WorkingStructure.RebuildSpeciesFromAtoms();
+        m_AutoBondsDirty = true;
 
         m_SelectedAtomIndices.clear();
         m_SelectedAtomIndices.push_back(m_WorkingStructure.atoms.size() - 1);
@@ -2395,6 +2877,7 @@ namespace ds
         }
 
         m_WorkingStructure.RebuildSpeciesFromAtoms();
+        m_AutoBondsDirty = true;
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Changed atom type to " + symbol + " for " + std::to_string(changedCount) + " atom(s).";
         if (outChangedCount)
@@ -2402,6 +2885,129 @@ namespace ds
             *outChangedCount = changedCount;
         }
         return true;
+    }
+
+    void EditorLayer::RebuildAutoBonds(const std::vector<glm::vec3> &atomCartesianPositions)
+    {
+        DS_PROFILE_SCOPE_N("EditorLayer::RebuildAutoBonds");
+        m_GeneratedBonds.clear();
+        std::unordered_set<std::uint64_t> seenLabelKeys;
+
+        if (!m_AutoBondGenerationEnabled || !m_HasStructureLoaded)
+        {
+            return;
+        }
+
+        const std::size_t atomCount = std::min(atomCartesianPositions.size(), m_WorkingStructure.atoms.size());
+        if (atomCount < 2)
+        {
+            if (m_LastLoggedBondCount != 0)
+            {
+                m_LastLoggedBondCount = 0;
+                LogTrace("Auto bond generation skipped: fewer than 2 atoms.");
+            }
+            return;
+        }
+
+        const float thresholdScale = glm::clamp(m_BondThresholdScale, 0.80f, 1.80f);
+        constexpr float kPmToAngstrom = 0.01f;
+        constexpr float kMinBondDistance = 0.08f;
+        constexpr std::size_t kMaxBondCount = 40000;
+
+        m_GeneratedBonds.reserve(std::min<std::size_t>(atomCount * 8, kMaxBondCount));
+
+        for (std::size_t i = 0; i < atomCount; ++i)
+        {
+            const Atom &atomA = m_WorkingStructure.atoms[i];
+            const float radiusA = CovalentRadiusPmByElementSymbol(atomA.element);
+
+            for (std::size_t j = i + 1; j < atomCount; ++j)
+            {
+                const Atom &atomB = m_WorkingStructure.atoms[j];
+                const float radiusB = CovalentRadiusPmByElementSymbol(atomB.element);
+
+                const glm::vec3 delta = atomCartesianPositions[j] - atomCartesianPositions[i];
+                const float distance = glm::length(delta);
+                if (distance < kMinBondDistance)
+                {
+                    continue;
+                }
+
+                const float cutoff = (radiusA + radiusB) * kPmToAngstrom * thresholdScale;
+                if (distance > cutoff)
+                {
+                    continue;
+                }
+
+                BondSegment bond;
+                bond.atomA = i;
+                bond.atomB = j;
+                bond.start = atomCartesianPositions[i];
+                bond.end = atomCartesianPositions[j];
+                bond.midpoint = (bond.start + bond.end) * 0.5f;
+                bond.length = distance;
+                m_GeneratedBonds.push_back(bond);
+
+                const std::uint64_t labelKey = MakeBondPairKey(i, j);
+                seenLabelKeys.insert(labelKey);
+                BondLabelState &labelState = m_BondLabelStates[labelKey];
+                labelState.atomA = i;
+                labelState.atomB = j;
+                labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
+
+                if (m_GeneratedBonds.size() >= kMaxBondCount)
+                {
+                    if (m_LastLoggedBondCount != m_GeneratedBonds.size())
+                    {
+                        m_LastLoggedBondCount = m_GeneratedBonds.size();
+                        LogWarn("Auto bond generation reached hard cap of " + std::to_string(kMaxBondCount) + " bonds.");
+                    }
+                    return;
+                }
+            }
+        }
+
+        for (auto it = m_BondLabelStates.begin(); it != m_BondLabelStates.end();)
+        {
+            if (seenLabelKeys.find(it->first) == seenLabelKeys.end())
+            {
+                if (m_SelectedBondLabelKey == it->first)
+                {
+                    m_SelectedBondLabelKey = 0;
+                }
+                it = m_BondLabelStates.erase(it);
+                continue;
+            }
+            ++it;
+        }
+
+        for (auto it = m_SelectedBondKeys.begin(); it != m_SelectedBondKeys.end();)
+        {
+            if (seenLabelKeys.find(*it) == seenLabelKeys.end())
+            {
+                it = m_SelectedBondKeys.erase(it);
+                continue;
+            }
+            ++it;
+        }
+
+        for (auto it = m_DeletedBondKeys.begin(); it != m_DeletedBondKeys.end();)
+        {
+            if (seenLabelKeys.find(*it) == seenLabelKeys.end())
+            {
+                it = m_DeletedBondKeys.erase(it);
+                continue;
+            }
+            ++it;
+        }
+
+        if (m_LastLoggedBondCount != m_GeneratedBonds.size())
+        {
+            m_LastLoggedBondCount = m_GeneratedBonds.size();
+            LogTrace("Auto bond generation updated: bonds=" + std::to_string(m_GeneratedBonds.size()) +
+                     ", atoms=" + std::to_string(atomCount) +
+                     ", threshold_scale=" + std::to_string(thresholdScale));
+        }
     }
 
     void EditorLayer::ApplyFontScale(float scale)
@@ -2697,6 +3303,17 @@ namespace ds
                 {
                 }
             }
+            else if (key == "camera_roll")
+            {
+                try
+                {
+                    m_CameraRollPersisted = std::stof(value);
+                    m_HasPersistedCameraState = true;
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "camera_sensitivity_mode")
             {
                 hasSensitivityMode = true;
@@ -2980,6 +3597,94 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_bonds_auto")
+            {
+                m_AutoBondGenerationEnabled = (value == "1");
+            }
+            else if (key == "viewport_bonds_labels")
+            {
+                m_ShowBondLengthLabels = (value == "1");
+            }
+            else if (key == "viewport_bonds_threshold_scale")
+            {
+                try
+                {
+                    m_BondThresholdScale = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_line_width")
+            {
+                try
+                {
+                    m_BondLineWidth = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_color_r")
+            {
+                try
+                {
+                    m_BondColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_color_g")
+            {
+                try
+                {
+                    m_BondColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_color_b")
+            {
+                try
+                {
+                    m_BondColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_selected_color_r")
+            {
+                try
+                {
+                    m_BondSelectedColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_selected_color_g")
+            {
+                try
+                {
+                    m_BondSelectedColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_selected_color_b")
+            {
+                try
+                {
+                    m_BondSelectedColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "selection_color_r")
             {
                 try
@@ -3239,6 +3944,18 @@ namespace ds
             {
                 m_ShowGlobalAxesOverlay = (value == "1");
             }
+            else if (key == "viewport_show_global_axis_x")
+            {
+                m_ShowGlobalAxis[0] = (value != "0");
+            }
+            else if (key == "viewport_show_global_axis_y")
+            {
+                m_ShowGlobalAxis[1] = (value != "0");
+            }
+            else if (key == "viewport_show_global_axis_z")
+            {
+                m_ShowGlobalAxis[2] = (value != "0");
+            }
             else if (key == "gizmo_use_temporary_local_axes")
             {
                 m_UseTemporaryLocalAxes = (value == "1");
@@ -3447,6 +4164,14 @@ namespace ds
             m_SceneSettings.atomGlowStrength = 0.0f;
         if (m_SceneSettings.atomGlowStrength > 0.60f)
             m_SceneSettings.atomGlowStrength = 0.60f;
+        if (m_BondThresholdScale < 0.80f)
+            m_BondThresholdScale = 0.80f;
+        if (m_BondThresholdScale > 1.80f)
+            m_BondThresholdScale = 1.80f;
+        if (m_BondLineWidth < 1.0f)
+            m_BondLineWidth = 1.0f;
+        if (m_BondLineWidth > 6.0f)
+            m_BondLineWidth = 6.0f;
         if (m_GizmoModeIndex < 0)
             m_GizmoModeIndex = 0;
         if (m_GizmoModeIndex > 2)
@@ -3490,6 +4215,7 @@ namespace ds
             out << "camera_distance=" << m_Camera->GetDistance() << '\n';
             out << "camera_yaw=" << m_Camera->GetYaw() << '\n';
             out << "camera_pitch=" << m_Camera->GetPitch() << '\n';
+            out << "camera_roll=" << m_Camera->GetRoll() << '\n';
         }
         else
         {
@@ -3499,6 +4225,7 @@ namespace ds
             out << "camera_distance=" << m_CameraDistancePersisted << '\n';
             out << "camera_yaw=" << m_CameraYawPersisted << '\n';
             out << "camera_pitch=" << m_CameraPitchPersisted << '\n';
+            out << "camera_roll=" << m_CameraRollPersisted << '\n';
         }
         out << "viewport_bg_r=" << m_SceneSettings.clearColor.r << '\n';
         out << "viewport_bg_g=" << m_SceneSettings.clearColor.g << '\n';
@@ -3529,6 +4256,16 @@ namespace ds
         out << "viewport_atom_override_b=" << m_SceneSettings.atomOverrideColor.b << '\n';
         out << "viewport_atom_brightness=" << m_SceneSettings.atomBrightness << '\n';
         out << "viewport_atom_glow=" << m_SceneSettings.atomGlowStrength << '\n';
+        out << "viewport_bonds_auto=" << (m_AutoBondGenerationEnabled ? "1" : "0") << '\n';
+        out << "viewport_bonds_labels=" << (m_ShowBondLengthLabels ? "1" : "0") << '\n';
+        out << "viewport_bonds_threshold_scale=" << m_BondThresholdScale << '\n';
+        out << "viewport_bonds_line_width=" << m_BondLineWidth << '\n';
+        out << "viewport_bonds_color_r=" << m_BondColor.r << '\n';
+        out << "viewport_bonds_color_g=" << m_BondColor.g << '\n';
+        out << "viewport_bonds_color_b=" << m_BondColor.b << '\n';
+        out << "viewport_bonds_selected_color_r=" << m_BondSelectedColor.r << '\n';
+        out << "viewport_bonds_selected_color_g=" << m_BondSelectedColor.g << '\n';
+        out << "viewport_bonds_selected_color_b=" << m_BondSelectedColor.b << '\n';
         out << "selection_color_r=" << m_SelectionColor.r << '\n';
         out << "selection_color_g=" << m_SelectionColor.g << '\n';
         out << "selection_color_b=" << m_SelectionColor.b << '\n';
@@ -3559,6 +4296,9 @@ namespace ds
         out << "viewport_show_transform_empties=" << (m_ShowTransformEmpties ? "1" : "0") << '\n';
         out << "viewport_transform_empty_visual_scale=" << m_TransformEmptyVisualScale << '\n';
         out << "viewport_show_global_axes_overlay=" << (m_ShowGlobalAxesOverlay ? "1" : "0") << '\n';
+        out << "viewport_show_global_axis_x=" << (m_ShowGlobalAxis[0] ? "1" : "0") << '\n';
+        out << "viewport_show_global_axis_y=" << (m_ShowGlobalAxis[1] ? "1" : "0") << '\n';
+        out << "viewport_show_global_axis_z=" << (m_ShowGlobalAxis[2] ? "1" : "0") << '\n';
         out << "gizmo_use_temporary_local_axes=" << (m_UseTemporaryLocalAxes ? "1" : "0") << '\n';
         out << "gizmo_temp_axes_source=" << (m_TemporaryAxesSource == TemporaryAxesSource::ActiveEmpty ? 1 : 0) << '\n';
         out << "gizmo_temp_axis_atom_a=" << m_TemporaryAxisAtomA << '\n';
@@ -3614,6 +4354,8 @@ namespace ds
         m_Collections.clear();
         m_TransformEmpties.clear();
         m_ObjectGroups.clear();
+        m_CameraPresets.clear();
+        m_SelectedCameraPresetIndex = -1;
 
         int atomCount = 0;
         try
@@ -3832,6 +4574,64 @@ namespace ds
             m_ObjectGroups.push_back(group);
         }
 
+        int cameraPresetCount = 0;
+        try
+        {
+            cameraPresetCount = std::stoi(getValue("scene_camera_preset_count"));
+        }
+        catch (...)
+        {
+            cameraPresetCount = 0;
+        }
+
+        for (int i = 0; i < cameraPresetCount; ++i)
+        {
+            CameraPreset preset;
+            const std::string prefix = "scene_camera_preset_" + std::to_string(i) + "_";
+            preset.name = getValue(prefix + "name");
+            if (preset.name.empty())
+            {
+                preset.name = "Preset " + std::to_string(i + 1);
+            }
+
+            try
+            {
+                preset.target.x = std::stof(getValue(prefix + "target_x"));
+                preset.target.y = std::stof(getValue(prefix + "target_y"));
+                preset.target.z = std::stof(getValue(prefix + "target_z"));
+                preset.distance = std::stof(getValue(prefix + "distance"));
+                preset.yaw = std::stof(getValue(prefix + "yaw"));
+                preset.pitch = std::stof(getValue(prefix + "pitch"));
+                preset.roll = std::stof(getValue(prefix + "roll"));
+            }
+            catch (...)
+            {
+                continue;
+            }
+
+            if (preset.distance < 0.05f)
+            {
+                preset.distance = 0.05f;
+            }
+
+            m_CameraPresets.push_back(preset);
+        }
+
+        try
+        {
+            m_SelectedCameraPresetIndex = std::stoi(getValue("scene_camera_preset_selected"));
+        }
+        catch (...)
+        {
+            m_SelectedCameraPresetIndex = -1;
+        }
+
+        if (m_SelectedCameraPresetIndex < 0 ||
+            m_SelectedCameraPresetIndex >= static_cast<int>(m_CameraPresets.size()))
+        {
+            m_SelectedCameraPresetIndex = m_CameraPresets.empty() ? -1 : 0;
+        }
+
         m_CollectionCounter = std::max(1, static_cast<int>(m_Collections.size()) + 1);
         m_GroupCounter = std::max(1, static_cast<int>(m_ObjectGroups.size()) + 1);
         m_TransformEmptyCounter = std::max(1, static_cast<int>(m_TransformEmpties.size()) + 1);
@@ -3904,10 +4704,27 @@ namespace ds
             out << prefix << "empty_ids=" << JoinCsv(group.emptyIds) << '\n';
             out << prefix << "empty_indices=" << JoinCsv(group.emptyIndices) << '\n';
         }
+
+        out << "scene_camera_preset_count=" << m_CameraPresets.size() << '\n';
+        out << "scene_camera_preset_selected=" << m_SelectedCameraPresetIndex << '\n';
+        for (std::size_t i = 0; i < m_CameraPresets.size(); ++i)
+        {
+            const CameraPreset &preset = m_CameraPresets[i];
+            const std::string prefix = "scene_camera_preset_" + std::to_string(i) + "_";
+            out << prefix << "name=" << preset.name << '\n';
+            out << prefix << "target_x=" << preset.target.x << '\n';
+            out << prefix << "target_y=" << preset.target.y << '\n';
+            out << prefix << "target_z=" << preset.target.z << '\n';
+            out << prefix << "distance=" << preset.distance << '\n';
+            out << prefix << "yaw=" << preset.yaw << '\n';
+            out << prefix << "pitch=" << preset.pitch << '\n';
+            out << prefix << "roll=" << preset.roll << '\n';
+        }
     }
 
     void EditorLayer::OnImGuiRender()
     {
+        DS_PROFILE_SCOPE_N("EditorLayer::OnImGuiRender");
         EnsureSceneDefaults();
         bool settingsChanged = false;
         const ImGuiIO &io = ImGui::GetIO();
@@ -4253,6 +5070,46 @@ namespace ds
 
         auto deleteCurrentSelection = [&]()
         {
+            if (!m_SelectedBondKeys.empty())
+            {
+                const bool hasAtomLikeSelection =
+                    !m_SelectedAtomIndices.empty() ||
+                    (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size())) ||
+                    m_SelectedSpecialNode != SpecialNodeSelection::None;
+
+                std::size_t deletedCount = 0;
+                for (std::uint64_t key : m_SelectedBondKeys)
+                {
+                    const auto [it, inserted] = m_DeletedBondKeys.insert(key);
+                    (void)it;
+                    if (inserted)
+                    {
+                        ++deletedCount;
+                    }
+
+                    auto stateIt = m_BondLabelStates.find(key);
+                    if (stateIt != m_BondLabelStates.end())
+                    {
+                        stateIt->second.hidden = true;
+                    }
+                }
+
+                if (deletedCount > 0)
+                {
+                    settingsChanged = true;
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Deleted " + std::to_string(deletedCount) + " selected bond(s).";
+                    LogInfo(m_LastStructureMessage);
+                }
+
+                m_SelectedBondKeys.clear();
+                m_SelectedBondLabelKey = 0;
+                if (!hasAtomLikeSelection)
+                {
+                    return;
+                }
+            }
+
             if (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
             {
                 DeleteTransformEmptyAtIndex(m_SelectedTransformEmptyIndex);
@@ -4289,6 +5146,7 @@ namespace ds
                 }
 
                 m_WorkingStructure.RebuildSpeciesFromAtoms();
+                m_AutoBondsDirty = true;
                 m_SelectedAtomIndices.clear();
                 m_SelectedTransformEmptyIndex = -1;
 
@@ -4459,6 +5317,17 @@ namespace ds
 
         if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false))
         {
+            const auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
+            const bool hasAtomLikeSelection =
+                !m_SelectedAtomIndices.empty() ||
+                m_SelectedTransformEmptyIndex >= 0 ||
+                m_SelectedSpecialNode != SpecialNodeSelection::None;
+
+            if (!hasAtomLikeSelection && m_SelectedBondKeys.empty() && selectedLabelIt != m_BondLabelStates.end() && !selectedLabelIt->second.deleted)
+            {
+                m_SelectedBondKeys.insert(m_SelectedBondLabelKey);
+            }
+
             deleteCurrentSelection();
             m_BlockSelectionThisFrame = true;
         }
@@ -4899,14 +5768,27 @@ namespace ds
         {
             m_BoxSelectArmed = true;
             m_BoxSelecting = false;
+            m_CircleSelectArmed = false;
+            m_CircleSelecting = false;
             AppendSelectionDebugLog("Box select armed (press LMB and drag)");
         }
 
-        if (m_BoxSelectArmed && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_C, false))
+        {
+            m_CircleSelectArmed = true;
+            m_CircleSelecting = false;
+            m_BoxSelectArmed = false;
+            m_BoxSelecting = false;
+            AppendSelectionDebugLog("Circle select armed (LMB to apply, wheel changes radius)");
+        }
+
+        if ((m_BoxSelectArmed || m_CircleSelectArmed) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             m_BoxSelectArmed = false;
             m_BoxSelecting = false;
-            AppendSelectionDebugLog("Box select canceled with Escape");
+            m_CircleSelectArmed = false;
+            m_CircleSelecting = false;
+            AppendSelectionDebugLog("Box/circle select canceled with Escape");
         }
 
         ImVec2 size = ImGui::GetContentRegionAvail();
@@ -4930,7 +5812,7 @@ namespace ds
 
                 if (m_Camera)
                 {
-                    const float toolbarWidth = std::max(320.0f, std::min(540.0f, (rectMax.x - rectMin.x) - 28.0f));
+                    const float toolbarWidth = std::max(360.0f, std::min(620.0f, (rectMax.x - rectMin.x) - 28.0f));
                     ImGui::SetNextWindowPos(ImVec2(rectMin.x + 14.0f, rectMin.y + 10.0f), ImGuiCond_Always);
                     ImGui::SetNextWindowSize(ImVec2(toolbarWidth, 0.0f), ImGuiCond_Always);
                     ImGui::SetNextWindowBgAlpha(0.84f);
@@ -4965,13 +5847,13 @@ namespace ds
                         ImGui::SameLine();
                         if (ImGui::ArrowButton("##ViewLeft", ImGuiDir_Left))
                         {
-                            applyView(m_Camera->GetYaw() - stepRad, m_Camera->GetPitch());
+                            applyView(m_Camera->GetYaw() + stepRad, m_Camera->GetPitch());
                             m_LastStructureMessage = "Viewport: rotate left.";
                         }
                         ImGui::SameLine();
                         if (ImGui::ArrowButton("##ViewRight", ImGuiDir_Right))
                         {
-                            applyView(m_Camera->GetYaw() + stepRad, m_Camera->GetPitch());
+                            applyView(m_Camera->GetYaw() - stepRad, m_Camera->GetPitch());
                             m_LastStructureMessage = "Viewport: rotate right.";
                         }
                         ImGui::SameLine();
@@ -4987,6 +5869,32 @@ namespace ds
                             m_LastStructureMessage = "Viewport: tilt down.";
                         }
                         ImGui::SameLine();
+                        if (ImGui::Button("Roll-"))
+                        {
+                            StartCameraOrbitTransition(
+                                m_Camera->GetTarget(),
+                                m_Camera->GetDistance(),
+                                m_Camera->GetYaw(),
+                                m_Camera->GetPitch(),
+                                m_Camera->GetRoll() - stepRad);
+                            m_LastStructureOperationFailed = false;
+                            m_LastStructureMessage = "Viewport: roll left.";
+                            settingsChanged = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Roll+"))
+                        {
+                            StartCameraOrbitTransition(
+                                m_Camera->GetTarget(),
+                                m_Camera->GetDistance(),
+                                m_Camera->GetYaw(),
+                                m_Camera->GetPitch(),
+                                m_Camera->GetRoll() + stepRad);
+                            m_LastStructureOperationFailed = false;
+                            m_LastStructureMessage = "Viewport: roll right.";
+                            settingsChanged = true;
+                        }
+                        ImGui::SameLine();
                         if (ImGui::Button("Front"))
                         {
                             applyView(0.0f, 0.0f);
@@ -4995,7 +5903,7 @@ namespace ds
                         ImGui::SameLine();
                         ImGui::TextUnformatted("Step (deg):");
                         ImGui::SameLine();
-                        ImGui::PushItemWidth(78.0f);
+                        ImGui::PushItemWidth(118.0f);
                         if (ImGui::InputFloat("##ViewportRotateStep", &m_ViewportRotateStepDeg, 1.0f, 5.0f, "%.1f"))
                         {
                             m_ViewportRotateStepDeg = glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f);
@@ -5052,6 +5960,11 @@ namespace ds
 
                     for (int axis = 0; axis < 3; ++axis)
                     {
+                        if (!m_ShowGlobalAxis[axis])
+                        {
+                            continue;
+                        }
+
                         glm::vec2 startScreen(0.0f);
                         glm::vec2 endScreen(0.0f);
                         const bool hasStart = projectWorldToScreen(origin - axisDir[axis] * axisLen, startScreen);
@@ -5579,8 +6492,8 @@ namespace ds
                         ImGuizmo::SetRect(rectMin.x, rectMin.y, gizmoRectWidth, gizmoRectHeight);
                         const glm::vec3 cameraDirection = glm::normalize(glm::vec3(
                             std::cos(m_Camera->GetPitch()) * std::sin(m_Camera->GetYaw()),
-                            std::cos(m_Camera->GetPitch()) * std::cos(m_Camera->GetYaw()),
-                            std::sin(m_Camera->GetPitch())));
+                            std::sin(m_Camera->GetPitch()),
+                            std::cos(m_Camera->GetPitch()) * std::cos(m_Camera->GetYaw())));
                         const glm::vec3 cameraPosition = m_Camera->GetTarget() - cameraDirection * m_Camera->GetDistance();
                         const float distanceToPivot = glm::max(0.25f, glm::length(cameraPosition - pivot));
                         const float distanceCompensation = glm::clamp(6.0f / distanceToPivot, 0.55f, 1.85f);
@@ -6032,6 +6945,242 @@ namespace ds
                         overlayDraw->AddCircle(ImVec2(lightScreen.x, lightScreen.y), 9.0f, IM_COL32(255, 255, 255, 220), 20, 1.2f);
                         overlayDraw->AddText(ImVec2(lightScreen.x + 10.0f, lightScreen.y - 8.0f), IM_COL32(235, 240, 248, 230), "Light");
                     }
+
+                    if (m_ShowBondLengthLabels && m_Camera && !m_GeneratedBonds.empty())
+                    {
+                        const glm::vec3 cameraDirection = glm::normalize(glm::vec3(
+                            std::cos(m_Camera->GetPitch()) * std::sin(m_Camera->GetYaw()),
+                            std::cos(m_Camera->GetPitch()) * std::cos(m_Camera->GetYaw()),
+                            std::sin(m_Camera->GetPitch())));
+                        const glm::vec3 cameraPosition = m_Camera->GetTarget() - cameraDirection * m_Camera->GetDistance();
+
+                        std::vector<std::pair<float, std::size_t>> labelOrder;
+                        labelOrder.reserve(m_GeneratedBonds.size());
+                        std::unordered_map<std::uint64_t, const BondSegment *> visibleBondByKey;
+                        visibleBondByKey.reserve(m_GeneratedBonds.size());
+                        for (std::size_t i = 0; i < m_GeneratedBonds.size(); ++i)
+                        {
+                            const BondSegment &bond = m_GeneratedBonds[i];
+                            const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
+                            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+                            {
+                                continue;
+                            }
+
+                            visibleBondByKey[key] = &bond;
+                            const float distanceToCamera = glm::length2(bond.midpoint - cameraPosition);
+                            labelOrder.emplace_back(distanceToCamera, i);
+                        }
+                        std::sort(labelOrder.begin(), labelOrder.end(), [](const auto &lhs, const auto &rhs)
+                                  { return lhs.first > rhs.first; });
+
+                        struct LabelHitRegion
+                        {
+                            std::uint64_t key = 0;
+                            ImVec2 min;
+                            ImVec2 max;
+                            float depthToCamera = 0.0f;
+                        };
+
+                        std::vector<LabelHitRegion> hitRegions;
+                        hitRegions.reserve(labelOrder.size());
+                        ImFont *font = ImGui::GetFont();
+                        const int precision = std::clamp(m_BondLabelPrecision, 0, 6);
+                        char formatSpec[16] = {};
+                        std::snprintf(formatSpec, sizeof(formatSpec), "%%.%df A", precision);
+
+                        const glm::vec3 finalTextColor = glm::clamp(m_BondLabelTextColor, glm::vec3(0.0f), glm::vec3(1.0f));
+                        const glm::vec3 finalBgColor = glm::clamp(m_BondLabelBackgroundColor, glm::vec3(0.0f), glm::vec3(1.0f));
+                        const glm::vec3 finalBorderColor = glm::clamp(m_BondLabelBorderColor, glm::vec3(0.0f), glm::vec3(1.0f));
+                        const glm::vec3 selectedBgColor = glm::clamp(finalBgColor + glm::vec3(0.18f, 0.20f, 0.24f), glm::vec3(0.0f), glm::vec3(1.0f));
+                        const ImU32 textColorNormal = ImGui::ColorConvertFloat4ToU32(ImVec4(finalTextColor.r, finalTextColor.g, finalTextColor.b, 0.96f));
+                        const ImU32 textColorSelected = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 0.93f, 0.70f, 0.98f));
+                        const ImU32 bgColorNormal = ImGui::ColorConvertFloat4ToU32(ImVec4(finalBgColor.r, finalBgColor.g, finalBgColor.b, 0.74f));
+                        const ImU32 bgColorSelected = ImGui::ColorConvertFloat4ToU32(ImVec4(selectedBgColor.r, selectedBgColor.g, selectedBgColor.b, 0.86f));
+                        const ImU32 borderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(finalBorderColor.r, finalBorderColor.g, finalBorderColor.b, 0.92f));
+
+                        for (std::size_t orderIndex = 0; orderIndex < labelOrder.size(); ++orderIndex)
+                        {
+                            const BondSegment &bond = m_GeneratedBonds[labelOrder[orderIndex].second];
+                            const std::uint64_t labelKey = MakeBondPairKey(bond.atomA, bond.atomB);
+                            BondLabelState &labelState = m_BondLabelStates[labelKey];
+                            labelState.atomA = bond.atomA;
+                            labelState.atomB = bond.atomB;
+                            labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
+                            if (labelState.hidden || labelState.deleted)
+                            {
+                                continue;
+                            }
+
+                            const glm::vec3 labelWorld = bond.midpoint + labelState.worldOffset;
+
+                            glm::vec2 screenMidpoint(0.0f);
+                            if (!projectWorldToScreen(labelWorld, screenMidpoint))
+                            {
+                                continue;
+                            }
+
+                            char label[32] = {};
+                            std::snprintf(label, sizeof(label), formatSpec, bond.length);
+
+                            const float labelFontSize = ImGui::GetFontSize() * labelState.scale;
+                            const ImVec2 textSize = font->CalcTextSizeA(labelFontSize, std::numeric_limits<float>::max(), 0.0f, label);
+                            const ImVec2 textPos(screenMidpoint.x - textSize.x * 0.5f, screenMidpoint.y - 8.0f - textSize.y);
+                            const bool labelSelected =
+                                (m_SelectedBondLabelKey == labelKey) || (m_SelectedBondKeys.find(labelKey) != m_SelectedBondKeys.end());
+                            const ImU32 textColor = labelSelected ? textColorSelected : textColorNormal;
+                            const ImU32 bgColor = labelSelected ? bgColorSelected : bgColorNormal;
+                            overlayDraw->AddRectFilled(
+                                ImVec2(textPos.x - 3.0f, textPos.y - 2.0f),
+                                ImVec2(textPos.x + textSize.x + 3.0f, textPos.y + textSize.y + 2.0f),
+                                bgColor,
+                                2.0f);
+
+                            overlayDraw->AddRect(
+                                ImVec2(textPos.x - 3.0f, textPos.y - 2.0f),
+                                ImVec2(textPos.x + textSize.x + 3.0f, textPos.y + textSize.y + 2.0f),
+                                borderColor,
+                                2.0f,
+                                0,
+                                labelSelected ? 1.6f : 1.0f);
+
+                            overlayDraw->AddText(font, labelFontSize, textPos, textColor, label);
+
+                            LabelHitRegion region;
+                            region.key = labelKey;
+                            region.min = ImVec2(textPos.x - 4.0f, textPos.y - 3.0f);
+                            region.max = ImVec2(textPos.x + textSize.x + 4.0f, textPos.y + textSize.y + 3.0f);
+                            region.depthToCamera = labelOrder[orderIndex].first;
+                            hitRegions.push_back(region);
+                        }
+
+                        const bool canPickLabel =
+                            (m_InteractionMode == InteractionMode::Select) && m_ViewportFocused && m_ViewportHovered &&
+                            ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver() && !ImViewGuizmo::IsOver();
+                        if (canPickLabel && !hitRegions.empty())
+                        {
+                            const ImVec2 mousePos = ImGui::GetIO().MousePos;
+                            std::uint64_t pickedKey = 0;
+                            float pickedDepth = std::numeric_limits<float>::max();
+                            for (const LabelHitRegion &region : hitRegions)
+                            {
+                                const bool inside = mousePos.x >= region.min.x && mousePos.x <= region.max.x && mousePos.y >= region.min.y && mousePos.y <= region.max.y;
+                                if (!inside)
+                                {
+                                    continue;
+                                }
+
+                                if (region.depthToCamera <= pickedDepth)
+                                {
+                                    pickedDepth = region.depthToCamera;
+                                    pickedKey = region.key;
+                                }
+                            }
+
+                            if (pickedKey != 0)
+                            {
+                                if (!io.KeyCtrl)
+                                {
+                                    m_SelectedBondKeys.clear();
+                                }
+                                if (io.KeyCtrl && m_SelectedBondKeys.find(pickedKey) != m_SelectedBondKeys.end())
+                                {
+                                    m_SelectedBondKeys.erase(pickedKey);
+                                }
+                                else
+                                {
+                                    m_SelectedBondKeys.insert(pickedKey);
+                                }
+                                m_SelectedBondLabelKey = pickedKey;
+                                m_GizmoConsumedMouseThisFrame = true;
+                                m_BlockSelectionThisFrame = true;
+                            }
+                        }
+
+                        if (m_BondLabelGizmoEnabled && !m_SelectedBondKeys.empty())
+                        {
+                            std::vector<std::uint64_t> activeKeys;
+                            activeKeys.reserve(m_SelectedBondKeys.size());
+                            for (std::uint64_t key : m_SelectedBondKeys)
+                            {
+                                auto bondIt = visibleBondByKey.find(key);
+                                if (bondIt == visibleBondByKey.end())
+                                {
+                                    continue;
+                                }
+
+                                auto stateIt = m_BondLabelStates.find(key);
+                                if (stateIt == m_BondLabelStates.end() || stateIt->second.hidden || stateIt->second.deleted)
+                                {
+                                    continue;
+                                }
+
+                                activeKeys.push_back(key);
+                            }
+
+                            if (!activeKeys.empty())
+                            {
+                                glm::vec3 pivot(0.0f);
+                                for (std::uint64_t key : activeKeys)
+                                {
+                                    const BondSegment &bond = *visibleBondByKey[key];
+                                    const BondLabelState &state = m_BondLabelStates[key];
+                                    pivot += bond.midpoint + state.worldOffset;
+                                }
+                                pivot /= static_cast<float>(activeKeys.size());
+
+                                glm::mat4 labelTransform(1.0f);
+                                labelTransform[3] = glm::vec4(pivot, 1.0f);
+                                glm::mat4 deltaTransform(1.0f);
+
+                                ImGuizmo::SetDrawlist();
+                                ImGuizmo::BeginFrame();
+                                ImGuizmo::PushID(9341);
+                                ImGuizmo::SetOrthographic(m_ProjectionModeIndex == 1);
+                                ImGuizmo::SetRect(rectMin.x, rectMin.y, rectMax.x - rectMin.x, rectMax.y - rectMin.y);
+                                ImGuizmo::SetGizmoSizeClipSpace(glm::clamp(m_TransformGizmoSize * 0.92f, 0.07f, 0.40f));
+
+                                ImGuizmo::OPERATION labelOp = ImGuizmo::TRANSLATE;
+                                if (m_BondLabelGizmoOperation == 1)
+                                {
+                                    labelOp = ImGuizmo::ROTATE;
+                                }
+                                else if (m_BondLabelGizmoOperation == 2)
+                                {
+                                    labelOp = ImGuizmo::SCALE;
+                                }
+
+                                const bool labelManipulated = ImGuizmo::Manipulate(
+                                    glm::value_ptr(m_Camera->GetViewMatrix()),
+                                    glm::value_ptr(m_Camera->GetProjectionMatrix()),
+                                    labelOp,
+                                    ImGuizmo::WORLD,
+                                    glm::value_ptr(labelTransform),
+                                    glm::value_ptr(deltaTransform),
+                                    nullptr);
+                                ImGuizmo::PopID();
+
+                                if (ImGuizmo::IsOver() || ImGuizmo::IsUsing())
+                                {
+                                    m_GizmoConsumedMouseThisFrame = true;
+                                    m_BlockSelectionThisFrame = true;
+                                }
+
+                                if (labelManipulated)
+                                {
+                                    for (std::uint64_t key : activeKeys)
+                                    {
+                                        const BondSegment &bond = *visibleBondByKey[key];
+                                        BondLabelState &state = m_BondLabelStates[key];
+                                        const glm::vec3 oldWorld = bond.midpoint + state.worldOffset;
+                                        const glm::vec3 transformed = glm::vec3(deltaTransform * glm::vec4(oldWorld, 1.0f));
+                                        state.worldOffset = transformed - bond.midpoint;
+                                    }
+                                    settingsChanged = true;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if (m_ReopenViewportSelectionContextMenu)
@@ -6048,6 +7197,8 @@ namespace ds
                     if (ImGui::MenuItem("Select All", nullptr, false, hasLoadedAtoms))
                     {
                         m_SelectedAtomIndices.clear();
+                        m_SelectedBondKeys.clear();
+                        m_SelectedBondLabelKey = 0;
                         m_SelectedTransformEmptyIndex = -1;
                         m_SelectedSpecialNode = SpecialNodeSelection::None;
                         m_SelectedAtomIndices.reserve(m_WorkingStructure.atoms.size());
@@ -6061,6 +7212,8 @@ namespace ds
                     if (ImGui::MenuItem("Clear Selection", nullptr, false, !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0))
                     {
                         m_SelectedAtomIndices.clear();
+                        m_SelectedBondKeys.clear();
+                        m_SelectedBondLabelKey = 0;
                         m_SelectedTransformEmptyIndex = -1;
                         m_SelectedSpecialNode = SpecialNodeSelection::None;
                         AppendSelectionDebugLog("Context menu: Clear Selection");
@@ -6078,6 +7231,8 @@ namespace ds
                             }
                         }
                         m_SelectedAtomIndices = std::move(inverted);
+                        m_SelectedBondKeys.clear();
+                        m_SelectedBondLabelKey = 0;
                         m_SelectedTransformEmptyIndex = -1;
                         m_SelectedSpecialNode = SpecialNodeSelection::None;
                         AppendSelectionDebugLog("Context menu: Invert Selection");
@@ -6430,14 +7585,19 @@ namespace ds
                     ImGui::EndPopup();
                 }
 
-                if (m_BoxSelectArmed && m_InteractionMode == InteractionMode::Select && m_ViewportFocused)
+                if ((m_BoxSelectArmed || m_CircleSelectArmed) && m_InteractionMode == InteractionMode::Select && m_ViewportFocused)
                 {
                     const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
                     const bool insideViewport =
                         mousePos.x >= m_ViewportRectMin.x && mousePos.x <= m_ViewportRectMax.x &&
                         mousePos.y >= m_ViewportRectMin.y && mousePos.y <= m_ViewportRectMax.y;
 
-                    if (!m_BoxSelecting && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && insideViewport)
+                    if (m_CircleSelectArmed && insideViewport && std::abs(io.MouseWheel) > 0.0f)
+                    {
+                        m_CircleSelectRadius = glm::clamp(m_CircleSelectRadius + io.MouseWheel * 4.0f, 8.0f, 260.0f);
+                    }
+
+                    if (m_BoxSelectArmed && !m_BoxSelecting && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && insideViewport)
                     {
                         m_BoxSelecting = true;
                         m_BoxSelectStart = mousePos;
@@ -6445,7 +7605,7 @@ namespace ds
                         AppendSelectionDebugLog("Box select drag started");
                     }
 
-                    if (m_BoxSelecting)
+                    if (m_BoxSelectArmed && m_BoxSelecting)
                     {
                         if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
                         {
@@ -6454,10 +7614,63 @@ namespace ds
                         else
                         {
                             m_BoxSelectEnd = mousePos;
-                            SelectAtomsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, io.KeyCtrl);
+                            const bool additiveSelection = io.KeyCtrl;
+                            const bool includeAtoms = (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                            if (includeAtoms)
+                            {
+                                SelectAtomsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, additiveSelection);
+                            }
+                            else if (!additiveSelection)
+                            {
+                                m_SelectedAtomIndices.clear();
+                                m_SelectedTransformEmptyIndex = -1;
+                                m_SelectedSpecialNode = SpecialNodeSelection::None;
+                            }
+                            SelectBondsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, additiveSelection);
                             m_BoxSelecting = false;
                             m_BoxSelectArmed = false;
                             AppendSelectionDebugLog("Box select drag finished");
+                        }
+                    }
+
+                    if (m_CircleSelectArmed && !m_CircleSelecting && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && insideViewport)
+                    {
+                        const bool additiveSelection = io.KeyCtrl;
+                        m_CircleSelecting = true;
+                        const bool includeAtoms = (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                        if (includeAtoms)
+                        {
+                            SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, additiveSelection);
+                        }
+                        else if (!additiveSelection)
+                        {
+                            m_SelectedAtomIndices.clear();
+                            m_SelectedTransformEmptyIndex = -1;
+                            m_SelectedSpecialNode = SpecialNodeSelection::None;
+                        }
+                        SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, additiveSelection);
+                        m_BlockSelectionThisFrame = true;
+                    }
+
+                    if (m_CircleSelectArmed && m_CircleSelecting)
+                    {
+                        if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                        {
+                            if (insideViewport)
+                            {
+                                const bool includeAtoms = (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                                if (includeAtoms)
+                                {
+                                    SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, true);
+                                }
+                                SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, true);
+                            }
+                            m_BlockSelectionThisFrame = true;
+                        }
+                        else
+                        {
+                            m_CircleSelecting = false;
+                            AppendSelectionDebugLog("Circle select stroke finished");
                         }
                     }
 
@@ -6465,7 +7678,9 @@ namespace ds
                     {
                         m_BoxSelecting = false;
                         m_BoxSelectArmed = false;
-                        AppendSelectionDebugLog("Box select canceled with RMB");
+                        m_CircleSelecting = false;
+                        m_CircleSelectArmed = false;
+                        AppendSelectionDebugLog("Box/circle select canceled with RMB");
                     }
                 }
 
@@ -6480,6 +7695,18 @@ namespace ds
                         std::max(m_BoxSelectStart.y, m_BoxSelectEnd.y));
                     drawList->AddRectFilled(rectA, rectB, IM_COL32(85, 160, 255, 40));
                     drawList->AddRect(rectA, rectB, IM_COL32(95, 185, 255, 220), 0.0f, 0, 1.5f);
+                }
+
+                if (m_CircleSelectArmed)
+                {
+                    ImDrawList *drawList = ImGui::GetWindowDrawList();
+                    const ImVec2 center(io.MousePos.x, io.MousePos.y);
+                    const float radius = glm::clamp(m_CircleSelectRadius, 8.0f, 260.0f);
+                    drawList->AddCircleFilled(center, radius, IM_COL32(94, 185, 255, 36), 48);
+                    drawList->AddCircle(center, radius, IM_COL32(124, 210, 255, 225), 48, 1.6f);
+                    char radiusLabel[64] = {};
+                    std::snprintf(radiusLabel, sizeof(radiusLabel), "C-select r=%.0f", radius);
+                    drawList->AddText(ImVec2(center.x + 10.0f, center.y - radius - 18.0f), IM_COL32(210, 232, 248, 235), radiusLabel);
                 }
             }
             else
@@ -6523,204 +7750,435 @@ namespace ds
         {
             ImGui::Begin("Viewport Settings", &m_ViewportSettingsOpen);
             ImGui::PushItemWidth(210.0f);
+            const ImGuiTreeNodeFlags defaultOpenFlags = ImGuiTreeNodeFlags_DefaultOpen;
 
-            if (ImGui::ColorEdit3("Background", &m_SceneSettings.clearColor.x))
+            auto ensureFloatRange = [](float &minValue, float &maxValue, float hardMin, float hardMax)
             {
-                settingsChanged = true;
-            }
-
-            if (ImGui::Checkbox("Draw grid", &m_SceneSettings.drawGrid))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::SliderInt("Grid half extent", &m_SceneSettings.gridHalfExtent, 1, 64))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::SliderFloat("Grid spacing", &m_SceneSettings.gridSpacing, 0.1f, 5.0f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::SliderFloat("Grid line width", &m_SceneSettings.gridLineWidth, 1.0f, 4.0f, "%.1f"))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::ColorEdit3("Grid color", &m_SceneSettings.gridColor.x))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::SliderFloat("Grid opacity", &m_SceneSettings.gridOpacity, 0.05f, 1.0f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-
-            ImGui::Separator();
-            ImGui::TextUnformatted("Lighting");
-
-            if (ImGui::SliderFloat3("Light direction", &m_SceneSettings.lightDirection.x, -1.0f, 1.0f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::SliderFloat("Ambient", &m_SceneSettings.ambientStrength, 0.0f, 1.5f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::SliderFloat("Diffuse", &m_SceneSettings.diffuseStrength, 0.0f, 2.0f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::ColorEdit3("Light color", &m_SceneSettings.lightColor.x))
-            {
-                settingsChanged = true;
-            }
-
-            ImGui::Separator();
-            ImGui::TextUnformatted("Projection");
-
-            if (ImGui::SliderFloat("Render scale", &m_ViewportRenderScale, 0.25f, 1.0f, "%.2fx"))
-            {
-                settingsChanged = true;
-            }
-
-            const char *projectionModes[] = {"Perspective", "Orthographic"};
-            if (ImGui::Combo("Mode", &m_ProjectionModeIndex, projectionModes, IM_ARRAYSIZE(projectionModes)))
-            {
-                if (m_Camera)
+                minValue = glm::clamp(minValue, hardMin, hardMax);
+                maxValue = glm::clamp(maxValue, hardMin, hardMax);
+                if (minValue > maxValue)
                 {
-                    m_Camera->SetProjectionMode(m_ProjectionModeIndex == 0 ? OrbitCamera::ProjectionMode::Perspective : OrbitCamera::ProjectionMode::Orthographic);
+                    std::swap(minValue, maxValue);
                 }
-                settingsChanged = true;
-            }
-
-            if (m_Camera && m_ProjectionModeIndex == 0)
+            };
+            auto ensureIntRange = [](int &minValue, int &maxValue, int hardMin, int hardMax)
             {
-                float fov = m_Camera->GetPerspectiveFovDegrees();
-                if (ImGui::SliderFloat("FOV", &fov, 10.0f, 100.0f, "%.1f deg"))
+                minValue = std::clamp(minValue, hardMin, hardMax);
+                maxValue = std::clamp(maxValue, hardMin, hardMax);
+                if (minValue > maxValue)
                 {
-                    m_Camera->SetPerspectiveFovDegrees(fov);
+                    std::swap(minValue, maxValue);
+                }
+            };
+
+            if (ImGui::CollapsingHeader("Grid & Background", defaultOpenFlags))
+            {
+                ensureIntRange(m_GridHalfExtentMin, m_GridHalfExtentMax, 1, 128);
+                ensureFloatRange(m_GridSpacingMin, m_GridSpacingMax, 0.01f, 20.0f);
+                ensureFloatRange(m_GridLineWidthMin, m_GridLineWidthMax, 0.5f, 10.0f);
+                ensureFloatRange(m_GridOpacityMin, m_GridOpacityMax, 0.01f, 1.0f);
+
+                if (ImGui::ColorEdit3("Background", &m_SceneSettings.clearColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Checkbox("Draw grid", &m_SceneSettings.drawGrid))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::InputInt2("Grid half extent min/max", &m_GridHalfExtentMin))
+                {
+                    ensureIntRange(m_GridHalfExtentMin, m_GridHalfExtentMax, 1, 128);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderInt("Grid half extent", &m_SceneSettings.gridHalfExtent, m_GridHalfExtentMin, m_GridHalfExtentMax))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Grid spacing min/max", &m_GridSpacingMin, &m_GridSpacingMax, 0.01f, 0.01f, 20.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_GridSpacingMin, m_GridSpacingMax, 0.01f, 20.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Grid spacing", &m_SceneSettings.gridSpacing, m_GridSpacingMin, m_GridSpacingMax, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Grid line width min/max", &m_GridLineWidthMin, &m_GridLineWidthMax, 0.01f, 0.5f, 10.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_GridLineWidthMin, m_GridLineWidthMax, 0.5f, 10.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Grid line width", &m_SceneSettings.gridLineWidth, m_GridLineWidthMin, m_GridLineWidthMax, "%.1f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::ColorEdit3("Grid color", &m_SceneSettings.gridColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Grid opacity min/max", &m_GridOpacityMin, &m_GridOpacityMax, 0.005f, 0.01f, 1.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_GridOpacityMin, m_GridOpacityMax, 0.01f, 1.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Grid opacity", &m_SceneSettings.gridOpacity, m_GridOpacityMin, m_GridOpacityMax, "%.2f"))
+                {
+                    settingsChanged = true;
                 }
             }
 
-            if (m_Camera && m_ProjectionModeIndex == 1)
+            if (ImGui::CollapsingHeader("Lighting", defaultOpenFlags))
             {
-                float orthoSize = m_Camera->GetOrthographicSize();
-                if (ImGui::SliderFloat("Ortho size", &orthoSize, 0.1f, 40.0f, "%.2f"))
+                ensureFloatRange(m_AmbientMin, m_AmbientMax, 0.0f, 4.0f);
+                ensureFloatRange(m_DiffuseMin, m_DiffuseMax, 0.0f, 4.0f);
+
+                if (ImGui::SliderFloat3("Light direction", &m_SceneSettings.lightDirection.x, -1.0f, 1.0f, "%.2f"))
                 {
-                    m_Camera->SetOrthographicSize(orthoSize);
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Ambient min/max", &m_AmbientMin, &m_AmbientMax, 0.01f, 0.0f, 4.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_AmbientMin, m_AmbientMax, 0.0f, 4.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Ambient", &m_SceneSettings.ambientStrength, m_AmbientMin, m_AmbientMax, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Diffuse min/max", &m_DiffuseMin, &m_DiffuseMax, 0.01f, 0.0f, 4.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_DiffuseMin, m_DiffuseMax, 0.0f, 4.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Diffuse", &m_SceneSettings.diffuseStrength, m_DiffuseMin, m_DiffuseMax, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::ColorEdit3("Light color", &m_SceneSettings.lightColor.x))
+                {
+                    settingsChanged = true;
                 }
             }
 
-            ImGui::Separator();
-            ImGui::TextUnformatted("Atoms");
+            if (ImGui::CollapsingHeader("Projection", defaultOpenFlags))
+            {
+                ensureFloatRange(m_RenderScaleMin, m_RenderScaleMax, 0.1f, 2.0f);
+                if (ImGui::DragFloatRange2("Render scale min/max", &m_RenderScaleMin, &m_RenderScaleMax, 0.01f, 0.1f, 2.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_RenderScaleMin, m_RenderScaleMax, 0.1f, 2.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Render scale", &m_ViewportRenderScale, m_RenderScaleMin, m_RenderScaleMax, "%.2fx"))
+                {
+                    settingsChanged = true;
+                }
 
-            if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, 0.05f, 1.25f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
+                const char *projectionModes[] = {"Perspective", "Orthographic"};
+                if (ImGui::Combo("Mode", &m_ProjectionModeIndex, projectionModes, IM_ARRAYSIZE(projectionModes)))
+                {
+                    if (m_Camera)
+                    {
+                        m_Camera->SetProjectionMode(m_ProjectionModeIndex == 0 ? OrbitCamera::ProjectionMode::Perspective : OrbitCamera::ProjectionMode::Orthographic);
+                    }
+                    settingsChanged = true;
+                }
 
-            if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, 0.3f, 2.2f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
+                if (m_Camera && m_ProjectionModeIndex == 0)
+                {
+                    float fov = m_Camera->GetPerspectiveFovDegrees();
+                    if (ImGui::SliderFloat("FOV", &fov, 10.0f, 100.0f, "%.1f deg"))
+                    {
+                        m_Camera->SetPerspectiveFovDegrees(fov);
+                    }
+                }
 
-            if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, 0.0f, 0.60f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
-            {
-                settingsChanged = true;
-            }
-
-            if (m_SceneSettings.overrideAtomColor && ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x))
-            {
-                settingsChanged = true;
-            }
-
-            ImGui::Separator();
-            ImGui::TextUnformatted("Selection highlight");
-            if (ImGui::ColorEdit3("Selection color", &m_SelectionColor.x))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::SliderFloat("Selection outline", &m_SelectionOutlineThickness, 1.0f, 8.0f, "%.1f"))
-            {
-                settingsChanged = true;
-            }
-
-            ImGui::SeparatorText("Axis & Cursor Colors");
-            constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
-            if (ImGui::ColorEdit3("Axis X color", &m_AxisColors[0].x, kPickerOnlyFlags))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::ColorEdit3("Axis Y color", &m_AxisColors[1].x, kPickerOnlyFlags))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::ColorEdit3("Axis Z color", &m_AxisColors[2].x, kPickerOnlyFlags))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::ColorEdit3("Cursor color", &m_CursorColor.x, kPickerOnlyFlags))
-            {
-                settingsChanged = true;
+                if (m_Camera && m_ProjectionModeIndex == 1)
+                {
+                    float orthoSize = m_Camera->GetOrthographicSize();
+                    if (ImGui::SliderFloat("Ortho size", &orthoSize, 0.1f, 40.0f, "%.2f"))
+                    {
+                        m_Camera->SetOrthographicSize(orthoSize);
+                    }
+                }
             }
 
-            ImGui::SeparatorText("Camera & UI");
-            int currentTheme = static_cast<int>(m_CurrentTheme);
-            const char *items[] = {
-                "Dark",
-                "Light",
-                "Classic",
-                "PhotoshopStyle",
-                "WarmSlate"};
-
-            if (ImGui::Combo("Style preset", &currentTheme, items, IM_ARRAYSIZE(items)))
+            if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
             {
-                m_CurrentTheme = static_cast<ThemePreset>(currentTheme);
-                ApplyTheme(m_CurrentTheme);
-                settingsChanged = true;
+                ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
+                ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
+                ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
+
+                if (ImGui::DragFloatRange2("Atom size min/max", &m_AtomSizeMin, &m_AtomSizeMax, 0.01f, 0.01f, 4.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, m_AtomSizeMin, m_AtomSizeMax, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Atom brightness min/max", &m_AtomBrightnessMin, &m_AtomBrightnessMax, 0.01f, 0.05f, 6.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, m_AtomBrightnessMin, m_AtomBrightnessMax, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Atom glow min/max", &m_AtomGlowMin, &m_AtomGlowMax, 0.005f, 0.0f, 2.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, m_AtomGlowMin, m_AtomGlowMax, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
+                {
+                    settingsChanged = true;
+                }
+                if (m_SceneSettings.overrideAtomColor && ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x))
+                {
+                    settingsChanged = true;
+                }
             }
 
-            float uiScale = m_FontScale;
-            if (ImGui::SliderFloat("Font size scale", &uiScale, 0.7f, 2.0f, "%.2f"))
+            if (ImGui::CollapsingHeader("Selection highlight", defaultOpenFlags))
             {
-                ApplyFontScale(uiScale);
-                settingsChanged = true;
+                ensureFloatRange(m_SelectionOutlineMin, m_SelectionOutlineMax, 0.5f, 20.0f);
+                if (ImGui::ColorEdit3("Selection color", &m_SelectionColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::DragFloatRange2("Selection outline min/max", &m_SelectionOutlineMin, &m_SelectionOutlineMax, 0.05f, 0.5f, 20.0f, "min %.2f", "max %.2f"))
+                {
+                    ensureFloatRange(m_SelectionOutlineMin, m_SelectionOutlineMax, 0.5f, 20.0f);
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Selection outline", &m_SelectionOutlineThickness, m_SelectionOutlineMin, m_SelectionOutlineMax, "%.1f"))
+                {
+                    settingsChanged = true;
+                }
             }
 
-            float orbitSensitivity = m_CameraOrbitSensitivity;
-            if (ImGui::SliderFloat("Orbit sensitivity", &orbitSensitivity, 0.05f, 4.0f, "%.2fx"))
+            if (ImGui::CollapsingHeader("Axis & Cursor Colors", defaultOpenFlags))
             {
-                m_CameraOrbitSensitivity = orbitSensitivity;
-                ApplyCameraSensitivity();
-                settingsChanged = true;
+                constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
+                auto drawVisibilityColorRow = [&](const char *checkboxLabel, bool *visible, const char *colorLabel, glm::vec3 &color)
+                {
+                    if (ImGui::Checkbox(checkboxLabel, visible))
+                    {
+                        settingsChanged = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::ColorEdit3(colorLabel, &color.x, kPickerOnlyFlags))
+                    {
+                        settingsChanged = true;
+                    }
+                };
+
+                drawVisibilityColorRow("X", &m_ShowGlobalAxis[0], "##AxisXColor", m_AxisColors[0]);
+                drawVisibilityColorRow("Y", &m_ShowGlobalAxis[1], "##AxisYColor", m_AxisColors[1]);
+                drawVisibilityColorRow("Z", &m_ShowGlobalAxis[2], "##AxisZColor", m_AxisColors[2]);
+                drawVisibilityColorRow("3D cursor", &m_Show3DCursor, "##CursorColor", m_CursorColor);
             }
 
-            float panSensitivity = m_CameraPanSensitivity;
-            if (ImGui::SliderFloat("Pan sensitivity", &panSensitivity, 0.05f, 4.0f, "%.2fx"))
+            if (ImGui::CollapsingHeader("Camera & UI", defaultOpenFlags))
             {
-                m_CameraPanSensitivity = panSensitivity;
-                ApplyCameraSensitivity();
-                settingsChanged = true;
-            }
+                int currentTheme = static_cast<int>(m_CurrentTheme);
+                const char *items[] = {
+                    "Dark",
+                    "Light",
+                    "Classic",
+                    "PhotoshopStyle",
+                    "WarmSlate"};
 
-            float zoomSensitivity = m_CameraZoomSensitivity;
-            if (ImGui::SliderFloat("Zoom sensitivity", &zoomSensitivity, 0.05f, 4.0f, "%.2fx"))
-            {
-                m_CameraZoomSensitivity = zoomSensitivity;
-                ApplyCameraSensitivity();
-                settingsChanged = true;
+                if (ImGui::Combo("Style preset", &currentTheme, items, IM_ARRAYSIZE(items)))
+                {
+                    m_CurrentTheme = static_cast<ThemePreset>(currentTheme);
+                    ApplyTheme(m_CurrentTheme);
+                    settingsChanged = true;
+                }
+
+                float uiScale = m_FontScale;
+                if (ImGui::SliderFloat("Font size scale", &uiScale, 0.7f, 2.0f, "%.2f"))
+                {
+                    ApplyFontScale(uiScale);
+                    settingsChanged = true;
+                }
+
+                float orbitSensitivity = m_CameraOrbitSensitivity;
+                if (ImGui::SliderFloat("Orbit sensitivity", &orbitSensitivity, 0.05f, 4.0f, "%.2fx"))
+                {
+                    m_CameraOrbitSensitivity = orbitSensitivity;
+                    ApplyCameraSensitivity();
+                    settingsChanged = true;
+                }
+
+                float panSensitivity = m_CameraPanSensitivity;
+                if (ImGui::SliderFloat("Pan sensitivity", &panSensitivity, 0.05f, 4.0f, "%.2fx"))
+                {
+                    m_CameraPanSensitivity = panSensitivity;
+                    ApplyCameraSensitivity();
+                    settingsChanged = true;
+                }
+
+                float zoomSensitivity = m_CameraZoomSensitivity;
+                if (ImGui::SliderFloat("Zoom sensitivity", &zoomSensitivity, 0.05f, 4.0f, "%.2fx"))
+                {
+                    m_CameraZoomSensitivity = zoomSensitivity;
+                    ApplyCameraSensitivity();
+                    settingsChanged = true;
+                }
+
+                ImGui::SeparatorText("Camera presets");
+
+                const auto trimPresetName = [](const std::string &raw) -> std::string
+                {
+                    const std::size_t first = raw.find_first_not_of(" \t\r\n");
+                    if (first == std::string::npos)
+                    {
+                        return std::string();
+                    }
+                    const std::size_t last = raw.find_last_not_of(" \t\r\n");
+                    return raw.substr(first, last - first + 1);
+                };
+
+                auto captureCurrentCamera = [&](CameraPreset &preset)
+                {
+                    if (m_Camera)
+                    {
+                        preset.target = m_Camera->GetTarget();
+                        preset.distance = m_Camera->GetDistance();
+                        preset.yaw = m_Camera->GetYaw();
+                        preset.pitch = m_Camera->GetPitch();
+                        preset.roll = m_Camera->GetRoll();
+                    }
+                    else
+                    {
+                        preset.target = m_CameraTargetPersisted;
+                        preset.distance = m_CameraDistancePersisted;
+                        preset.yaw = m_CameraYawPersisted;
+                        preset.pitch = m_CameraPitchPersisted;
+                        preset.roll = m_CameraRollPersisted;
+                    }
+                    preset.distance = std::max(0.05f, preset.distance);
+                };
+
+                auto applyPresetCamera = [&](const CameraPreset &preset)
+                {
+                    if (m_Camera)
+                    {
+                        m_Camera->SetOrbitState(preset.target, preset.distance, preset.yaw, preset.pitch);
+                        m_Camera->SetRoll(preset.roll);
+                    }
+                    m_CameraTargetPersisted = preset.target;
+                    m_CameraDistancePersisted = preset.distance;
+                    m_CameraYawPersisted = preset.yaw;
+                    m_CameraPitchPersisted = preset.pitch;
+                    m_CameraRollPersisted = preset.roll;
+                    m_HasPersistedCameraState = true;
+                };
+
+                const bool hasPresetSelection =
+                    m_SelectedCameraPresetIndex >= 0 &&
+                    m_SelectedCameraPresetIndex < static_cast<int>(m_CameraPresets.size());
+
+                std::string selectedPresetLabel = "(none)";
+                if (hasPresetSelection)
+                {
+                    selectedPresetLabel = m_CameraPresets[static_cast<std::size_t>(m_SelectedCameraPresetIndex)].name;
+                }
+
+                if (ImGui::BeginCombo("Preset list", selectedPresetLabel.c_str()))
+                {
+                    for (std::size_t i = 0; i < m_CameraPresets.size(); ++i)
+                    {
+                        const bool selected = (static_cast<int>(i) == m_SelectedCameraPresetIndex);
+                        if (ImGui::Selectable(m_CameraPresets[i].name.c_str(), selected))
+                        {
+                            m_SelectedCameraPresetIndex = static_cast<int>(i);
+                            std::snprintf(m_CameraPresetNameBuffer.data(), m_CameraPresetNameBuffer.size(), "%s", m_CameraPresets[i].name.c_str());
+                            settingsChanged = true;
+                        }
+                        if (selected)
+                        {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                ImGui::InputText("Preset name", m_CameraPresetNameBuffer.data(), m_CameraPresetNameBuffer.size());
+
+                if (ImGui::Button("Save current as new"))
+                {
+                    CameraPreset preset;
+                    preset.name = trimPresetName(std::string(m_CameraPresetNameBuffer.data()));
+                    if (preset.name.empty())
+                    {
+                        preset.name = "Preset " + std::to_string(m_CameraPresets.size() + 1);
+                    }
+                    captureCurrentCamera(preset);
+                    m_CameraPresets.push_back(preset);
+                    m_SelectedCameraPresetIndex = static_cast<int>(m_CameraPresets.size()) - 1;
+                    std::snprintf(m_CameraPresetNameBuffer.data(), m_CameraPresetNameBuffer.size(), "%s", preset.name.c_str());
+                    settingsChanged = true;
+                }
+
+                ImGui::SameLine();
+                if (!hasPresetSelection)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Apply selected") && hasPresetSelection)
+                {
+                    applyPresetCamera(m_CameraPresets[static_cast<std::size_t>(m_SelectedCameraPresetIndex)]);
+                    settingsChanged = true;
+                }
+                if (!hasPresetSelection)
+                {
+                    ImGui::EndDisabled();
+                }
+
+                if (!hasPresetSelection)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Update selected") && hasPresetSelection)
+                {
+                    CameraPreset &preset = m_CameraPresets[static_cast<std::size_t>(m_SelectedCameraPresetIndex)];
+                    const std::string typedName = trimPresetName(std::string(m_CameraPresetNameBuffer.data()));
+                    if (!typedName.empty())
+                    {
+                        preset.name = typedName;
+                    }
+                    captureCurrentCamera(preset);
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Delete selected") && hasPresetSelection)
+                {
+                    m_CameraPresets.erase(m_CameraPresets.begin() + m_SelectedCameraPresetIndex);
+                    if (m_CameraPresets.empty())
+                    {
+                        m_SelectedCameraPresetIndex = -1;
+                    }
+                    else
+                    {
+                        m_SelectedCameraPresetIndex = std::min(m_SelectedCameraPresetIndex, static_cast<int>(m_CameraPresets.size()) - 1);
+                        std::snprintf(m_CameraPresetNameBuffer.data(), m_CameraPresetNameBuffer.size(), "%s",
+                                      m_CameraPresets[static_cast<std::size_t>(m_SelectedCameraPresetIndex)].name.c_str());
+                    }
+                    settingsChanged = true;
+                }
+                if (!hasPresetSelection)
+                {
+                    ImGui::EndDisabled();
+                }
             }
 
             ImGui::PopItemWidth();
@@ -6756,274 +8214,473 @@ namespace ds
             ImGui::Begin("Tools", &m_ShowToolsPanel);
 
             const char *coordinateModes[] = {"Direct", "Cartesian"};
+            const ImGuiTreeNodeFlags defaultOpenFlags = ImGuiTreeNodeFlags_DefaultOpen;
 
-            ImGui::SeparatorText("Workflow");
-            ImGui::SeparatorText("Structure I/O");
-            ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
-            ImGui::SameLine();
-            if (ImGui::Button("Browse##Import"))
+            ImGui::TextUnformatted("Workflow");
+
+            if (ImGui::CollapsingHeader("Structure I/O", defaultOpenFlags))
             {
-                std::string selectedPath;
-                if (OpenNativeFileDialog(selectedPath))
+                ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##Import"))
                 {
-                    std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
+                    std::string selectedPath;
+                    if (OpenNativeFileDialog(selectedPath))
+                    {
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
+                    }
+                }
+
+                if (ImGui::Button("Load POSCAR/CONTCAR"))
+                {
+                    LoadStructureFromPath(std::string(m_ImportPathBuffer.data()));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Load sample"))
+                {
+                    const char *samplePath = "assets/samples/POSCAR";
+                    std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
+                    LoadStructureFromPath(samplePath);
+                }
+
+                ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##Export"))
+                {
+                    std::string selectedPath;
+                    if (SaveNativeFileDialog(selectedPath))
+                    {
+                        std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+                    }
+                }
+
+                ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+                ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
+
+                if (ImGui::Button("Export POSCAR/CONTCAR"))
+                {
+                    const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                          ? CoordinateMode::Direct
+                                                          : CoordinateMode::Cartesian;
+                    ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Restore original state"))
+                {
+                    if (m_OriginalStructure.has_value())
+                    {
+                        m_WorkingStructure = *m_OriginalStructure;
+                        m_HasStructureLoaded = true;
+                        m_AutoBondsDirty = true;
+                        m_LastStructureOperationFailed = false;
+                        m_LastStructureMessage = "Original file state restored.";
+                        LogInfo(m_LastStructureMessage);
+                    }
+                    else
+                    {
+                        m_LastStructureOperationFailed = true;
+                        m_LastStructureMessage = "Restore failed: no original structure captured yet.";
+                        LogWarn(m_LastStructureMessage);
+                    }
                 }
             }
 
-            if (ImGui::Button("Load POSCAR/CONTCAR"))
+            if (ImGui::CollapsingHeader("Selection & Transform", defaultOpenFlags))
             {
-                LoadStructureFromPath(std::string(m_ImportPathBuffer.data()));
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Load sample"))
-            {
-                const char *samplePath = "assets/samples/POSCAR";
-                std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
-                LoadStructureFromPath(samplePath);
-            }
+                const char *interactionModeLabel = "Navigate";
+                if (m_InteractionMode == InteractionMode::Select)
+                    interactionModeLabel = "Select";
+                else if (m_InteractionMode == InteractionMode::ViewSet)
+                    interactionModeLabel = "ViewSet";
+                else if (m_InteractionMode == InteractionMode::Translate)
+                    interactionModeLabel = "Translate";
+                else if (m_InteractionMode == InteractionMode::Rotate)
+                    interactionModeLabel = "Rotate";
 
-            ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
-            ImGui::SameLine();
-            if (ImGui::Button("Browse##Export"))
-            {
-                std::string selectedPath;
-                if (SaveNativeFileDialog(selectedPath))
+                ImGui::Text("Mode: %s", interactionModeLabel);
+                ImGui::Text("Selection: %zu atoms", m_SelectedAtomIndices.size());
+                if (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
                 {
-                    std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+                    ImGui::Text("Selected empty: %s", m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].name.c_str());
+                }
+                if (ImGui::Button("Cycle mode"))
+                {
+                    ToggleInteractionMode();
+                }
+                ImGui::SameLine();
+                DrawInlineHelpMarker("Selection: LMB select, Ctrl+LMB add/remove, B then drag for box select.\nHold Tab to open radial PieMenu for mode switching.\nViewSet: T/B/L/R/P/K to snap camera.");
+
+                if (ImGui::Button("Clear selection"))
+                {
+                    m_SelectedAtomIndices.clear();
+                    m_SelectedTransformEmptyIndex = -1;
+                    m_SelectedSpecialNode = SpecialNodeSelection::None;
+                }
+                ImGui::SameLine();
+                DrawInlineHelpMarker("Transform shortcuts in viewport: G translate, R rotate, S scale.\nIn ViewSet, R works as Right View.");
+
+                const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+                const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
+                const bool canMoveSelectionToCursor = !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight;
+                if (!canMoveSelectionToCursor)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Move selected objects to 3D cursor") && canMoveSelectionToCursor)
+                {
+                    if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                    {
+                        m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
+                    }
+                    else if (hasSelectedLight && m_SelectedAtomIndices.empty())
+                    {
+                        m_LightPosition = m_CursorPosition;
+                    }
+                    else
+                    {
+                        const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                        const glm::vec3 delta = m_CursorPosition - selectionCenter;
+                        for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                        {
+                            if (atomIndex >= m_WorkingStructure.atoms.size())
+                            {
+                                continue;
+                            }
+                            SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                        }
+                    }
+                    settingsChanged = true;
+                }
+                if (!canMoveSelectionToCursor)
+                {
+                    ImGui::EndDisabled();
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Move selected to Origin") && canMoveSelectionToCursor)
+                {
+                    if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                    {
+                        m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_SceneOriginPosition;
+                    }
+                    else if (hasSelectedLight && m_SelectedAtomIndices.empty())
+                    {
+                        m_LightPosition = m_SceneOriginPosition;
+                    }
+                    else
+                    {
+                        const glm::vec3 selectionCenter = ComputeSelectionCenter();
+                        const glm::vec3 delta = m_SceneOriginPosition - selectionCenter;
+                        for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                        {
+                            if (atomIndex >= m_WorkingStructure.atoms.size())
+                            {
+                                continue;
+                            }
+                            SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                        }
+                    }
+                    settingsChanged = true;
                 }
             }
 
-            ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-            ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
-
-            if (ImGui::Button("Export POSCAR/CONTCAR"))
+            if (ImGui::CollapsingHeader("3D Cursor", defaultOpenFlags))
             {
-                const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
-                                                      ? CoordinateMode::Direct
-                                                      : CoordinateMode::Cartesian;
-                ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Restore original state"))
-            {
-                if (m_OriginalStructure.has_value())
+                if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
                 {
-                    m_WorkingStructure = *m_OriginalStructure;
-                    m_HasStructureLoaded = true;
+                    settingsChanged = true;
+                }
+                if (DrawColoredVec3Control("Cursor position", m_CursorPosition, 0.01f, -1000.0f, 1000.0f, "%.5f"))
+                {
+                    settingsChanged = true;
+                }
+
+                static float s_CursorUniformXYZ = 0.0f;
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputFloat("Cursor XYZ", &s_CursorUniformXYZ, 0.1f, 1.0f, "%.4f");
+                ImGui::SameLine();
+                if (ImGui::Button("Apply cursor XYZ"))
+                {
+                    m_CursorPosition = glm::vec3(s_CursorUniformXYZ);
+                    settingsChanged = true;
+                }
+
+                if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Origin & Light", defaultOpenFlags))
+            {
+                if (DrawColoredVec3Control("Light position", m_LightPosition, 0.01f, -1000.0f, 1000.0f, "%.5f"))
+                {
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Button("Select Light"))
+                {
+                    m_SelectedSpecialNode = SpecialNodeSelection::Light;
+                    m_SelectedAtomIndices.clear();
+                    m_SelectedTransformEmptyIndex = -1;
+                }
+
+                if (ImGui::Button("3D cursor to Origin"))
+                {
+                    m_CursorPosition = m_SceneOriginPosition;
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cursor <- camera target") && m_Camera)
+                {
+                    m_CursorPosition = m_Camera->GetTarget();
+                    settingsChanged = true;
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Add Atom", defaultOpenFlags))
+            {
+                ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
+                ImGui::SameLine();
+                if (ImGui::Button("Periodic table"))
+                {
+                    m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
+                    m_PeriodicTableOpenedFromContextMenu = false;
+                    m_PeriodicTableOpen = true;
+                }
+                ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
+                ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+
+                if (ImGui::Button("Use camera target") && m_Camera)
+                {
+                    m_AddAtomPosition = m_Camera->GetTarget();
+                    m_AddAtomCoordinateModeIndex = 1;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Use 3D cursor"))
+                {
+                    m_AddAtomPosition = m_CursorPosition;
+                    m_AddAtomCoordinateModeIndex = 1;
+                }
+                ImGui::SameLine();
+                const bool canAddAtom = m_HasStructureLoaded;
+                if (!canAddAtom)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Add atom"))
+                {
+                    m_ShowAddAtomDialog = true;
+                }
+                if (!canAddAtom)
+                {
+                    ImGui::EndDisabled();
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Bonds", defaultOpenFlags))
+            {
+                if (ImGui::Checkbox("Auto-generate bonds", &m_AutoBondGenerationEnabled))
+                {
+                    m_AutoBondsDirty = m_AutoBondGenerationEnabled;
+                    if (!m_AutoBondGenerationEnabled)
+                    {
+                        m_GeneratedBonds.clear();
+                        m_SelectedBondLabelKey = 0;
+                        m_SelectedBondKeys.clear();
+                    }
+                    settingsChanged = true;
+                }
+
+                const char *selectionFilters[] = {"Atoms + Bonds", "Bonds only"};
+                int selectionFilterIndex = (m_SelectionFilter == SelectionFilter::BondsOnly) ? 1 : 0;
+                if (ImGui::Combo("Selection filter", &selectionFilterIndex, selectionFilters, IM_ARRAYSIZE(selectionFilters)))
+                {
+                    m_SelectionFilter = (selectionFilterIndex == 1) ? SelectionFilter::BondsOnly : SelectionFilter::AtomsAndBonds;
+                    settingsChanged = true;
+                }
+
+                ImGui::TextDisabled("Select tools: B = box, C = circle (mouse wheel changes circle radius)");
+
+                if (ImGui::Checkbox("Show bond length labels", &m_ShowBondLengthLabels))
+                {
+                    settingsChanged = true;
+                }
+
+                if (ImGui::SliderFloat("Bond threshold scale", &m_BondThresholdScale, 0.80f, 1.80f, "%.2f"))
+                {
+                    m_AutoBondsDirty = true;
+                    settingsChanged = true;
+                }
+
+                const bool canRegenerateBonds = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
+                if (!canRegenerateBonds)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Regenerate bonds"))
+                {
+                    m_AutoBondsDirty = true;
                     m_LastStructureOperationFailed = false;
-                    m_LastStructureMessage = "Original file state restored.";
-                    LogInfo(m_LastStructureMessage);
+                    m_LastStructureMessage = "Bond regeneration scheduled.";
                 }
-                else
+                if (!canRegenerateBonds)
                 {
-                    m_LastStructureOperationFailed = true;
-                    m_LastStructureMessage = "Restore failed: no original structure captured yet.";
-                    LogWarn(m_LastStructureMessage);
+                    ImGui::EndDisabled();
                 }
-            }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(m_AutoBondsDirty ? "Status: pending rebuild" : "Status: cached");
 
-            ImGui::SeparatorText("Selection & Transform");
-            const char *interactionModeLabel = "Navigate";
-            if (m_InteractionMode == InteractionMode::Select)
-                interactionModeLabel = "Select";
-            else if (m_InteractionMode == InteractionMode::ViewSet)
-                interactionModeLabel = "ViewSet";
-            else if (m_InteractionMode == InteractionMode::Translate)
-                interactionModeLabel = "Translate";
-            else if (m_InteractionMode == InteractionMode::Rotate)
-                interactionModeLabel = "Rotate";
-
-            ImGui::Text("Mode: %s", interactionModeLabel);
-            ImGui::Text("Selection: %zu atoms", m_SelectedAtomIndices.size());
-            if (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
-            {
-                ImGui::Text("Selected empty: %s", m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].name.c_str());
-            }
-            if (ImGui::Button("Cycle mode"))
-            {
-                ToggleInteractionMode();
-            }
-            ImGui::SameLine();
-            DrawInlineHelpMarker("Selection: LMB select, Ctrl+LMB add/remove, B then drag for box select.\nHold Tab to open radial PieMenu for mode switching.\nViewSet: T/B/L/R/P/K to snap camera.");
-
-            if (ImGui::Button("Clear selection"))
-            {
-                m_SelectedAtomIndices.clear();
-                m_SelectedTransformEmptyIndex = -1;
-                m_SelectedSpecialNode = SpecialNodeSelection::None;
-            }
-            ImGui::SameLine();
-            DrawInlineHelpMarker("Transform shortcuts in viewport: G translate, R rotate, S scale.\nIn ViewSet, R works as Right View.");
-
-            const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
-            const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
-            const bool canMoveSelectionToCursor = !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight;
-            if (!canMoveSelectionToCursor)
-            {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Move selected objects to 3D cursor") && canMoveSelectionToCursor)
-            {
-                if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                if (ImGui::SliderFloat("Bond line width", &m_BondLineWidth, 1.0f, 6.0f, "%.1f"))
                 {
-                    m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
+                    settingsChanged = true;
                 }
-                else if (hasSelectedLight && m_SelectedAtomIndices.empty())
+
+                if (ImGui::ColorEdit3("Bond color", &m_BondColor.x))
                 {
-                    m_LightPosition = m_CursorPosition;
+                    settingsChanged = true;
                 }
-                else
+
+                if (ImGui::ColorEdit3("Selected bond color", &m_BondSelectedColor.x))
                 {
-                    const glm::vec3 selectionCenter = ComputeSelectionCenter();
-                    const glm::vec3 delta = m_CursorPosition - selectionCenter;
-                    for (const std::size_t atomIndex : m_SelectedAtomIndices)
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Button("Restore deleted bonds"))
+                {
+                    m_DeletedBondKeys.clear();
+                    for (auto &[key, state] : m_BondLabelStates)
                     {
-                        if (atomIndex >= m_WorkingStructure.atoms.size())
-                        {
-                            continue;
-                        }
-                        SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
+                        (void)key;
+                        state.deleted = false;
+                    }
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                ImGui::Text("Selected bonds: %zu", m_SelectedBondKeys.size());
+
+                if (ImGui::ColorEdit3("Label text color", &m_BondLabelTextColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::ColorEdit3("Label background color", &m_BondLabelBackgroundColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::ColorEdit3("Label border color", &m_BondLabelBorderColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderInt("Label precision", &m_BondLabelPrecision, 0, 6))
+                {
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Checkbox("Label gizmo enabled", &m_BondLabelGizmoEnabled))
+                {
+                    settingsChanged = true;
+                }
+                const char *labelOps[] = {"Translate", "Rotate", "Scale"};
+                if (ImGui::Combo("Label gizmo operation", &m_BondLabelGizmoOperation, labelOps, IM_ARRAYSIZE(labelOps)))
+                {
+                    settingsChanged = true;
+                }
+
+                if (ImGui::SliderFloat("Multi label scale", &m_BondLabelMultiScaleValue, 0.25f, 4.0f, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Button("Apply scale to selected bonds") && !m_SelectedBondKeys.empty())
+                {
+                    const float targetScale = glm::clamp(m_BondLabelMultiScaleValue, 0.25f, 4.0f);
+                    for (std::uint64_t key : m_SelectedBondKeys)
+                    {
+                        BondLabelState &state = m_BondLabelStates[key];
+                        state.scale = targetScale;
+                        state.hidden = false;
+                    }
+                    settingsChanged = true;
+                }
+
+                auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
+                const bool hasSelectedLabel =
+                    selectedLabelIt != m_BondLabelStates.end() &&
+                    !selectedLabelIt->second.deleted &&
+                    m_DeletedBondKeys.find(m_SelectedBondLabelKey) == m_DeletedBondKeys.end();
+
+                ImGui::Separator();
+                ImGui::TextUnformatted("Bond label objects");
+                if (!hasSelectedLabel)
+                {
+                    ImGui::TextUnformatted("Select a bond label in viewport to edit it.");
+                }
+                else
+                {
+                    BondLabelState &labelState = selectedLabelIt->second;
+                    ImGui::Text("Selected label: atom %zu <-> atom %zu", labelState.atomA, labelState.atomB);
+                    if (ImGui::Checkbox("Hidden", &labelState.hidden))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::DragFloat3("Label world offset", &labelState.worldOffset.x, 0.01f, -100.0f, 100.0f, "%.3f"))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::SliderFloat("Label scale", &labelState.scale, 0.25f, 4.0f, "%.2f"))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::Button("Reset label transform"))
+                    {
+                        labelState.worldOffset = glm::vec3(0.0f);
+                        labelState.scale = 1.0f;
+                        settingsChanged = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Delete label"))
+                    {
+                        labelState.deleted = true;
+                        labelState.hidden = true;
+                        m_DeletedBondKeys.insert(m_SelectedBondLabelKey);
+                        m_SelectedBondKeys.erase(m_SelectedBondLabelKey);
+                        settingsChanged = true;
                     }
                 }
-                settingsChanged = true;
-            }
-            if (!canMoveSelectionToCursor)
-            {
-                ImGui::EndDisabled();
+
+                if (ImGui::Button("Restore all deleted labels"))
+                {
+                    for (auto &[key, state] : m_BondLabelStates)
+                    {
+                        (void)key;
+                        state.deleted = false;
+                        state.hidden = false;
+                    }
+                    m_DeletedBondKeys.clear();
+                    settingsChanged = true;
+                }
             }
 
-            ImGui::SameLine();
-            if (ImGui::Button("Move selected to Origin") && canMoveSelectionToCursor)
+            if (ImGui::CollapsingHeader("Status", defaultOpenFlags))
             {
-                if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
+                if (m_HasStructureLoaded)
                 {
-                    m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_SceneOriginPosition;
-                }
-                else if (hasSelectedLight && m_SelectedAtomIndices.empty())
-                {
-                    m_LightPosition = m_SceneOriginPosition;
+                    const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
+                    ImGui::Separator();
+                    ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
+                                m_WorkingStructure.GetAtomCount(),
+                                m_WorkingStructure.species.size(),
+                                modeLabel);
+                    ImGui::Text("Title: %s", m_WorkingStructure.title.empty() ? "(empty)" : m_WorkingStructure.title.c_str());
+                    ImGui::Text("Bonds: %zu (auto=%s, threshold x%.2f)",
+                                m_GeneratedBonds.size(),
+                                m_AutoBondGenerationEnabled ? "on" : "off",
+                                m_BondThresholdScale);
                 }
                 else
                 {
-                    const glm::vec3 selectionCenter = ComputeSelectionCenter();
-                    const glm::vec3 delta = m_SceneOriginPosition - selectionCenter;
-                    for (const std::size_t atomIndex : m_SelectedAtomIndices)
-                    {
-                        if (atomIndex >= m_WorkingStructure.atoms.size())
-                        {
-                            continue;
-                        }
-                        SetAtomCartesianPosition(atomIndex, GetAtomCartesianPosition(atomIndex) + delta);
-                    }
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("Loaded: none");
                 }
-                settingsChanged = true;
-            }
-
-            ImGui::SeparatorText("3D Cursor");
-            if (ImGui::Checkbox("Show 3D cursor", &m_Show3DCursor))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Snap cursor to grid", &m_CursorSnapToGrid))
-            {
-                settingsChanged = true;
-            }
-            if (DrawColoredVec3Control("Cursor position", m_CursorPosition, 0.01f, -1000.0f, 1000.0f, "%.5f"))
-            {
-                settingsChanged = true;
-            }
-
-            static float s_CursorUniformXYZ = 0.0f;
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::InputFloat("Cursor XYZ", &s_CursorUniformXYZ, 0.1f, 1.0f, "%.4f");
-            ImGui::SameLine();
-            if (ImGui::Button("Apply cursor XYZ"))
-            {
-                m_CursorPosition = glm::vec3(s_CursorUniformXYZ);
-                settingsChanged = true;
-            }
-
-            if (ImGui::SliderFloat("Cursor size", &m_CursorVisualScale, 0.05f, 1.00f, "%.2f"))
-            {
-                settingsChanged = true;
-            }
-
-            ImGui::SeparatorText("Origin & Light");
-            if (DrawColoredVec3Control("Light position", m_LightPosition, 0.01f, -1000.0f, 1000.0f, "%.5f"))
-            {
-                settingsChanged = true;
-            }
-
-            if (ImGui::Button("Select Light"))
-            {
-                m_SelectedSpecialNode = SpecialNodeSelection::Light;
-                m_SelectedAtomIndices.clear();
-                m_SelectedTransformEmptyIndex = -1;
-            }
-
-            if (ImGui::Button("3D cursor to Origin"))
-            {
-                m_CursorPosition = m_SceneOriginPosition;
-                settingsChanged = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cursor <- camera target") && m_Camera)
-            {
-                m_CursorPosition = m_Camera->GetTarget();
-                settingsChanged = true;
-            }
-
-            ImGui::SeparatorText("Add Atom");
-            ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
-            ImGui::SameLine();
-            if (ImGui::Button("Periodic table"))
-            {
-                m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                m_PeriodicTableOpenedFromContextMenu = false;
-                m_PeriodicTableOpen = true;
-            }
-            ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
-            ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-
-            if (ImGui::Button("Use camera target") && m_Camera)
-            {
-                m_AddAtomPosition = m_Camera->GetTarget();
-                m_AddAtomCoordinateModeIndex = 1;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Use 3D cursor"))
-            {
-                m_AddAtomPosition = m_CursorPosition;
-                m_AddAtomCoordinateModeIndex = 1;
-            }
-            ImGui::SameLine();
-            const bool canAddAtom = m_HasStructureLoaded;
-            if (!canAddAtom)
-            {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Add atom"))
-            {
-                m_ShowAddAtomDialog = true;
-            }
-            if (!canAddAtom)
-            {
-                ImGui::EndDisabled();
-            }
-            if (m_HasStructureLoaded)
-            {
-                const char *modeLabel = m_WorkingStructure.coordinateMode == CoordinateMode::Direct ? "Direct" : "Cartesian";
-                ImGui::Separator();
-                ImGui::Text("Loaded: %d atoms | %zu species | mode: %s",
-                            m_WorkingStructure.GetAtomCount(),
-                            m_WorkingStructure.species.size(),
-                            modeLabel);
-                ImGui::Text("Title: %s", m_WorkingStructure.title.empty() ? "(empty)" : m_WorkingStructure.title.c_str());
-            }
-            else
-            {
-                ImGui::Separator();
-                ImGui::TextUnformatted("Loaded: none");
             }
 
             if (!m_LastStructureMessage.empty())
@@ -7324,8 +8981,11 @@ namespace ds
 
             const char *filterItems[] = {
                 "All",
-                "Warnings + Errors",
-                "Errors only"};
+                "Trace only",
+                "Info + above",
+                "Warnings + Errors + Fatal",
+                "Errors + Fatal",
+                "Fatal only"};
 
             if (ImGui::Combo("Filter", &m_LogFilter, filterItems, IM_ARRAYSIZE(filterItems)))
             {
@@ -7349,19 +9009,36 @@ namespace ds
             const auto entries = Logger::Get().GetEntriesSnapshot();
             for (const auto &entry : entries)
             {
-                if (m_LogFilter == 1 && entry.level == LogLevel::Info)
+                if (m_LogFilter == 1 && entry.level != LogLevel::Trace)
                 {
                     continue;
                 }
-                if (m_LogFilter == 2 && entry.level != LogLevel::Error)
+                if (m_LogFilter == 2 && entry.level == LogLevel::Trace)
+                {
+                    continue;
+                }
+                if (m_LogFilter == 3 && (entry.level == LogLevel::Trace || entry.level == LogLevel::Info))
+                {
+                    continue;
+                }
+                if (m_LogFilter == 4 && !(entry.level == LogLevel::Error || entry.level == LogLevel::Fatal))
+                {
+                    continue;
+                }
+                if (m_LogFilter == 5 && entry.level != LogLevel::Fatal)
                 {
                     continue;
                 }
 
-                ImVec4 color = ImVec4(0.42f, 0.78f, 0.98f, 1.0f);
-                const char *levelText = "INFO";
+                ImVec4 color = ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
+                const char *levelText = "TRACE";
 
-                if (entry.level == LogLevel::Warn)
+                if (entry.level == LogLevel::Info)
+                {
+                    color = ImVec4(0.42f, 0.78f, 0.98f, 1.0f);
+                    levelText = "INFO";
+                }
+                else if (entry.level == LogLevel::Warn)
                 {
                     color = ImVec4(0.96f, 0.76f, 0.35f, 1.0f);
                     levelText = "WARN";
@@ -7370,6 +9047,11 @@ namespace ds
                 {
                     color = ImVec4(0.95f, 0.35f, 0.35f, 1.0f);
                     levelText = "ERROR";
+                }
+                else if (entry.level == LogLevel::Fatal)
+                {
+                    color = ImVec4(1.0f, 0.08f, 0.08f, 1.0f);
+                    levelText = "FATAL";
                 }
 
                 ImGui::PushStyleColor(ImGuiCol_Text, color);
