@@ -106,6 +106,18 @@ function Read-LocalBuildConfig {
     return $cfg
 }
 
+function Test-ValidPlatformToolset {
+    param(
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    return [bool]([string]$Value -match '^v\d+$')
+}
+
 function Write-LocalBuildConfig {
     param(
         [Parameter(Mandatory = $true)]$ToolchainInfo
@@ -118,16 +130,20 @@ function Write-LocalBuildConfig {
 
     $platformToolset = $null
     if (-not [string]::IsNullOrWhiteSpace($env:DEFECTSSTUDIO_PLATFORM_TOOLSET)) {
-        $platformToolset = $env:DEFECTSSTUDIO_PLATFORM_TOOLSET
+        $envToolset = [string]$env:DEFECTSSTUDIO_PLATFORM_TOOLSET
+        if (Test-ValidPlatformToolset -Value $envToolset) {
+            $platformToolset = $envToolset
+        }
     }
     else {
         $vsPath = $ToolchainInfo.installationPath
         $platformToolsetsPath = Join-Path $vsPath "MSBuild\Microsoft\VC\v180\Platforms\x64\PlatformToolsets"
         
         if (Test-Path $platformToolsetsPath) {
-            $available = @((Get-ChildItem -Path $platformToolsetsPath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name))
+            $available = @((Get-ChildItem -Path $platformToolsetsPath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Where-Object { $_ -match '^v\d+$' }))
             if ($available.Count -gt 0) {
                 $sorted = $available | Sort-Object { [version]($_ -replace '[^0-9.]', '') } -Descending
+                $sorted = @($sorted)
                 $platformToolset = $sorted[0]
             }
         }
@@ -217,8 +233,13 @@ $msbuildParallelArgs = @(
 $localConfig = Read-LocalBuildConfig
 if ($null -ne $localConfig -and -not [string]::IsNullOrWhiteSpace([string]$localConfig.platformToolset)) {
     $platformToolset = [string]$localConfig.platformToolset
-    $msbuildParallelArgs += "/p:PlatformToolset=$platformToolset"
-    Write-Host "Using PlatformToolset: $platformToolset" -ForegroundColor DarkCyan
+    if (Test-ValidPlatformToolset -Value $platformToolset) {
+        $msbuildParallelArgs += "/p:PlatformToolset=$platformToolset"
+        Write-Host "Using PlatformToolset: $platformToolset" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "Ignoring invalid platformToolset in local config: '$platformToolset'" -ForegroundColor DarkYellow
+    }
 }
 
 Invoke-Step -Name "Build Debug|x64" -Action {

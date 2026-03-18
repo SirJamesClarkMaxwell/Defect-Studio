@@ -26,9 +26,9 @@ if "%SKIP_SUBMODULE_SYNC%"=="1" (
 )
 
 if "%SKIP_SUBMODULE_SYNC%"=="1" (
-    powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1 -SkipSubmoduleSync
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\Setup.ps1 -SkipSubmoduleSync
 ) else (
-    powershell -ExecutionPolicy Bypass -File scripts\Setup.ps1
+    powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\Setup.ps1
 )
 if errorlevel 1 (
     echo Setup failed.

@@ -336,7 +336,7 @@ namespace ds
             dialog.hwndOwner = nullptr;
             dialog.lpstrFile = pathBuffer;
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
-            dialog.lpstrFilter = "All files (*.*)\0VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0*.*\0";
+            dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 1;
             dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
             dialog.lpstrDefExt = "vasp";
@@ -437,7 +437,7 @@ namespace ds
     EditorLayer::EditorLayer()
         : Layer("EditorLayer")
     {
-        const char *defaultImportPath = "assets/samples/reduced_diamond_bulk.vasp";
+        const char *defaultImportPath = "assets/samples/reduced_diamond_bulk";
         const char *defaultExportPath = "exports/CONTCAR.vasp";
 
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultImportPath);
@@ -5928,26 +5928,35 @@ namespace ds
 
                 if (m_Camera)
                 {
-                    const float toolbarWidth = std::max(360.0f, std::min(620.0f, (rectMax.x - rectMin.x) - 28.0f));
-                    ImGui::SetNextWindowPos(ImVec2(rectMin.x + 14.0f, rectMin.y + 10.0f), ImGuiCond_Always);
-                    ImGui::SetNextWindowSize(ImVec2(toolbarWidth, 0.0f), ImGuiCond_Always);
-                    ImGui::SetNextWindowBgAlpha(0.84f);
+                    ImGui::SetNextWindowPos(ImVec2(rectMin.x + 14.0f, rectMin.y + 10.0f), ImGuiCond_FirstUseEver);
                     ImGuiWindowFlags rotateToolbarFlags =
-                        ImGuiWindowFlags_NoDecoration |
-                        ImGuiWindowFlags_NoMove |
-                        ImGuiWindowFlags_NoSavedSettings |
                         ImGuiWindowFlags_NoScrollbar |
                         ImGuiWindowFlags_NoScrollWithMouse |
-                        ImGuiWindowFlags_NoNav |
-                        ImGuiWindowFlags_NoDocking;
+                        ImGuiWindowFlags_NoNav;
 
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
                     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 4.0f));
-                    if (ImGui::Begin("##ViewportTopRotateToolbar", nullptr, rotateToolbarFlags))
+                    if (ImGui::Begin("Viewport Controls", nullptr, rotateToolbarFlags))
                     {
                         const float stepRad = glm::radians(glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f));
                         const float pitchLimit = glm::half_pi<float>() - 0.01f;
+                        const ImGuiStyle &style = ImGui::GetStyle();
+                        const float frameHeight = ImGui::GetFrameHeight();
+
+                        auto calcButtonWidth = [&](const char *label)
+                        {
+                            return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+                        };
+
+                        auto centerRow = [&](float rowWidth)
+                        {
+                            const float avail = ImGui::GetContentRegionAvail().x;
+                            if (avail > rowWidth)
+                            {
+                                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - rowWidth) * 0.5f);
+                            }
+                        };
 
                         auto applyView = [&](float yaw, float pitch)
                         {
@@ -5958,6 +5967,17 @@ namespace ds
                                 glm::clamp(pitch, -pitchLimit, pitchLimit));
                             m_LastStructureOperationFailed = false;
                         };
+
+                        const float row1Width =
+                            ImGui::CalcTextSize("View").x + style.ItemSpacing.x +
+                            frameHeight + style.ItemSpacing.x +
+                            frameHeight + style.ItemSpacing.x +
+                            frameHeight + style.ItemSpacing.x +
+                            frameHeight + style.ItemSpacing.x +
+                            calcButtonWidth("Roll-") + style.ItemSpacing.x +
+                            calcButtonWidth("Roll+") + style.ItemSpacing.x +
+                            calcButtonWidth("Front");
+                        centerRow(row1Width);
 
                         ImGui::TextUnformatted("View");
                         ImGui::SameLine();
@@ -6017,9 +6037,13 @@ namespace ds
                             m_LastStructureMessage = "Viewport: front view.";
                         }
                         ImGui::SameLine();
+
+                        const float stepInputWidth = 150.0f;
+                        const float row2Width = ImGui::CalcTextSize("Step (deg):").x + style.ItemSpacing.x + stepInputWidth;
+                        // centerRow(row2Width);
                         ImGui::TextUnformatted("Step (deg):");
                         ImGui::SameLine();
-                        ImGui::PushItemWidth(118.0f);
+                        ImGui::PushItemWidth(stepInputWidth);
                         if (ImGui::InputFloat("##ViewportRotateStep", &m_ViewportRotateStepDeg, 1.0f, 5.0f, "%.1f"))
                         {
                             m_ViewportRotateStepDeg = glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f);

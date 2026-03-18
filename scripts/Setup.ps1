@@ -98,16 +98,34 @@ function Get-AvailablePlatformToolsets {
     return $toolsets | Sort-Object { [int]($_ -replace '[^0-9]', '') } -Descending
 }
 
+function Test-ValidPlatformToolset {
+    param(
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    return [bool]([string]$Value -match '^v\d+$')
+}
+
 function Resolve-PlatformToolset {
     param(
         [Parameter(Mandatory = $true)][string]$InstallationPath
     )
 
     if (-not [string]::IsNullOrWhiteSpace($env:DEFECTSSTUDIO_PLATFORM_TOOLSET)) {
-        return [string]$env:DEFECTSSTUDIO_PLATFORM_TOOLSET
+        $envToolset = [string]$env:DEFECTSSTUDIO_PLATFORM_TOOLSET
+        if (Test-ValidPlatformToolset -Value $envToolset) {
+            return $envToolset
+        }
+
+        Write-Host "Ignoring invalid DEFECTSSTUDIO_PLATFORM_TOOLSET='$envToolset'. Expected format like 'v145'." -ForegroundColor DarkYellow
     }
 
     $availableToolsets = Get-AvailablePlatformToolsets -InstallationPath $InstallationPath
+    $availableToolsets = @($availableToolsets)
     if ($availableToolsets.Count -gt 0) {
         return [string]$availableToolsets[0]
     }
@@ -140,7 +158,7 @@ function Write-LocalBuildConfig {
         generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($PlatformToolset)) {
+    if (Test-ValidPlatformToolset -Value $PlatformToolset) {
         $payload.platformToolset = $PlatformToolset
     }
 

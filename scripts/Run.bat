@@ -4,5 +4,5 @@ setlocal
 set ROOT_DIR=%~dp0..
 cd /d "%ROOT_DIR%"
 
-powershell -ExecutionPolicy Bypass -File scripts\Run.ps1
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\Run.ps1
 exit /b %errorlevel%

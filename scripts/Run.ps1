@@ -8,13 +8,23 @@ $releaseExe = Join-Path $Root "bin/Release-windows-x86_64/DefectsStudio/DefectsS
 
 if (Test-Path $debugExe) {
     Write-Host "Starting Debug build..." -ForegroundColor Cyan
-    Start-Process -FilePath $debugExe | Out-Null
+    $process = Start-Process -FilePath $debugExe -PassThru
+    Start-Sleep -Milliseconds 350
+    if ($process.HasExited) {
+        Write-Host "DefectsStudio exited immediately after launch (Debug)." -ForegroundColor Red
+        exit 1
+    }
     exit 0
 }
 
 if (Test-Path $releaseExe) {
     Write-Host "Starting Release build..." -ForegroundColor Cyan
-    Start-Process -FilePath $releaseExe | Out-Null
+    $process = Start-Process -FilePath $releaseExe -PassThru
+    Start-Sleep -Milliseconds 350
+    if ($process.HasExited) {
+        Write-Host "DefectsStudio exited immediately after launch (Release)." -ForegroundColor Red
+        exit 1
+    }
     exit 0
 }
 
