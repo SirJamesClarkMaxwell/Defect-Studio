@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
+$LocalBuildConfigPath = Join-Path $Root "scripts/local/build-toolchain.local.json"
 
 function Invoke-Step {
     param(
@@ -14,24 +15,137 @@ function Invoke-Step {
     & $Action
 }
 
-function Get-MSBuildPath {
+function Get-VisualStudioToolchainInfo {
     $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
     if (-not (Test-Path $vsWhere)) {
         return $null
     }
 
-    $installationPath = & $vsWhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+    $json = & $vsWhere -latest -products * -requires Microsoft.Component.MSBuild -format json
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        return $null
+    }
+
+    $parsed = $null
+    try {
+        $parsed = $json | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+
+    if ($null -eq $parsed -or $parsed.Count -lt 1) {
+        return $null
+    }
+
+    $entry = $parsed[0]
+    if ($null -eq $entry) {
+        return $null
+    }
+
+    $installationPath = $entry.installationPath
     if ([string]::IsNullOrWhiteSpace($installationPath)) {
         return $null
     }
 
     $msbuild = Join-Path $installationPath "MSBuild\Current\Bin\MSBuild.exe"
-    if (Test-Path $msbuild) {
-        return $msbuild
+    if (-not (Test-Path $msbuild)) {
+        return $null
     }
 
-    return $null
+    $productDisplayVersion = ""
+    if ($entry.catalog -and $entry.catalog.productDisplayVersion) {
+        $productDisplayVersion = [string]$entry.catalog.productDisplayVersion
+    }
+
+    $installationVersion = ""
+    if ($entry.installationVersion) {
+        $installationVersion = [string]$entry.installationVersion
+    }
+
+    $majorVersion = ""
+    if (-not [string]::IsNullOrWhiteSpace($installationVersion)) {
+        $majorVersion = $installationVersion.Split('.')[0]
+    }
+
+    return @{
+        compiler = "visualstudio"
+        visualStudioVersion = $productDisplayVersion
+        visualStudioInstallationVersion = $installationVersion
+        visualStudioMajor = $majorVersion
+        installationPath = $installationPath
+        msbuildPath = $msbuild
+    }
+}
+
+function Read-LocalBuildConfig {
+    if (-not (Test-Path $LocalBuildConfigPath)) {
+        return $null
+    }
+
+    try {
+        $cfg = Get-Content -Path $LocalBuildConfigPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+
+    if ($null -eq $cfg) {
+        return $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$cfg.msbuildPath)) {
+        return $null
+    }
+
+    if (-not (Test-Path ([string]$cfg.msbuildPath))) {
+        return $null
+    }
+
+    return $cfg
+}
+
+function Write-LocalBuildConfig {
+    param(
+        [Parameter(Mandatory = $true)]$ToolchainInfo
+    )
+
+    $configDir = Split-Path -Parent $LocalBuildConfigPath
+    if (-not (Test-Path $configDir)) {
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    }
+
+    $payload = [ordered]@{
+        schemaVersion = 1
+        compiler = $ToolchainInfo.compiler
+        visualStudioVersion = $ToolchainInfo.visualStudioVersion
+        visualStudioInstallationVersion = $ToolchainInfo.visualStudioInstallationVersion
+        visualStudioMajor = $ToolchainInfo.visualStudioMajor
+        installationPath = $ToolchainInfo.installationPath
+        msbuildPath = $ToolchainInfo.msbuildPath
+        generatedBy = "scripts/Verify-Build.ps1"
+        generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    }
+
+    $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $LocalBuildConfigPath -Encoding UTF8
+}
+
+function Resolve-MSBuildPath {
+    $localConfig = Read-LocalBuildConfig
+    if ($null -ne $localConfig) {
+        Write-Host "Using local build toolchain config: $LocalBuildConfigPath" -ForegroundColor DarkGray
+        return [string]$localConfig.msbuildPath
+    }
+
+    $detected = Get-VisualStudioToolchainInfo
+    if ($null -eq $detected) {
+        return $null
+    }
+
+    Write-LocalBuildConfig -ToolchainInfo $detected
+    Write-Host "Created local build toolchain config: $LocalBuildConfigPath" -ForegroundColor DarkGray
+    return [string]$detected.msbuildPath
 }
 
 function Stop-RunningDefectsStudio {
@@ -67,7 +181,7 @@ if (-not (Test-Path $solutionPath)) {
     throw "Solution file not found: $solutionPath"
 }
 
-$msbuildPath = Get-MSBuildPath
+$msbuildPath = Resolve-MSBuildPath
 if ($null -eq $msbuildPath) {
     throw "MSBuild was not found. Install Visual Studio 2022 with Desktop development with C++ and MSBuild component."
 }
