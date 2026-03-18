@@ -116,6 +116,23 @@ function Write-LocalBuildConfig {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     }
 
+    $platformToolset = $null
+    if (-not [string]::IsNullOrWhiteSpace($env:DEFECTSSTUDIO_PLATFORM_TOOLSET)) {
+        $platformToolset = $env:DEFECTSSTUDIO_PLATFORM_TOOLSET
+    }
+    else {
+        $vsPath = $ToolchainInfo.installationPath
+        $platformToolsetsPath = Join-Path $vsPath "MSBuild\Microsoft\VC\v180\Platforms\x64\PlatformToolsets"
+        
+        if (Test-Path $platformToolsetsPath) {
+            $available = @((Get-ChildItem -Path $platformToolsetsPath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name))
+            if ($available.Count -gt 0) {
+                $sorted = $available | Sort-Object { [version]($_ -replace '[^0-9.]', '') } -Descending
+                $platformToolset = $sorted[0]
+            }
+        }
+    }
+
     $payload = [ordered]@{
         schemaVersion = 1
         compiler = $ToolchainInfo.compiler
@@ -126,6 +143,10 @@ function Write-LocalBuildConfig {
         msbuildPath = $ToolchainInfo.msbuildPath
         generatedBy = "scripts/Verify-Build.ps1"
         generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    }
+
+    if ($null -ne $platformToolset) {
+        $payload.platformToolset = $platformToolset
     }
 
     $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $LocalBuildConfigPath -Encoding UTF8
@@ -192,6 +213,13 @@ $msbuildParallelArgs = @(
     "/p:UseMultiToolTask=true",
     "/p:CL_MPCount=$cpuCount"
 )
+
+$localConfig = Read-LocalBuildConfig
+if ($null -ne $localConfig -and -not [string]::IsNullOrWhiteSpace([string]$localConfig.platformToolset)) {
+    $platformToolset = [string]$localConfig.platformToolset
+    $msbuildParallelArgs += "/p:PlatformToolset=$platformToolset"
+    Write-Host "Using PlatformToolset: $platformToolset" -ForegroundColor DarkCyan
+}
 
 Invoke-Step -Name "Build Debug|x64" -Action {
     & $msbuildPath $solutionPath /t:Build /p:Configuration=Debug /p:Platform=x64 @msbuildParallelArgs
