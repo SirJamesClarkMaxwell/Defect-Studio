@@ -74,32 +74,113 @@
 - [x] Make POSCAR/CONTCAR export formatting exactly match sample style (e.g., `assets/samples/diamond_bulk`) to avoid noisy `diff`
 - [ ] Auto bond generation and dynamic threshold updates with generated text as bond length along the bonds and easy read in camera view
 - [ ] Global cutoff + per-element-pair mode
+- [ ] hiding atoms bonds instead of deleting it
 - [ ] Distance/angle tools and labels
 - [ ] Collections system (Blender-like outliner groups, visibility/lock/select toggles)
+- [ ] multi POSCAR import system (via multiple render targets or collections)
 - [ ] Clean view + cell edge toggle
 
-### [ ] T07 - UI panels and UX polishing (`task/08-ui-panels-ux`)
+### [ ] T07 - UI panels and UX polishing (`task/07-ui-panels-ux`)
 - [x] Dockspace + tool panels
 - [x] Extract dedicated `Settings` window to separate UI class (`SettingsPanel`)
 - [x] Viewport settings panel: background, grid, lighting, projection mode, atom color override
 - [x] File dialogs with fallback path
 - [x] Configurable UI spacing scale (saved in editor settings)
+- [ ] HazelNut like style of UI
 - [ ] Persist axis settings (colors + orientation) together with renderer settings
 - [x] Persist ImGui dock/panel layout across runs
 - [ ] Toggles, profiler integration, config defaults
 - [ ] nice logging window with icons (error, warning, info, debug, trace) ❌,⚠️(dodaj inne emotki)
 
-### [ ] T08 - Offscreen render and F12 pipeline (`task/09-offscreen-render`)
+### [ ] T08 - Offscreen render and F12 pipeline (`task/08-offscreen-render`)
 - [ ] Render dialog and camera frame preview
 - [ ] Offscreen render to PNG/JPG at chosen resolution
 
-### [ ] T09 - Volumetrics MVP (`task/07-volumetrics-mvp`)
+### [ ] T09 - Volumetrics MVP (`task/09-volumetrics-mvp`)
 - [ ] CHG/CHGCAR/PARCHG parser (FFT ordering)
 - [ ] Multi-block support
 - [ ] Iso-surface controls incl. dual iso mode
 
+### [ ] T10 - Advanced materials science tools (`task/10-materials-tools`)
+- [ ] Crystal generator from Bravais lattices
+- [ ] Define lattice system presets (sc, bcc, fcc, hcp, diamond, custom)
+- [ ] Define and edit basis atoms (element + fractional coordinates)
+- [ ] Interactive editing of lattice vectors and lattice constants
+- [ ] Supercell generation options at creation time (Nx, Ny, Nz)
+- [ ] Quick generation wizard for common structures
+- [ ] CIF file support
+- [ ] Import CIF structures
+- [ ] Convert CIF model to internal structure model
+- [ ] Export imported CIF structures to POSCAR/CONTCAR
+- [ ] CIF validation report (unsupported symmetry/occupancy fallback)
 
-### [ ] T10 - Tests, samples, docs (`task/10-tests-docs`)
+### [ ] T11 - VASP ecosystem integration (`task/11-vasp-integration`)
+- [ ] Full OUTCAR parser
+- [ ] Parse electronic structure metadata
+- [ ] Extract energies per ionic step
+- [ ] Extract forces and stress tensor
+- [ ] Extract relaxation and convergence information
+- [ ] Parse available band structure and DOS metadata
+- [ ] WAVECAR reader (MVP)
+- [ ] Read KS wavefunction headers and k-point metadata
+- [ ] Enable orbital projection data pipeline
+- [ ] Prepare wavefunction-derived data for visualization
+
+### [ ] T11a - General code refactor (`task/11a-general-refactor`)
+- [ ] Define refactor scope and module boundaries (no feature changes)
+- [ ] Stronger Core <-> App separation (dependency direction and responsibilities)
+- [ ] Modularize large source files into focused modules/components
+- [ ] Extract reusable parts into separate libraries (where it reduces coupling)
+- [ ] Replace complex inline lambdas with named functions/methods where readability improves
+- [ ] Reduce nesting depth by guard clauses and early returns
+- [ ] Split large classes into smaller cohesive classes (single-responsibility focus)
+- [ ] Standardize naming and file layout for new modules/classes
+- [ ] Verify no regressions via Debug/Release build and smoke run
+
+### [ ] T11b - Local code documentation site (mdBook) (`task/11b-local-docs-mdbook`)
+- [ ] Start after T11 completion (minimum fallback: after T09)
+- [ ] Initialize local mdBook project in `docs/`
+- [ ] Define documentation structure (`SUMMARY.md`) for core modules
+- [ ] Add architecture pages for Core, DataModel, IO, Renderer, Layers, UI
+- [ ] Add developer workflows: build, run, debug, branch/task conventions
+- [ ] Add API-oriented pages for key classes and data flow
+- [ ] Add local scripts to serve/build docs (`scripts/Docs-Serve.bat`, `scripts/Docs-Build.bat`)
+- [ ] Add quick link/instructions in main `README.md`
+- [ ] Verify fully offline local usage (`mdbook serve` / `mdbook build`)
+
+### [ ] T12 - Volumetric visualization extensions (`task/12-volumetric-extensions`)
+- [ ] Isosurface rendering module
+- [ ] Visualize charge density fields (CHGCAR/PARCHG)
+- [ ] Adjustable isosurface level and opacity controls
+- [ ] Multiple simultaneous isosurfaces
+- [ ] Polyhedra visualization module
+- [ ] Build coordination polyhedra around selected atoms
+- [ ] Configurable central atom and neighbor cutoff logic
+- [ ] Customizable polyhedra colors and edge styles
+- [ ] VESTA-like visualization presets
+
+### [ ] T13 - Defect correction workflows (`task/13-defect-corrections`)
+- [ ] Freysoldt correction workflow automation
+- [ ] Generate folder structure and correction input templates
+- [ ] Prepare correction calculation points automatically
+- [ ] Import calculated correction values
+- [ ] Plot correction curves in-app
+- [ ] Fit second-order correction terms
+- [ ] GPU implementation of Freysoldt correction
+- [ ] CUDA/OpenGL compute backend prototype
+- [ ] Enable large-supercell correction workflow
+
+### [ ] T14 - Python ecosystem integration (`task/14-python-integration`)
+- [ ] Python integration layer
+- [ ] Embedded Python interpreter lifecycle management
+- [ ] Script runner with project-context bindings
+- [ ] Interoperability with scientific Python libraries
+- [ ] ASE integration
+- [ ] Import/export structures through ASE
+- [ ] Structure manipulation using ASE workflows
+- [ ] Optional ASE calculator bridge (phase 2)
+
+### [ ] T15 - Tests, samples, docs (`task/15-tests-samples-docs`)
 - [ ] Parser unit tests + POSCAR round-trip
 - [ ] `assets/samples` small input files
 - [ ] README (build/run/controls)
