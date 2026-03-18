@@ -71,8 +71,17 @@ namespace ds
 
         enum class SelectionFilter
         {
-            AtomsAndBonds = 0,
-            BondsOnly = 1
+            AtomsOnly = 0,
+            AtomsAndBonds = 1,
+            BondsOnly = 2,
+            BondLabelsOnly = 3
+        };
+
+        enum class BondRenderStyle
+        {
+            UnicolorLine = 0,
+            BicolorLine = 1,
+            ColorGradient = 2
         };
 
         enum class PeriodicTableTarget
@@ -248,12 +257,14 @@ namespace ds
         float m_BondLineWidth = 2.0f;
         glm::vec3 m_BondColor = glm::vec3(0.72f, 0.78f, 0.90f);
         glm::vec3 m_BondSelectedColor = glm::vec3(0.98f, 0.88f, 0.42f);
+        BondRenderStyle m_BondRenderStyle = BondRenderStyle::UnicolorLine;
         std::vector<BondSegment> m_GeneratedBonds;
         std::unordered_map<std::uint64_t, BondLabelState> m_BondLabelStates;
         std::unordered_set<std::uint64_t> m_SelectedBondKeys;
         std::unordered_set<std::uint64_t> m_DeletedBondKeys;
         std::uint64_t m_SelectedBondLabelKey = 0;
         SelectionFilter m_SelectionFilter = SelectionFilter::AtomsAndBonds;
+        bool m_BondLabelDeleteOnlyMode = false;
         bool m_BondLabelGizmoEnabled = true;
         int m_BondLabelGizmoOperation = 0;
         float m_BondLabelMultiScaleValue = 1.0f;
@@ -261,6 +272,8 @@ namespace ds
         glm::vec3 m_BondLabelBackgroundColor = glm::vec3(0.08f, 0.09f, 0.12f);
         glm::vec3 m_BondLabelBorderColor = glm::vec3(0.72f, 0.76f, 0.88f);
         int m_BondLabelPrecision = 3;
+        glm::vec3 m_SelectedAtomCustomColor = glm::vec3(0.95f, 0.42f, 0.42f);
+        std::unordered_map<SceneUUID, glm::vec3> m_AtomColorOverrides;
         std::size_t m_LastLoggedBondCount = std::numeric_limits<std::size_t>::max();
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;

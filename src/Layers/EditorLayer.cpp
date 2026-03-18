@@ -437,7 +437,7 @@ namespace ds
     EditorLayer::EditorLayer()
         : Layer("EditorLayer")
     {
-        const char *defaultImportPath = "assets/samples/diamond_bulk";
+        const char *defaultImportPath = "assets/samples/reduced_diamond_bulk.vasp";
         const char *defaultExportPath = "exports/CONTCAR.vasp";
 
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultImportPath);
@@ -563,6 +563,8 @@ namespace ds
 
             std::vector<glm::vec3> atomCartesianPositions;
             atomCartesianPositions.reserve(m_WorkingStructure.atoms.size());
+            std::vector<glm::vec3> atomResolvedColors;
+            atomResolvedColors.reserve(m_WorkingStructure.atoms.size());
 
             std::vector<glm::vec3> selectedPositions;
             selectedPositions.reserve(m_SelectedAtomIndices.size());
@@ -581,8 +583,24 @@ namespace ds
                 atomCartesianPositions.push_back(position);
 
                 const std::string elementKey = NormalizeElementSymbol(atom.element);
+                glm::vec3 atomColor = ColorFromElement(elementKey);
+                if (m_SceneSettings.overrideAtomColor)
+                {
+                    atomColor = m_SceneSettings.atomOverrideColor;
+                }
+                if (i < m_AtomNodeIds.size())
+                {
+                    const SceneUUID atomId = m_AtomNodeIds[i];
+                    const auto overrideIt = m_AtomColorOverrides.find(atomId);
+                    if (overrideIt != m_AtomColorOverrides.end())
+                    {
+                        atomColor = overrideIt->second;
+                    }
+                }
+
                 atomPositionsByElement[elementKey].push_back(position);
-                atomColorsByElement[elementKey].push_back(ColorFromElement(elementKey));
+                atomColorsByElement[elementKey].push_back(atomColor);
+                atomResolvedColors.push_back(atomColor);
 
                 if (IsAtomSelected(i))
                 {
@@ -617,6 +635,17 @@ namespace ds
                 std::vector<glm::vec3> selectedBondVertices;
                 regularBondVertices.reserve(m_GeneratedBonds.size() * 2);
                 selectedBondVertices.reserve(m_GeneratedBonds.size());
+                std::vector<glm::vec3> segmentVertices(2, glm::vec3(0.0f));
+                auto renderLineSegment = [&](const glm::vec3 &a, const glm::vec3 &b, const glm::vec3 &color)
+                {
+                    segmentVertices[0] = a;
+                    segmentVertices[1] = b;
+                    m_RenderBackend->RenderLineSegments(
+                        m_Camera->GetViewProjectionMatrix(),
+                        segmentVertices,
+                        color,
+                        m_BondLineWidth);
+                };
 
                 for (const BondSegment &bond : m_GeneratedBonds)
                 {
@@ -637,8 +666,34 @@ namespace ds
                     }
                     else
                     {
-                        regularBondVertices.push_back(bond.start);
-                        regularBondVertices.push_back(bond.end);
+                        if (m_BondRenderStyle == BondRenderStyle::UnicolorLine)
+                        {
+                            regularBondVertices.push_back(bond.start);
+                            regularBondVertices.push_back(bond.end);
+                        }
+                        else
+                        {
+                            const glm::vec3 colorA = (bond.atomA < atomResolvedColors.size()) ? atomResolvedColors[bond.atomA] : m_BondColor;
+                            const glm::vec3 colorB = (bond.atomB < atomResolvedColors.size()) ? atomResolvedColors[bond.atomB] : m_BondColor;
+                            if (m_BondRenderStyle == BondRenderStyle::BicolorLine)
+                            {
+                                renderLineSegment(bond.start, bond.midpoint, colorA);
+                                renderLineSegment(bond.midpoint, bond.end, colorB);
+                            }
+                            else
+                            {
+                                constexpr int kGradientSteps = 12;
+                                for (int step = 0; step < kGradientSteps; ++step)
+                                {
+                                    const float t0 = static_cast<float>(step) / static_cast<float>(kGradientSteps);
+                                    const float t1 = static_cast<float>(step + 1) / static_cast<float>(kGradientSteps);
+                                    const glm::vec3 p0 = glm::mix(bond.start, bond.end, t0);
+                                    const glm::vec3 p1 = glm::mix(bond.start, bond.end, t1);
+                                    const glm::vec3 c = glm::mix(colorA, colorB, (t0 + t1) * 0.5f);
+                                    renderLineSegment(p0, p1, c);
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -2403,7 +2458,12 @@ namespace ds
         }
 
         const bool multiSelect = io.KeyCtrl;
+        const bool atomsOnlySelection = (m_SelectionFilter == SelectionFilter::AtomsOnly);
+        const bool atomsAndBondsSelection = (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
         const bool bondsOnlySelection = (m_SelectionFilter == SelectionFilter::BondsOnly);
+        const bool labelsOnlySelection = (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
+        const bool allowAtomsSelection = atomsOnlySelection || atomsAndBondsSelection;
+        const bool allowBondsSelection = atomsAndBondsSelection || bondsOnlySelection;
 
         auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen, float &outDepth) -> bool
         {
@@ -2466,7 +2526,21 @@ namespace ds
             return found;
         };
 
-        if (!bondsOnlySelection)
+        if (labelsOnlySelection)
+        {
+            if (!multiSelect)
+            {
+                m_SelectedAtomIndices.clear();
+                m_SelectedTransformEmptyIndex = -1;
+                m_SelectedSpecialNode = SpecialNodeSelection::None;
+                m_SelectedBondKeys.clear();
+                m_SelectedBondLabelKey = 0;
+                AppendSelectionDebugLog("Selection cleared: label-only mode (use bond label hitboxes)");
+            }
+            return;
+        }
+
+        if (allowAtomsSelection)
         {
             SpecialNodeSelection pickedSpecial = SpecialNodeSelection::None;
             if (pickSpecialNode(pickedSpecial))
@@ -2501,7 +2575,7 @@ namespace ds
         }
 
         std::uint64_t pickedBondKey = 0;
-        const bool hasBondHit = PickBondAtScreenPoint(mousePos, pickedBondKey);
+        const bool hasBondHit = allowBondsSelection && PickBondAtScreenPoint(mousePos, pickedBondKey);
         if (hasBondHit && bondsOnlySelection)
         {
             if (!multiSelect)
@@ -2546,7 +2620,7 @@ namespace ds
         }
 
         std::size_t pickedAtomIndex = 0;
-        const bool hasHit = PickAtomAtScreenPoint(mousePos, pickedAtomIndex);
+        const bool hasHit = allowAtomsSelection && PickAtomAtScreenPoint(mousePos, pickedAtomIndex);
         {
             std::ostringstream pickLog;
             pickLog << "Pick result: hasHit=" << (hasHit ? "1" : "0")
@@ -2557,7 +2631,7 @@ namespace ds
 
         if (!hasHit)
         {
-            if (hasBondHit)
+            if (hasBondHit && allowBondsSelection)
             {
                 if (!multiSelect)
                 {
@@ -2710,6 +2784,7 @@ namespace ds
         m_SelectedBondKeys.clear();
         m_DeletedBondKeys.clear();
         m_BondLabelStates.clear();
+        m_AtomColorOverrides.clear();
         m_SelectedBondLabelKey = 0;
         m_AutoBondsDirty = true;
         m_LastStructureOperationFailed = false;
@@ -3605,6 +3680,21 @@ namespace ds
             {
                 m_ShowBondLengthLabels = (value == "1");
             }
+            else if (key == "viewport_bonds_render_style")
+            {
+                try
+                {
+                    const int mode = std::stoi(value);
+                    m_BondRenderStyle = static_cast<BondRenderStyle>(std::clamp(mode, 0, 2));
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_delete_only")
+            {
+                m_BondLabelDeleteOnlyMode = (value == "1");
+            }
             else if (key == "viewport_bonds_threshold_scale")
             {
                 try
@@ -4258,6 +4348,8 @@ namespace ds
         out << "viewport_atom_glow=" << m_SceneSettings.atomGlowStrength << '\n';
         out << "viewport_bonds_auto=" << (m_AutoBondGenerationEnabled ? "1" : "0") << '\n';
         out << "viewport_bonds_labels=" << (m_ShowBondLengthLabels ? "1" : "0") << '\n';
+        out << "viewport_bonds_render_style=" << static_cast<int>(m_BondRenderStyle) << '\n';
+        out << "viewport_bond_label_delete_only=" << (m_BondLabelDeleteOnlyMode ? "1" : "0") << '\n';
         out << "viewport_bonds_threshold_scale=" << m_BondThresholdScale << '\n';
         out << "viewport_bonds_line_width=" << m_BondLineWidth << '\n';
         out << "viewport_bonds_color_r=" << m_BondColor.r << '\n';
@@ -5077,29 +5169,52 @@ namespace ds
                     (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size())) ||
                     m_SelectedSpecialNode != SpecialNodeSelection::None;
 
-                std::size_t deletedCount = 0;
-                for (std::uint64_t key : m_SelectedBondKeys)
+                std::size_t affectedCount = 0;
+                const bool deleteLabelsOnly = m_BondLabelDeleteOnlyMode || (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
+                if (deleteLabelsOnly)
                 {
-                    const auto [it, inserted] = m_DeletedBondKeys.insert(key);
-                    (void)it;
-                    if (inserted)
+                    for (std::uint64_t key : m_SelectedBondKeys)
                     {
-                        ++deletedCount;
+                        BondLabelState &state = m_BondLabelStates[key];
+                        if (!state.deleted)
+                        {
+                            ++affectedCount;
+                        }
+                        state.deleted = true;
+                        state.hidden = true;
                     }
-
-                    auto stateIt = m_BondLabelStates.find(key);
-                    if (stateIt != m_BondLabelStates.end())
+                    if (affectedCount > 0)
                     {
-                        stateIt->second.hidden = true;
+                        settingsChanged = true;
+                        m_LastStructureOperationFailed = false;
+                        m_LastStructureMessage = "Deleted " + std::to_string(affectedCount) + " selected bond label(s).";
+                        LogInfo(m_LastStructureMessage);
                     }
                 }
-
-                if (deletedCount > 0)
+                else
                 {
-                    settingsChanged = true;
-                    m_LastStructureOperationFailed = false;
-                    m_LastStructureMessage = "Deleted " + std::to_string(deletedCount) + " selected bond(s).";
-                    LogInfo(m_LastStructureMessage);
+                    for (std::uint64_t key : m_SelectedBondKeys)
+                    {
+                        const auto [it, inserted] = m_DeletedBondKeys.insert(key);
+                        (void)it;
+                        if (inserted)
+                        {
+                            ++affectedCount;
+                        }
+
+                        auto stateIt = m_BondLabelStates.find(key);
+                        if (stateIt != m_BondLabelStates.end())
+                        {
+                            stateIt->second.hidden = true;
+                        }
+                    }
+                    if (affectedCount > 0)
+                    {
+                        settingsChanged = true;
+                        m_LastStructureOperationFailed = false;
+                        m_LastStructureMessage = "Deleted " + std::to_string(affectedCount) + " selected bond(s).";
+                        LogInfo(m_LastStructureMessage);
+                    }
                 }
 
                 m_SelectedBondKeys.clear();
@@ -5141,6 +5256,7 @@ namespace ds
                     m_WorkingStructure.atoms.erase(m_WorkingStructure.atoms.begin() + static_cast<std::ptrdiff_t>(atomIndex));
                     if (atomIndex < m_AtomNodeIds.size())
                     {
+                        m_AtomColorOverrides.erase(m_AtomNodeIds[atomIndex]);
                         m_AtomNodeIds.erase(m_AtomNodeIds.begin() + static_cast<std::ptrdiff_t>(atomIndex));
                     }
                 }
@@ -7055,6 +7171,7 @@ namespace ds
                         }
 
                         const bool canPickLabel =
+                            (m_SelectionFilter == SelectionFilter::BondLabelsOnly) &&
                             (m_InteractionMode == InteractionMode::Select) && m_ViewportFocused && m_ViewportHovered &&
                             ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver() && !ImViewGuizmo::IsOver();
                         if (canPickLabel && !hitRegions.empty())
@@ -7193,6 +7310,30 @@ namespace ds
                 {
                     const bool hasLoadedAtoms = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
                     const glm::vec2 contextMouse(io.MousePos.x, io.MousePos.y);
+
+                    if (!m_SelectedAtomIndices.empty())
+                    {
+                        ImGui::SeparatorText("Quick change atom type");
+                        ImGui::SetNextItemWidth(92.0f);
+                        ImGui::InputText("##CtxQuickAtomType", m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size());
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Table"))
+                        {
+                            m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
+                            m_PeriodicTableOpenedFromContextMenu = true;
+                            m_PeriodicTableOpen = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Apply"))
+                        {
+                            if (ApplyElementToSelectedAtoms(std::string(m_ChangeAtomElementBuffer.data())))
+                            {
+                                settingsChanged = true;
+                                AppendSelectionDebugLog("Context menu: Quick changed selected atom type");
+                            }
+                        }
+                        ImGui::Separator();
+                    }
 
                     if (ImGui::MenuItem("Select All", nullptr, false, hasLoadedAtoms))
                     {
@@ -7615,7 +7756,13 @@ namespace ds
                         {
                             m_BoxSelectEnd = mousePos;
                             const bool additiveSelection = io.KeyCtrl;
-                            const bool includeAtoms = (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                            const bool includeAtoms =
+                                (m_SelectionFilter == SelectionFilter::AtomsOnly) ||
+                                (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                            const bool includeBonds =
+                                (m_SelectionFilter == SelectionFilter::AtomsAndBonds) ||
+                                (m_SelectionFilter == SelectionFilter::BondsOnly) ||
+                                (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
                             if (includeAtoms)
                             {
                                 SelectAtomsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, additiveSelection);
@@ -7626,7 +7773,15 @@ namespace ds
                                 m_SelectedTransformEmptyIndex = -1;
                                 m_SelectedSpecialNode = SpecialNodeSelection::None;
                             }
-                            SelectBondsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, additiveSelection);
+                            if (includeBonds)
+                            {
+                                SelectBondsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, additiveSelection);
+                            }
+                            else if (!additiveSelection)
+                            {
+                                m_SelectedBondKeys.clear();
+                                m_SelectedBondLabelKey = 0;
+                            }
                             m_BoxSelecting = false;
                             m_BoxSelectArmed = false;
                             AppendSelectionDebugLog("Box select drag finished");
@@ -7637,7 +7792,13 @@ namespace ds
                     {
                         const bool additiveSelection = io.KeyCtrl;
                         m_CircleSelecting = true;
-                        const bool includeAtoms = (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                        const bool includeAtoms =
+                            (m_SelectionFilter == SelectionFilter::AtomsOnly) ||
+                            (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                        const bool includeBonds =
+                            (m_SelectionFilter == SelectionFilter::AtomsAndBonds) ||
+                            (m_SelectionFilter == SelectionFilter::BondsOnly) ||
+                            (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
                         if (includeAtoms)
                         {
                             SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, additiveSelection);
@@ -7648,7 +7809,15 @@ namespace ds
                             m_SelectedTransformEmptyIndex = -1;
                             m_SelectedSpecialNode = SpecialNodeSelection::None;
                         }
-                        SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, additiveSelection);
+                        if (includeBonds)
+                        {
+                            SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, additiveSelection);
+                        }
+                        else if (!additiveSelection)
+                        {
+                            m_SelectedBondKeys.clear();
+                            m_SelectedBondLabelKey = 0;
+                        }
                         m_BlockSelectionThisFrame = true;
                     }
 
@@ -7658,12 +7827,21 @@ namespace ds
                         {
                             if (insideViewport)
                             {
-                                const bool includeAtoms = (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                                const bool includeAtoms =
+                                    (m_SelectionFilter == SelectionFilter::AtomsOnly) ||
+                                    (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+                                const bool includeBonds =
+                                    (m_SelectionFilter == SelectionFilter::AtomsAndBonds) ||
+                                    (m_SelectionFilter == SelectionFilter::BondsOnly) ||
+                                    (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
                                 if (includeAtoms)
                                 {
                                     SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, true);
                                 }
-                                SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, true);
+                                if (includeBonds)
+                                {
+                                    SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, true);
+                                }
                             }
                             m_BlockSelectionThisFrame = true;
                         }
@@ -7980,10 +8158,21 @@ namespace ds
                     }
                 };
 
-                drawVisibilityColorRow("X", &m_ShowGlobalAxis[0], "##AxisXColor", m_AxisColors[0]);
-                drawVisibilityColorRow("Y", &m_ShowGlobalAxis[1], "##AxisYColor", m_AxisColors[1]);
-                drawVisibilityColorRow("Z", &m_ShowGlobalAxis[2], "##AxisZColor", m_AxisColors[2]);
-                drawVisibilityColorRow("3D cursor", &m_Show3DCursor, "##CursorColor", m_CursorColor);
+                if (ImGui::BeginTable("AxisCursorGrid", 2, ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    drawVisibilityColorRow("X", &m_ShowGlobalAxis[0], "##AxisXColor", m_AxisColors[0]);
+                    ImGui::TableNextColumn();
+                    drawVisibilityColorRow("Y", &m_ShowGlobalAxis[1], "##AxisYColor", m_AxisColors[1]);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    drawVisibilityColorRow("Z", &m_ShowGlobalAxis[2], "##AxisZColor", m_AxisColors[2]);
+                    ImGui::TableNextColumn();
+                    drawVisibilityColorRow("3D cursor", &m_Show3DCursor, "##CursorColor", m_CursorColor);
+                    ImGui::EndTable();
+                }
             }
 
             if (ImGui::CollapsingHeader("Camera & UI", defaultOpenFlags))
@@ -8480,6 +8669,7 @@ namespace ds
 
             if (ImGui::CollapsingHeader("Bonds", defaultOpenFlags))
             {
+                constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
                 if (ImGui::Checkbox("Auto-generate bonds", &m_AutoBondGenerationEnabled))
                 {
                     m_AutoBondsDirty = m_AutoBondGenerationEnabled;
@@ -8492,11 +8682,23 @@ namespace ds
                     settingsChanged = true;
                 }
 
-                const char *selectionFilters[] = {"Atoms + Bonds", "Bonds only"};
-                int selectionFilterIndex = (m_SelectionFilter == SelectionFilter::BondsOnly) ? 1 : 0;
+                const char *selectionFilters[] = {"Atoms", "Atoms + Bonds", "Bonds", "Bonds labels"};
+                int selectionFilterIndex = static_cast<int>(m_SelectionFilter);
                 if (ImGui::Combo("Selection filter", &selectionFilterIndex, selectionFilters, IM_ARRAYSIZE(selectionFilters)))
                 {
-                    m_SelectionFilter = (selectionFilterIndex == 1) ? SelectionFilter::BondsOnly : SelectionFilter::AtomsAndBonds;
+                    m_SelectionFilter = static_cast<SelectionFilter>(std::clamp(selectionFilterIndex, 0, 3));
+                    settingsChanged = true;
+                }
+
+                const char *bondRenderStyles[] = {"Unicolor line", "Bi-color line", "Color gradient"};
+                int bondRenderStyleIndex = static_cast<int>(m_BondRenderStyle);
+                if (ImGui::Combo("Bond render style", &bondRenderStyleIndex, bondRenderStyles, IM_ARRAYSIZE(bondRenderStyles)))
+                {
+                    m_BondRenderStyle = static_cast<BondRenderStyle>(std::clamp(bondRenderStyleIndex, 0, 2));
+                    settingsChanged = true;
+                }
+                if (ImGui::Checkbox("Delete affects labels only", &m_BondLabelDeleteOnlyMode))
+                {
                     settingsChanged = true;
                 }
 
@@ -8536,41 +8738,42 @@ namespace ds
                     settingsChanged = true;
                 }
 
-                if (ImGui::ColorEdit3("Bond color", &m_BondColor.x))
+                auto drawColorPicker = [&](const char *label, glm::vec3 &color)
                 {
-                    settingsChanged = true;
-                }
+                    if (ImGui::ColorEdit3(label, &color.x, kPickerOnlyFlags))
+                    {
+                        settingsChanged = true;
+                    }
+                };
+                if (ImGui::BeginTable("BondColorGrid", 2, ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    drawColorPicker("Bond color", m_BondColor);
+                    ImGui::TableNextColumn();
+                    drawColorPicker("Selected bond color", m_BondSelectedColor);
 
-                if (ImGui::ColorEdit3("Selected bond color", &m_BondSelectedColor.x))
-                {
-                    settingsChanged = true;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    drawColorPicker("Label text color", m_BondLabelTextColor);
+                    ImGui::TableNextColumn();
+                    drawColorPicker("Label background color", m_BondLabelBackgroundColor);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    drawColorPicker("Label border color", m_BondLabelBorderColor);
+                    ImGui::TableNextColumn();
+                    ImGui::Dummy(ImVec2(1.0f, 1.0f));
+                    ImGui::EndTable();
                 }
 
                 if (ImGui::Button("Restore deleted bonds"))
                 {
                     m_DeletedBondKeys.clear();
-                    for (auto &[key, state] : m_BondLabelStates)
-                    {
-                        (void)key;
-                        state.deleted = false;
-                    }
                     settingsChanged = true;
                 }
                 ImGui::SameLine();
                 ImGui::Text("Selected bonds: %zu", m_SelectedBondKeys.size());
-
-                if (ImGui::ColorEdit3("Label text color", &m_BondLabelTextColor.x))
-                {
-                    settingsChanged = true;
-                }
-                if (ImGui::ColorEdit3("Label background color", &m_BondLabelBackgroundColor.x))
-                {
-                    settingsChanged = true;
-                }
-                if (ImGui::ColorEdit3("Label border color", &m_BondLabelBorderColor.x))
-                {
-                    settingsChanged = true;
-                }
                 if (ImGui::SliderInt("Label precision", &m_BondLabelPrecision, 0, 6))
                 {
                     settingsChanged = true;
@@ -8588,16 +8791,15 @@ namespace ds
 
                 if (ImGui::SliderFloat("Multi label scale", &m_BondLabelMultiScaleValue, 0.25f, 4.0f, "%.2f"))
                 {
-                    settingsChanged = true;
-                }
-                if (ImGui::Button("Apply scale to selected bonds") && !m_SelectedBondKeys.empty())
-                {
-                    const float targetScale = glm::clamp(m_BondLabelMultiScaleValue, 0.25f, 4.0f);
-                    for (std::uint64_t key : m_SelectedBondKeys)
+                    if (!m_SelectedBondKeys.empty())
                     {
-                        BondLabelState &state = m_BondLabelStates[key];
-                        state.scale = targetScale;
-                        state.hidden = false;
+                        const float targetScale = glm::clamp(m_BondLabelMultiScaleValue, 0.25f, 4.0f);
+                        for (std::uint64_t key : m_SelectedBondKeys)
+                        {
+                            BondLabelState &state = m_BondLabelStates[key];
+                            state.scale = targetScale;
+                            state.hidden = false;
+                        }
                     }
                     settingsChanged = true;
                 }
@@ -8605,8 +8807,7 @@ namespace ds
                 auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
                 const bool hasSelectedLabel =
                     selectedLabelIt != m_BondLabelStates.end() &&
-                    !selectedLabelIt->second.deleted &&
-                    m_DeletedBondKeys.find(m_SelectedBondLabelKey) == m_DeletedBondKeys.end();
+                    !selectedLabelIt->second.deleted;
 
                 ImGui::Separator();
                 ImGui::TextUnformatted("Bond label objects");
@@ -8641,7 +8842,6 @@ namespace ds
                     {
                         labelState.deleted = true;
                         labelState.hidden = true;
-                        m_DeletedBondKeys.insert(m_SelectedBondLabelKey);
                         m_SelectedBondKeys.erase(m_SelectedBondLabelKey);
                         settingsChanged = true;
                     }
@@ -8655,7 +8855,6 @@ namespace ds
                         state.deleted = false;
                         state.hidden = false;
                     }
-                    m_DeletedBondKeys.clear();
                     settingsChanged = true;
                 }
             }

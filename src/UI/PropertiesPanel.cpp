@@ -358,6 +358,37 @@ namespace ds
             {
                 ImGui::SeparatorText("Atoms");
 
+                constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
+                if (ImGui::ColorEdit3("Custom color (selected atoms)", &editor.m_SelectedAtomCustomColor.x, kPickerOnlyFlags))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Button("Apply custom color"))
+                {
+                    for (std::size_t atomIndex : editor.m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= editor.m_AtomNodeIds.size())
+                        {
+                            continue;
+                        }
+                        editor.m_AtomColorOverrides[editor.m_AtomNodeIds[atomIndex]] = editor.m_SelectedAtomCustomColor;
+                    }
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear custom color"))
+                {
+                    for (std::size_t atomIndex : editor.m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= editor.m_AtomNodeIds.size())
+                        {
+                            continue;
+                        }
+                        editor.m_AtomColorOverrides.erase(editor.m_AtomNodeIds[atomIndex]);
+                    }
+                    settingsChanged = true;
+                }
+
                 if (editor.m_SelectedAtomIndices.size() == 1)
                 {
                     const std::size_t atomIndex = editor.m_SelectedAtomIndices.front();
