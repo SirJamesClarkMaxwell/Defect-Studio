@@ -36,6 +36,10 @@ namespace ds
         void EndFrame() override;
 
         std::uint32_t GetColorAttachmentRendererID() const override { return m_ColorTexture; }
+        bool ReadColorAttachmentPixels(
+            std::uint32_t &outWidth,
+            std::uint32_t &outHeight,
+            std::vector<std::uint8_t> &outRgbaPixels) const override;
 
     private:
         void RenderGrid(const glm::mat4 &viewProjection, const SceneRenderSettings &settings);

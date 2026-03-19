@@ -31,5 +31,4 @@ scripts/local/build-toolchain.local.json
 *.log
 *.tmp
 
-TODO.md
-SESSION_HANDOFF.md
+docs/project-control/**

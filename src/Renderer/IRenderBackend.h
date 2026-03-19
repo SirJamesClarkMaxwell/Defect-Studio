@@ -62,6 +62,10 @@ namespace ds
         virtual void EndFrame() = 0;
 
         virtual std::uint32_t GetColorAttachmentRendererID() const = 0;
+        virtual bool ReadColorAttachmentPixels(
+            std::uint32_t &outWidth,
+            std::uint32_t &outHeight,
+            std::vector<std::uint8_t> &outRgbaPixels) const = 0;
     };
 
 } // namespace ds

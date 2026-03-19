@@ -25,11 +25,19 @@ namespace ds
         ImGuiIO &io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
         std::filesystem::create_directories("config");
         io.IniFilename = "config/imgui_layout.ini";
 
         ImGui::StyleColorsDark();
+        ImGuiStyle &style = ImGui::GetStyle();
+        if ((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+        {
+            // Keep platform windows visually consistent with the main viewport.
+            style.WindowRounding = 0.0f;
+            style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+        }
 
         GLFWwindow *window = ApplicationContext::Get().GetWindow();
         ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -58,6 +66,15 @@ namespace ds
     {
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        ImGuiIO &io = ImGui::GetIO();
+        if ((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+        {
+            GLFWwindow *backupCurrentContext = glfwGetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            glfwMakeContextCurrent(backupCurrentContext);
+        }
     }
 
 } // namespace ds

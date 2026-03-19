@@ -52,6 +52,9 @@
 #include <commdlg.h>
 #endif
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../../vendor/glfw/deps/stb_image_write.h"
+
 namespace ds
 {
 
@@ -618,6 +621,34 @@ namespace ds
 #endif
         }
 
+        bool SaveNativeImageDialog(std::string &outPath)
+        {
+#ifdef _WIN32
+            char pathBuffer[MAX_PATH] = "exports/render.png";
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer;
+            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFilter = "PNG image (*.png)\0*.png\0JPEG image (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.lpstrDefExt = "png";
+
+            if (GetSaveFileNameA(&dialog) != FALSE)
+            {
+                outPath = pathBuffer;
+                return true;
+            }
+
+            return false;
+#else
+            (void)outPath;
+            return false;
+#endif
+        }
+
         glm::vec3 ColorFromElement(const std::string &element)
         {
             std::uint32_t hash = 2166136261u;
@@ -675,9 +706,11 @@ namespace ds
     {
         const char *defaultImportPath = "assets/samples/reduced_diamond_bulk";
         const char *defaultExportPath = "exports/CONTCAR.vasp";
+        const char *defaultRenderImagePath = "exports/render.png";
 
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultImportPath);
         std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", defaultExportPath);
+        std::snprintf(m_RenderImagePathBuffer.data(), m_RenderImagePathBuffer.size(), "%s", defaultRenderImagePath);
 
         m_SceneSettings.clearColor = glm::vec3(0.16f, 0.18f, 0.22f);
         m_SceneSettings.gridLineWidth = 1.0f;
@@ -765,7 +798,18 @@ namespace ds
             return;
         }
 
-        m_Camera->SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
+        const bool hasQueuedRenderRequest = !m_RenderImageRequest.outputPath.empty();
+
+        const float clampedRenderScale = glm::clamp(m_ViewportRenderScale, 0.25f, 1.0f);
+        std::uint32_t renderWidth = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.x * clampedRenderScale));
+        std::uint32_t renderHeight = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.y * clampedRenderScale));
+        if (hasQueuedRenderRequest)
+        {
+            renderWidth = std::max(1u, m_RenderImageRequest.width);
+            renderHeight = std::max(1u, m_RenderImageRequest.height);
+        }
+
+        m_Camera->SetViewportSize(static_cast<float>(renderWidth), static_cast<float>(renderHeight));
         const bool transformModeActive = m_TranslateModeActive || m_RotateModeActive;
         const bool allowCameraInput = m_ViewportHovered && m_ViewportFocused && !transformModeActive;
         const float scrollDelta = ApplicationContext::Get().ConsumeScrollDelta();
@@ -777,10 +821,6 @@ namespace ds
         }
         UpdateCameraOrbitTransition(deltaTime);
 
-        const float clampedRenderScale = glm::clamp(m_ViewportRenderScale, 0.25f, 1.0f);
-        const std::uint32_t renderWidth = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.x * clampedRenderScale));
-        const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.y * clampedRenderScale));
-
         m_SceneOriginPosition = glm::vec3(0.0f);
         const glm::vec3 lightToOrigin = m_SceneOriginPosition - m_LightPosition;
         if (glm::length2(lightToOrigin) > 1e-8f)
@@ -791,6 +831,20 @@ namespace ds
         m_SceneSettings.drawCellEdges = m_ShowCellEdges;
         m_SceneSettings.cellEdgeColor = glm::clamp(m_CellEdgeColor, glm::vec3(0.0f), glm::vec3(1.0f));
         m_SceneSettings.cellEdgeLineWidth = glm::clamp(m_CellEdgeLineWidth, 0.5f, 10.0f);
+
+        const SceneRenderSettings savedSceneSettings = m_SceneSettings;
+        if (hasQueuedRenderRequest)
+        {
+            if (m_RenderImageRequest.useWhiteBackground)
+            {
+                m_SceneSettings.clearColor = glm::vec3(1.0f, 1.0f, 1.0f);
+            }
+            if (m_RenderImageRequest.overrideAtomColor)
+            {
+                m_SceneSettings.overrideAtomColor = true;
+                m_SceneSettings.atomOverrideColor = glm::clamp(m_RenderImageRequest.atomOverrideColor, glm::vec3(0.0f), glm::vec3(1.0f));
+            }
+        }
 
         m_RenderBackend->ResizeViewport(renderWidth, renderHeight);
         m_RenderBackend->BeginFrame(m_SceneSettings);
@@ -1033,6 +1087,33 @@ namespace ds
         }
 
         m_RenderBackend->EndFrame();
+
+        if (hasQueuedRenderRequest)
+        {
+            const bool saved = SaveCurrentFrameAsImage(
+                m_RenderImageRequest.outputPath,
+                m_RenderImageRequest.width,
+                m_RenderImageRequest.height,
+                m_RenderImageRequest.format,
+                m_RenderImageRequest.useCrop,
+                m_RenderImageRequest.cropRectNormalized);
+
+            if (saved)
+            {
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Saved render image: " + m_RenderImageRequest.outputPath;
+                LogInfo(m_LastStructureMessage);
+            }
+            else
+            {
+                m_LastStructureOperationFailed = true;
+                m_LastStructureMessage = "Render image export failed.";
+                LogError(m_LastStructureMessage);
+            }
+
+            m_RenderImageRequest = RenderImageRequest{};
+            m_SceneSettings = savedSceneSettings;
+        }
     }
 
     bool EditorLayer::IsAtomSelected(std::size_t index) const
@@ -2444,6 +2525,567 @@ namespace ds
         }
 
         ImGui::EndPopup();
+    }
+
+    bool EditorLayer::SaveCurrentFrameAsImage(
+        const std::string &outputPath,
+        std::uint32_t width,
+        std::uint32_t height,
+        RenderImageFormat format,
+        bool useCrop,
+        const std::array<float, 4> &cropRectNormalized) const
+    {
+        if (!m_RenderBackend || outputPath.empty())
+        {
+            return false;
+        }
+
+        std::uint32_t sourceWidth = 0;
+        std::uint32_t sourceHeight = 0;
+        std::vector<std::uint8_t> sourceRgba;
+        if (!m_RenderBackend->ReadColorAttachmentPixels(sourceWidth, sourceHeight, sourceRgba))
+        {
+            return false;
+        }
+
+        if (sourceWidth == 0 || sourceHeight == 0)
+        {
+            return false;
+        }
+
+        // OpenGL textures start at bottom-left. Convert once to top-down before crop/scale.
+        std::vector<std::uint8_t> sourceTopDown;
+        sourceTopDown.resize(sourceRgba.size());
+        const std::size_t sourceRowBytes = static_cast<std::size_t>(sourceWidth) * 4u;
+        for (std::uint32_t row = 0; row < sourceHeight; ++row)
+        {
+            const std::size_t srcOffset = static_cast<std::size_t>(sourceHeight - 1u - row) * sourceRowBytes;
+            const std::size_t dstOffset = static_cast<std::size_t>(row) * sourceRowBytes;
+            std::memcpy(sourceTopDown.data() + dstOffset, sourceRgba.data() + srcOffset, sourceRowBytes);
+        }
+
+        std::uint32_t cropX = 0;
+        std::uint32_t cropY = 0;
+        std::uint32_t cropWidth = sourceWidth;
+        std::uint32_t cropHeight = sourceHeight;
+        if (useCrop)
+        {
+            const float xNorm = glm::clamp(cropRectNormalized[0], 0.0f, 1.0f);
+            const float yNorm = glm::clamp(cropRectNormalized[1], 0.0f, 1.0f);
+            const float wNorm = glm::clamp(cropRectNormalized[2], 0.0f, 1.0f);
+            const float hNorm = glm::clamp(cropRectNormalized[3], 0.0f, 1.0f);
+
+            const float x1Norm = glm::clamp(xNorm + wNorm, 0.0f, 1.0f);
+            const float y1Norm = glm::clamp(yNorm + hNorm, 0.0f, 1.0f);
+
+            const std::uint32_t x0 = static_cast<std::uint32_t>(std::floor(xNorm * static_cast<float>(sourceWidth)));
+            const std::uint32_t y0 = static_cast<std::uint32_t>(std::floor(yNorm * static_cast<float>(sourceHeight)));
+            const std::uint32_t x1 = static_cast<std::uint32_t>(std::ceil(x1Norm * static_cast<float>(sourceWidth)));
+            const std::uint32_t y1 = static_cast<std::uint32_t>(std::ceil(y1Norm * static_cast<float>(sourceHeight)));
+
+            cropX = std::min(x0, sourceWidth - 1u);
+            cropY = std::min(y0, sourceHeight - 1u);
+            cropWidth = std::max(1u, std::min(sourceWidth, std::max(x1, cropX + 1u)) - cropX);
+            cropHeight = std::max(1u, std::min(sourceHeight, std::max(y1, cropY + 1u)) - cropY);
+        }
+
+        const std::uint32_t targetWidth = std::max(1u, width);
+        const std::uint32_t targetHeight = std::max(1u, height);
+
+        std::vector<std::uint8_t> scaledRgba;
+        scaledRgba.resize(static_cast<std::size_t>(targetWidth) * static_cast<std::size_t>(targetHeight) * 4u);
+
+        auto sampleSourceBilinear = [&](float srcX, float srcY, std::uint8_t *outRgba)
+        {
+            srcX = glm::clamp(srcX, 0.0f, static_cast<float>(sourceWidth - 1u));
+            srcY = glm::clamp(srcY, 0.0f, static_cast<float>(sourceHeight - 1u));
+
+            const std::uint32_t x0 = static_cast<std::uint32_t>(std::floor(srcX));
+            const std::uint32_t y0 = static_cast<std::uint32_t>(std::floor(srcY));
+            const std::uint32_t x1 = std::min(sourceWidth - 1u, x0 + 1u);
+            const std::uint32_t y1 = std::min(sourceHeight - 1u, y0 + 1u);
+
+            const float tx = srcX - static_cast<float>(x0);
+            const float ty = srcY - static_cast<float>(y0);
+
+            const std::size_t i00 = (static_cast<std::size_t>(y0) * sourceWidth + x0) * 4u;
+            const std::size_t i10 = (static_cast<std::size_t>(y0) * sourceWidth + x1) * 4u;
+            const std::size_t i01 = (static_cast<std::size_t>(y1) * sourceWidth + x0) * 4u;
+            const std::size_t i11 = (static_cast<std::size_t>(y1) * sourceWidth + x1) * 4u;
+
+            for (int c = 0; c < 4; ++c)
+            {
+                const float v00 = static_cast<float>(sourceTopDown[i00 + static_cast<std::size_t>(c)]);
+                const float v10 = static_cast<float>(sourceTopDown[i10 + static_cast<std::size_t>(c)]);
+                const float v01 = static_cast<float>(sourceTopDown[i01 + static_cast<std::size_t>(c)]);
+                const float v11 = static_cast<float>(sourceTopDown[i11 + static_cast<std::size_t>(c)]);
+                const float vx0 = v00 + (v10 - v00) * tx;
+                const float vx1 = v01 + (v11 - v01) * tx;
+                const float vxy = vx0 + (vx1 - vx0) * ty;
+                outRgba[c] = static_cast<std::uint8_t>(glm::clamp(vxy, 0.0f, 255.0f));
+            }
+        };
+
+        for (std::uint32_t y = 0; y < targetHeight; ++y)
+        {
+            for (std::uint32_t x = 0; x < targetWidth; ++x)
+            {
+                const float srcX = static_cast<float>(cropX) +
+                                   ((static_cast<float>(x) + 0.5f) * static_cast<float>(cropWidth) / static_cast<float>(targetWidth)) - 0.5f;
+                const float srcY = static_cast<float>(cropY) +
+                                   ((static_cast<float>(y) + 0.5f) * static_cast<float>(cropHeight) / static_cast<float>(targetHeight)) - 0.5f;
+
+                const std::size_t dstIndex = (static_cast<std::size_t>(y) * targetWidth + x) * 4u;
+                sampleSourceBilinear(srcX, srcY, &scaledRgba[dstIndex]);
+            }
+        }
+
+        if (m_ShowBondLengthLabels && m_Camera && !m_GeneratedBonds.empty())
+        {
+            auto drawFilledRect = [&](int x0, int y0, int x1, int y1, const glm::u8vec4 &color)
+            {
+                x0 = std::max(0, x0);
+                y0 = std::max(0, y0);
+                x1 = std::min(static_cast<int>(targetWidth), x1);
+                y1 = std::min(static_cast<int>(targetHeight), y1);
+                if (x0 >= x1 || y0 >= y1)
+                {
+                    return;
+                }
+
+                for (int y = y0; y < y1; ++y)
+                {
+                    for (int x = x0; x < x1; ++x)
+                    {
+                        const std::size_t idx = (static_cast<std::size_t>(y) * targetWidth + static_cast<std::size_t>(x)) * 4u;
+                        scaledRgba[idx + 0] = color.r;
+                        scaledRgba[idx + 1] = color.g;
+                        scaledRgba[idx + 2] = color.b;
+                        scaledRgba[idx + 3] = color.a;
+                    }
+                }
+            };
+
+            auto drawSegmentGlyph = [&](int x, int y, int segW, int segT, int mask, const glm::u8vec4 &color)
+            {
+                // 7-segment layout: 0 top, 1 upper-right, 2 lower-right, 3 bottom,
+                // 4 lower-left, 5 upper-left, 6 middle.
+                const int h = segW * 2 + segT * 3;
+                const int w = segW + segT * 2;
+
+                if ((mask & (1 << 0)) != 0)
+                    drawFilledRect(x + segT, y, x + segT + segW, y + segT, color);
+                if ((mask & (1 << 1)) != 0)
+                    drawFilledRect(x + segT + segW, y + segT, x + w, y + segT + segW, color);
+                if ((mask & (1 << 2)) != 0)
+                    drawFilledRect(x + segT + segW, y + segT + segW + segT, x + w, y + h - segT, color);
+                if ((mask & (1 << 3)) != 0)
+                    drawFilledRect(x + segT, y + h - segT, x + segT + segW, y + h, color);
+                if ((mask & (1 << 4)) != 0)
+                    drawFilledRect(x, y + segT + segW + segT, x + segT, y + h - segT, color);
+                if ((mask & (1 << 5)) != 0)
+                    drawFilledRect(x, y + segT, x + segT, y + segT + segW, color);
+                if ((mask & (1 << 6)) != 0)
+                    drawFilledRect(x + segT, y + segT + segW, x + segT + segW, y + segT + segW + segT, color);
+            };
+
+            auto drawGlyph = [&](char c, int x, int y, int segW, int segT, const glm::u8vec4 &color) -> int
+            {
+                const int glyphW = segW + segT * 2;
+                const int glyphH = segW * 2 + segT * 3;
+
+                if (c >= '0' && c <= '9')
+                {
+                    static const int masks[10] = {
+                        (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5),
+                        (1 << 1) | (1 << 2),
+                        (1 << 0) | (1 << 1) | (1 << 6) | (1 << 4) | (1 << 3),
+                        (1 << 0) | (1 << 1) | (1 << 6) | (1 << 2) | (1 << 3),
+                        (1 << 5) | (1 << 6) | (1 << 1) | (1 << 2),
+                        (1 << 0) | (1 << 5) | (1 << 6) | (1 << 2) | (1 << 3),
+                        (1 << 0) | (1 << 5) | (1 << 6) | (1 << 4) | (1 << 2) | (1 << 3),
+                        (1 << 0) | (1 << 1) | (1 << 2),
+                        (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6),
+                        (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 6)};
+                    drawSegmentGlyph(x, y, segW, segT, masks[c - '0'], color);
+                    return glyphW + segT;
+                }
+
+                if (c == '.')
+                {
+                    drawFilledRect(x + glyphW - segT, y + glyphH - segT, x + glyphW, y + glyphH, color);
+                    return segT * 2;
+                }
+
+                if (c == 'A' || c == 'a')
+                {
+                    drawSegmentGlyph(x, y, segW, segT, (1 << 0) | (1 << 1) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6), color);
+                    return glyphW + segT;
+                }
+
+                if (c == ' ')
+                {
+                    return segT * 2;
+                }
+
+                return glyphW;
+            };
+
+            auto drawText = [&](const std::string &text, int x, int y, int segW, int segT, const glm::u8vec4 &color) -> int
+            {
+                int cursor = x;
+                for (char c : text)
+                {
+                    cursor += drawGlyph(c, cursor, y, segW, segT, color);
+                }
+                return cursor - x;
+            };
+
+            const glm::u8vec4 textColor(
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelTextColor.r * 255.0f, 0.0f, 255.0f)),
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelTextColor.g * 255.0f, 0.0f, 255.0f)),
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelTextColor.b * 255.0f, 0.0f, 255.0f)),
+                255u);
+            const glm::u8vec4 frameColor(
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelBorderColor.r * 255.0f, 0.0f, 255.0f)),
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelBorderColor.g * 255.0f, 0.0f, 255.0f)),
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelBorderColor.b * 255.0f, 0.0f, 255.0f)),
+                255u);
+            const glm::u8vec4 bgColor(
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelBackgroundColor.r * 255.0f, 0.0f, 255.0f)),
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelBackgroundColor.g * 255.0f, 0.0f, 255.0f)),
+                static_cast<std::uint8_t>(glm::clamp(m_BondLabelBackgroundColor.b * 255.0f, 0.0f, 255.0f)),
+                255u);
+
+            const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+            const int segThickness = std::max(1, static_cast<int>(std::round(2.0f * m_RenderBondLabelScaleMultiplier)));
+            const int segWidth = std::max(4, static_cast<int>(std::round(6.0f * m_RenderBondLabelScaleMultiplier)));
+            const int textHeight = segWidth * 2 + segThickness * 3;
+
+            for (const BondSegment &bond : m_GeneratedBonds)
+            {
+                const std::uint64_t bondKey = MakeBondPairKey(bond.atomA, bond.atomB);
+                const auto labelStateIt = m_BondLabelStates.find(bondKey);
+                if (m_DeletedBondKeys.find(bondKey) != m_DeletedBondKeys.end() ||
+                    m_HiddenBondKeys.find(bondKey) != m_HiddenBondKeys.end() ||
+                    IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                    !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB) ||
+                    (labelStateIt != m_BondLabelStates.end() && (labelStateIt->second.hidden || labelStateIt->second.deleted)))
+                {
+                    continue;
+                }
+
+                const glm::vec4 clip = viewProjection * glm::vec4(bond.midpoint, 1.0f);
+                if (clip.w <= 0.0001f)
+                {
+                    continue;
+                }
+
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f)
+                {
+                    continue;
+                }
+
+                const float srcX = (ndc.x * 0.5f + 0.5f) * static_cast<float>(sourceWidth);
+                const float srcY = (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(sourceHeight);
+
+                if (srcX < static_cast<float>(cropX) || srcX >= static_cast<float>(cropX + cropWidth) ||
+                    srcY < static_cast<float>(cropY) || srcY >= static_cast<float>(cropY + cropHeight))
+                {
+                    continue;
+                }
+
+                const float dstXf = (srcX - static_cast<float>(cropX)) * static_cast<float>(targetWidth) / static_cast<float>(cropWidth);
+                const float dstYf = (srcY - static_cast<float>(cropY)) * static_cast<float>(targetHeight) / static_cast<float>(cropHeight);
+
+                std::ostringstream textStream;
+                textStream << std::fixed << std::setprecision(std::max(0, m_BondLabelPrecision)) << bond.length;
+                const std::string label = textStream.str() + " A";
+
+                int textWidth = 0;
+                {
+                    int cursor = 0;
+                    for (char c : label)
+                    {
+                        if (c >= '0' && c <= '9')
+                            cursor += (segWidth + segThickness * 2) + segThickness;
+                        else if (c == '.')
+                            cursor += segThickness * 2;
+                        else if (c == 'A' || c == 'a')
+                            cursor += (segWidth + segThickness * 2) + segThickness;
+                        else if (c == ' ')
+                            cursor += segThickness * 2;
+                    }
+                    textWidth = std::max(1, cursor);
+                }
+
+                const int padding = std::max(2, segThickness + 1);
+                const int boxW = textWidth + padding * 2;
+                const int boxH = textHeight + padding * 2;
+                const int boxX = static_cast<int>(std::round(dstXf)) - boxW / 2;
+                const int boxY = static_cast<int>(std::round(dstYf)) - boxH / 2;
+
+                drawFilledRect(boxX, boxY, boxX + boxW, boxY + boxH, bgColor);
+                drawFilledRect(boxX, boxY, boxX + boxW, boxY + 1, frameColor);
+                drawFilledRect(boxX, boxY + boxH - 1, boxX + boxW, boxY + boxH, frameColor);
+                drawFilledRect(boxX, boxY, boxX + 1, boxY + boxH, frameColor);
+                drawFilledRect(boxX + boxW - 1, boxY, boxX + boxW, boxY + boxH, frameColor);
+
+                drawText(label, boxX + padding, boxY + padding, segWidth, segThickness, textColor);
+            }
+        }
+
+        std::filesystem::path output = outputPath;
+        std::filesystem::create_directories(output.parent_path());
+
+        const std::size_t rowBytes = static_cast<std::size_t>(targetWidth) * 4u;
+
+        if (format == RenderImageFormat::Png)
+        {
+            const int ok = stbi_write_png(output.string().c_str(),
+                                          static_cast<int>(targetWidth),
+                                          static_cast<int>(targetHeight),
+                                          4,
+                                          scaledRgba.data(),
+                                          static_cast<int>(rowBytes));
+            return ok != 0;
+        }
+
+        std::vector<std::uint8_t> scaledRgb;
+        scaledRgb.resize(static_cast<std::size_t>(targetWidth) * static_cast<std::size_t>(targetHeight) * 3u);
+        for (std::size_t i = 0, j = 0; i < scaledRgba.size(); i += 4, j += 3)
+        {
+            scaledRgb[j + 0] = scaledRgba[i + 0];
+            scaledRgb[j + 1] = scaledRgba[i + 1];
+            scaledRgb[j + 2] = scaledRgba[i + 2];
+        }
+
+        const int quality = std::clamp(m_RenderJpegQuality, 20, 100);
+        const int ok = stbi_write_jpg(output.string().c_str(),
+                                      static_cast<int>(targetWidth),
+                                      static_cast<int>(targetHeight),
+                                      3,
+                                      scaledRgb.data(),
+                                      quality);
+        return ok != 0;
+    }
+
+    void EditorLayer::DrawRenderImageDialog(bool &settingsChanged)
+    {
+        if (!m_ShowRenderImageDialog)
+        {
+            return;
+        }
+
+        bool dialogOpen = m_ShowRenderImageDialog;
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (ImGui::Begin("Render Image", &dialogOpen, ImGuiWindowFlags_NoDocking))
+        {
+            ImGui::InputText("Output path", m_RenderImagePathBuffer.data(), m_RenderImagePathBuffer.size());
+            ImGui::SameLine();
+            if (ImGui::Button("Browse..."))
+            {
+                std::string selectedPath;
+                if (SaveNativeImageDialog(selectedPath))
+                {
+                    std::snprintf(m_RenderImagePathBuffer.data(), m_RenderImagePathBuffer.size(), "%s", selectedPath.c_str());
+                }
+            }
+
+            int width = std::max(1, m_RenderImageWidth);
+            int height = std::max(1, m_RenderImageHeight);
+            if (ImGui::InputInt("Width", &width, 64, 256))
+            {
+                m_RenderImageWidth = std::clamp(width, 64, 8192);
+                settingsChanged = true;
+            }
+            if (ImGui::InputInt("Height", &height, 64, 256))
+            {
+                m_RenderImageHeight = std::clamp(height, 64, 8192);
+                settingsChanged = true;
+            }
+
+            ImGui::TextUnformatted("Quick presets:");
+            struct ResolutionPreset
+            {
+                const char *label;
+                int width;
+                int height;
+            };
+            static constexpr ResolutionPreset kResolutionPresets[] = {
+                {"HD", 1280, 720},
+                {"FHD", 1920, 1080},
+                {"QHD", 2560, 1440},
+                {"4K UHD", 3840, 2160},
+                {"8K UHD", 7680, 4320}};
+            for (int i = 0; i < static_cast<int>(IM_ARRAYSIZE(kResolutionPresets)); ++i)
+            {
+                if (ImGui::Button(kResolutionPresets[i].label))
+                {
+                    m_RenderImageWidth = kResolutionPresets[i].width;
+                    m_RenderImageHeight = kResolutionPresets[i].height;
+                    settingsChanged = true;
+                }
+                if (i + 1 < static_cast<int>(IM_ARRAYSIZE(kResolutionPresets)))
+                {
+                    ImGui::SameLine();
+                }
+            }
+
+            const char *formatLabels[] = {"PNG", "JPG"};
+            int formatIndex = static_cast<int>(m_RenderImageFormat);
+            if (ImGui::Combo("Format", &formatIndex, formatLabels, IM_ARRAYSIZE(formatLabels)))
+            {
+                m_RenderImageFormat = static_cast<RenderImageFormat>(std::clamp(formatIndex, 0, 1));
+                settingsChanged = true;
+            }
+
+            if (m_RenderImageFormat == RenderImageFormat::Jpg)
+            {
+                if (ImGui::SliderInt("JPG quality", &m_RenderJpegQuality, 20, 100))
+                {
+                    settingsChanged = true;
+                }
+            }
+
+            ImGui::Checkbox("Frame preview", &m_ShowRenderFramePreview);
+
+            ImGui::SeparatorText("Render look overrides");
+            if (ImGui::Checkbox("White background", &m_RenderUseWhiteBackground))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Override atom color", &m_RenderOverrideAtomColor))
+            {
+                settingsChanged = true;
+            }
+            constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
+            if (m_RenderOverrideAtomColor && ImGui::ColorEdit3("Render atom color", &m_RenderAtomOverrideColor.x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("Render overlays");
+            if (ImGui::Checkbox("Show bond length labels", &m_ShowBondLengthLabels))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::SliderFloat("Bond label scale", &m_RenderBondLabelScaleMultiplier, 0.25f, 4.0f, "%.2f"))
+            {
+                m_RenderBondLabelScaleMultiplier = glm::clamp(m_RenderBondLabelScaleMultiplier, 0.25f, 4.0f);
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Bond label text", &m_BondLabelTextColor.x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Bond label frame", &m_BondLabelBorderColor.x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::ColorEdit3("Bond label background", &m_BondLabelBackgroundColor.x, kPickerOnlyFlags))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Show static angle labels", &m_ShowStaticAngleLabels))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Show selection angle measurement", &m_ShowSelectionAngleMeasurement))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("Capture area");
+            if (ImGui::Checkbox("Crop to selected area", &m_RenderCropEnabled))
+            {
+                settingsChanged = true;
+            }
+            if (m_RenderCropEnabled)
+            {
+                float x = glm::clamp(m_RenderCropRectNormalized[0], 0.0f, 1.0f);
+                float y = glm::clamp(m_RenderCropRectNormalized[1], 0.0f, 1.0f);
+                float w = glm::clamp(m_RenderCropRectNormalized[2], 0.01f, 1.0f);
+                float h = glm::clamp(m_RenderCropRectNormalized[3], 0.01f, 1.0f);
+
+                bool cropChanged = false;
+                cropChanged |= ImGui::SliderFloat("Crop X", &x, 0.0f, 1.0f, "%.3f");
+                cropChanged |= ImGui::SliderFloat("Crop Y", &y, 0.0f, 1.0f, "%.3f");
+                cropChanged |= ImGui::SliderFloat("Crop Width", &w, 0.01f, 1.0f, "%.3f");
+                cropChanged |= ImGui::SliderFloat("Crop Height", &h, 0.01f, 1.0f, "%.3f");
+
+                if (cropChanged)
+                {
+                    x = glm::clamp(x, 0.0f, 1.0f);
+                    y = glm::clamp(y, 0.0f, 1.0f);
+                    const float maxWidth = std::max(0.01f, 1.0f - x);
+                    const float maxHeight = std::max(0.01f, 1.0f - y);
+                    w = glm::clamp(w, 0.01f, maxWidth);
+                    h = glm::clamp(h, 0.01f, maxHeight);
+                    m_RenderCropRectNormalized = {x, y, w, h};
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Button("Reset crop area"))
+                {
+                    m_RenderCropRectNormalized = {0.0f, 0.0f, 1.0f, 1.0f};
+                    settingsChanged = true;
+                }
+            }
+
+            if (m_ShowRenderFramePreview && m_RenderBackend)
+            {
+                const std::uint32_t texture = m_RenderBackend->GetColorAttachmentRendererID();
+                if (texture != 0)
+                {
+                    ImGui::SeparatorText("Current frame preview");
+                    const ImVec2 avail = ImGui::GetContentRegionAvail();
+                    const float previewHeight = std::min(220.0f, avail.y);
+                    const float aspect = (m_ViewportSize.y > 0.0f) ? (m_ViewportSize.x / m_ViewportSize.y) : (16.0f / 9.0f);
+                    const float previewWidth = std::min(avail.x, previewHeight * aspect);
+                    ImTextureID textureID = (ImTextureID)(std::uintptr_t)texture;
+                    ImGui::Image(textureID, ImVec2(previewWidth, previewHeight), ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+                }
+            }
+
+            ImGui::Separator();
+            if (ImGui::Button("Render and save"))
+            {
+                const std::string outputPath = m_RenderImagePathBuffer.data();
+                if (outputPath.empty())
+                {
+                    m_LastStructureOperationFailed = true;
+                    m_LastStructureMessage = "Render image export failed: output path is empty.";
+                    LogError(m_LastStructureMessage);
+                }
+                else
+                {
+                    m_RenderImageRequest.outputPath = outputPath;
+                    m_RenderImageRequest.width = static_cast<std::uint32_t>(std::max(1, m_RenderImageWidth));
+                    m_RenderImageRequest.height = static_cast<std::uint32_t>(std::max(1, m_RenderImageHeight));
+                    m_RenderImageRequest.format = m_RenderImageFormat;
+                    m_RenderImageRequest.useWhiteBackground = m_RenderUseWhiteBackground;
+                    m_RenderImageRequest.overrideAtomColor = m_RenderOverrideAtomColor;
+                    m_RenderImageRequest.atomOverrideColor = glm::clamp(m_RenderAtomOverrideColor, glm::vec3(0.0f), glm::vec3(1.0f));
+                    m_RenderImageRequest.useCrop = m_RenderCropEnabled;
+                    m_RenderImageRequest.cropRectNormalized = m_RenderCropRectNormalized;
+
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Render request queued: " + outputPath;
+                    LogInfo(m_LastStructureMessage);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Close"))
+            {
+                dialogOpen = false;
+            }
+        }
+        ImGui::End();
+
+        m_ShowRenderImageDialog = dialogOpen;
     }
 
     void EditorLayer::SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection)
@@ -5702,6 +6344,11 @@ namespace ds
                         ExportStructureToPath(selectedPath, exportMode, m_ExportPrecision);
                     }
                 }
+
+                if (ImGui::MenuItem("Render Image", "F12"))
+                {
+                    m_ShowRenderImageDialog = true;
+                }
                 ImGui::EndMenu();
             }
 
@@ -6434,6 +7081,11 @@ namespace ds
         {
             m_ShowToolsPanel = !m_ShowToolsPanel;
             settingsChanged = true;
+        }
+
+        if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))
+        {
+            m_ShowRenderImageDialog = true;
         }
 
         const bool translateModalHotkey = ImGui::IsKeyPressed(ImGuiKey_G, false);
@@ -8028,6 +8680,31 @@ namespace ds
 
                 {
                     ImDrawList *overlayDraw = ImGui::GetWindowDrawList();
+
+                    if (m_RenderCropEnabled)
+                    {
+                        const float xNorm = glm::clamp(m_RenderCropRectNormalized[0], 0.0f, 1.0f);
+                        const float yNorm = glm::clamp(m_RenderCropRectNormalized[1], 0.0f, 1.0f);
+                        const float wNorm = glm::clamp(m_RenderCropRectNormalized[2], 0.01f, 1.0f);
+                        const float hNorm = glm::clamp(m_RenderCropRectNormalized[3], 0.01f, 1.0f);
+                        const float x1Norm = glm::clamp(xNorm + wNorm, 0.0f, 1.0f);
+                        const float y1Norm = glm::clamp(yNorm + hNorm, 0.0f, 1.0f);
+
+                        const float viewportWidth = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                        const float viewportHeight = m_ViewportRectMax.y - m_ViewportRectMin.y;
+
+                        const ImVec2 cropMin(
+                            m_ViewportRectMin.x + viewportWidth * xNorm,
+                            m_ViewportRectMin.y + viewportHeight * yNorm);
+                        const ImVec2 cropMax(
+                            m_ViewportRectMin.x + viewportWidth * x1Norm,
+                            m_ViewportRectMin.y + viewportHeight * y1Norm);
+
+                        overlayDraw->AddRectFilled(cropMin, cropMax, IM_COL32(125, 230, 255, 18), 2.0f);
+                        overlayDraw->AddRect(cropMin, cropMax, IM_COL32(125, 230, 255, 230), 2.0f, 0, 2.0f);
+                        overlayDraw->AddText(ImVec2(cropMin.x + 6.0f, cropMin.y + 6.0f), IM_COL32(200, 245, 255, 255), "Render area");
+                    }
+
                     auto projectWorldToScreen = [&](const glm::vec3 &world, glm::vec2 &outScreen) -> bool
                     {
                         const glm::vec4 clip = m_Camera->GetViewProjectionMatrix() * glm::vec4(world, 1.0f);
@@ -8148,7 +8825,8 @@ namespace ds
                             char label[32] = {};
                             std::snprintf(label, sizeof(label), formatSpec, bond.length);
 
-                            const float labelFontSize = ImGui::GetFontSize() * labelState.scale;
+                            const float labelScaleMultiplier = glm::clamp(m_RenderBondLabelScaleMultiplier, 0.25f, 4.0f);
+                            const float labelFontSize = ImGui::GetFontSize() * labelState.scale * labelScaleMultiplier;
                             const ImVec2 textSize = font->CalcTextSizeA(labelFontSize, std::numeric_limits<float>::max(), 0.0f, label);
                             const ImVec2 textPos(screenMidpoint.x - textSize.x * 0.5f, screenMidpoint.y - 8.0f - textSize.y);
                             const bool labelSelected =
@@ -10354,8 +11032,8 @@ namespace ds
 
                 if (ImGui::DragFloatRange2("Bond line width min/max", &m_BondLineWidthMin, &m_BondLineWidthMax, 0.05f, 0.2f, 20.0f, "min %.2f", "max %.2f"))
                 {
-                    m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 20.0f);
-                    m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 20.0f);
+                    m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 50.0f);
+                    m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 100.0f);
                     if (m_BondLineWidthMin > m_BondLineWidthMax)
                     {
                         std::swap(m_BondLineWidthMin, m_BondLineWidthMax);
@@ -11241,6 +11919,7 @@ namespace ds
 
         DrawPeriodicTableWindow();
         DrawChangeAtomTypeConfirmDialog();
+        DrawRenderImageDialog(settingsChanged);
 
         if (m_ShowAddAtomDialog)
         {

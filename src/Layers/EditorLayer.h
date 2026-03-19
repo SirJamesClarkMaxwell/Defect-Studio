@@ -90,6 +90,25 @@ namespace ds
             ChangeSelectedAtoms = 1
         };
 
+        enum class RenderImageFormat
+        {
+            Png = 0,
+            Jpg = 1
+        };
+
+        struct RenderImageRequest
+        {
+            std::string outputPath;
+            std::uint32_t width = 1920;
+            std::uint32_t height = 1080;
+            RenderImageFormat format = RenderImageFormat::Png;
+            bool useWhiteBackground = false;
+            bool overrideAtomColor = false;
+            glm::vec3 atomOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
+            bool useCrop = false;
+            std::array<float, 4> cropRectNormalized = {0.0f, 0.0f, 1.0f, 1.0f};
+        };
+
         struct TransformEmpty
         {
             SceneUUID id = 0;
@@ -220,6 +239,14 @@ namespace ds
         void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
         void DrawPeriodicTableWindow();
         void DrawChangeAtomTypeConfirmDialog();
+        void DrawRenderImageDialog(bool &settingsChanged);
+        bool SaveCurrentFrameAsImage(
+            const std::string &outputPath,
+            std::uint32_t width,
+            std::uint32_t height,
+            RenderImageFormat format,
+            bool useCrop,
+            const std::array<float, 4> &cropRectNormalized) const;
         void RebuildAutoBonds(const std::vector<glm::vec3> &atomCartesianPositions);
         float ResolveBondThresholdScaleForPair(const std::string &elementA, const std::string &elementB) const;
         void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll = std::nullopt);
@@ -250,8 +277,22 @@ namespace ds
 
         std::array<char, 512> m_ImportPathBuffer = {};
         std::array<char, 512> m_ExportPathBuffer = {};
+        std::array<char, 512> m_RenderImagePathBuffer = {};
         int m_ExportPrecision = 8;
         int m_ExportCoordinateModeIndex = 0;
+        int m_RenderImageWidth = 1920;
+        int m_RenderImageHeight = 1080;
+        RenderImageFormat m_RenderImageFormat = RenderImageFormat::Png;
+        bool m_ShowRenderImageDialog = false;
+        bool m_ShowRenderFramePreview = true;
+        int m_RenderJpegQuality = 92;
+        bool m_RenderUseWhiteBackground = false;
+        bool m_RenderOverrideAtomColor = false;
+        glm::vec3 m_RenderAtomOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
+        bool m_RenderCropEnabled = false;
+        std::array<float, 4> m_RenderCropRectNormalized = {0.0f, 0.0f, 1.0f, 1.0f};
+        float m_RenderBondLabelScaleMultiplier = 1.0f;
+        RenderImageRequest m_RenderImageRequest;
         std::array<char, 16> m_AddAtomElementBuffer = {'S', 'i', '\0'};
         std::array<char, 16> m_ChangeAtomElementBuffer = {'G', 'e', '\0'};
         glm::vec3 m_AddAtomPosition = glm::vec3(0.0f);

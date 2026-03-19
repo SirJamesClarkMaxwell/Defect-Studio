@@ -535,4 +535,35 @@ namespace ds
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
+    bool OpenGLRendererBackend::ReadColorAttachmentPixels(
+        std::uint32_t &outWidth,
+        std::uint32_t &outHeight,
+        std::vector<std::uint8_t> &outRgbaPixels) const
+    {
+        outWidth = 0;
+        outHeight = 0;
+        outRgbaPixels.clear();
+
+        if (m_ColorTexture == 0 || m_ViewportWidth == 0 || m_ViewportHeight == 0)
+        {
+            return false;
+        }
+
+        const std::size_t pixelCount = static_cast<std::size_t>(m_ViewportWidth) * static_cast<std::size_t>(m_ViewportHeight);
+        if (pixelCount == 0)
+        {
+            return false;
+        }
+
+        outRgbaPixels.resize(pixelCount * 4u);
+
+        glBindTexture(GL_TEXTURE_2D, m_ColorTexture);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, outRgbaPixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        outWidth = m_ViewportWidth;
+        outHeight = m_ViewportHeight;
+        return true;
+    }
+
 } // namespace ds
