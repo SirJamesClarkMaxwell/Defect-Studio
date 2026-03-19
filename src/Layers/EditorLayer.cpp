@@ -19,6 +19,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
@@ -61,6 +62,8 @@ namespace ds
         constexpr float kBaseZoomSensitivity = 0.17f;
         constexpr const char *kSelectionDebugLogPath = "logs/selection_debug.log";
 
+        std::string NormalizeElementSymbol(const std::string &symbol);
+
         SceneUUID GenerateSceneUUID()
         {
             static std::mt19937_64 rng(std::random_device{}());
@@ -101,6 +104,204 @@ namespace ds
             const std::uint64_t low = static_cast<std::uint64_t>(std::min(atomA, atomB));
             const std::uint64_t high = static_cast<std::uint64_t>(std::max(atomA, atomB));
             return (low << 32) | (high & 0xffffffffull);
+        }
+
+        std::string MakeAngleTripletKey(std::size_t atomA, std::size_t atomB, std::size_t atomC)
+        {
+            std::size_t a = atomA;
+            std::size_t c = atomC;
+            if (a > c)
+            {
+                std::swap(a, c);
+            }
+
+            return std::to_string(a) + "|" + std::to_string(atomB) + "|" + std::to_string(c);
+        }
+
+        std::string BuildElementPairScaleKey(const std::string &elementA, const std::string &elementB)
+        {
+            std::string a = NormalizeElementSymbol(elementA);
+            std::string b = NormalizeElementSymbol(elementB);
+            if (a.empty() || b.empty())
+            {
+                return std::string();
+            }
+
+            if (a > b)
+            {
+                std::swap(a, b);
+            }
+
+            return a + "-" + b;
+        }
+
+        std::unordered_map<std::string, float> ParsePairScaleOverrides(const std::string &encoded)
+        {
+            std::unordered_map<std::string, float> overrides;
+            if (encoded.empty())
+            {
+                return overrides;
+            }
+
+            std::size_t cursor = 0;
+            while (cursor <= encoded.size())
+            {
+                const std::size_t sep = encoded.find(';', cursor);
+                const std::string token = (sep == std::string::npos)
+                                              ? encoded.substr(cursor)
+                                              : encoded.substr(cursor, sep - cursor);
+                if (!token.empty())
+                {
+                    const std::size_t eq = token.find(':');
+                    if (eq != std::string::npos)
+                    {
+                        const std::string key = token.substr(0, eq);
+                        const std::string value = token.substr(eq + 1);
+                        try
+                        {
+                            overrides[key] = std::stof(value);
+                        }
+                        catch (...)
+                        {
+                        }
+                    }
+                }
+
+                if (sep == std::string::npos)
+                {
+                    break;
+                }
+                cursor = sep + 1;
+            }
+
+            return overrides;
+        }
+
+        std::string SerializePairScaleOverrides(const std::unordered_map<std::string, float> &overrides)
+        {
+            if (overrides.empty())
+            {
+                return std::string();
+            }
+
+            std::vector<std::string> keys;
+            keys.reserve(overrides.size());
+            for (const auto &[key, value] : overrides)
+            {
+                (void)value;
+                keys.push_back(key);
+            }
+            std::sort(keys.begin(), keys.end());
+
+            std::ostringstream out;
+            for (std::size_t i = 0; i < keys.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    out << ';';
+                }
+
+                const auto valueIt = overrides.find(keys[i]);
+                if (valueIt == overrides.end())
+                {
+                    continue;
+                }
+
+                out << keys[i] << ':' << valueIt->second;
+            }
+            return out.str();
+        }
+
+        std::unordered_map<std::string, glm::vec3> ParseElementColorOverrides(const std::string &encoded)
+        {
+            std::unordered_map<std::string, glm::vec3> overrides;
+            if (encoded.empty())
+            {
+                return overrides;
+            }
+
+            std::size_t cursor = 0;
+            while (cursor <= encoded.size())
+            {
+                const std::size_t sep = encoded.find(';', cursor);
+                const std::string token = (sep == std::string::npos)
+                                              ? encoded.substr(cursor)
+                                              : encoded.substr(cursor, sep - cursor);
+                if (!token.empty())
+                {
+                    const std::size_t eq = token.find(':');
+                    if (eq != std::string::npos)
+                    {
+                        const std::string element = NormalizeElementSymbol(token.substr(0, eq));
+                        const std::string values = token.substr(eq + 1);
+                        std::stringstream stream(values);
+                        std::string part;
+                        std::array<float, 3> rgb = {0.0f, 0.0f, 0.0f};
+                        int componentIndex = 0;
+                        while (std::getline(stream, part, ',') && componentIndex < 3)
+                        {
+                            try
+                            {
+                                rgb[componentIndex] = std::stof(part);
+                                ++componentIndex;
+                            }
+                            catch (...)
+                            {
+                                componentIndex = 0;
+                                break;
+                            }
+                        }
+
+                        if (!element.empty() && componentIndex == 3)
+                        {
+                            overrides[element] = glm::clamp(glm::vec3(rgb[0], rgb[1], rgb[2]), glm::vec3(0.0f), glm::vec3(1.0f));
+                        }
+                    }
+                }
+
+                if (sep == std::string::npos)
+                {
+                    break;
+                }
+                cursor = sep + 1;
+            }
+
+            return overrides;
+        }
+
+        std::string SerializeElementColorOverrides(const std::unordered_map<std::string, glm::vec3> &overrides)
+        {
+            if (overrides.empty())
+            {
+                return std::string();
+            }
+
+            std::vector<std::string> keys;
+            keys.reserve(overrides.size());
+            for (const auto &[key, value] : overrides)
+            {
+                (void)value;
+                keys.push_back(key);
+            }
+            std::sort(keys.begin(), keys.end());
+
+            std::ostringstream out;
+            out << std::fixed << std::setprecision(4);
+            for (std::size_t i = 0; i < keys.size(); ++i)
+            {
+                const auto it = overrides.find(keys[i]);
+                if (it == overrides.end())
+                {
+                    continue;
+                }
+                if (i > 0)
+                {
+                    out << ';';
+                }
+                const glm::vec3 c = glm::clamp(it->second, glm::vec3(0.0f), glm::vec3(1.0f));
+                out << keys[i] << ':' << c.r << ',' << c.g << ',' << c.b;
+            }
+            return out.str();
         }
 
         std::string BuildDebugTimestampNow()
@@ -326,32 +527,67 @@ namespace ds
             return 1.0f;
         }
 
-        bool OpenNativeFileDialog(std::string &outPath)
+        bool OpenNativeFilesDialog(std::vector<std::string> &outPaths)
         {
 #ifdef _WIN32
-            char pathBuffer[MAX_PATH] = {};
+            constexpr DWORD kDialogBufferSize = 32u * 1024u;
+            std::vector<char> pathBuffer(static_cast<std::size_t>(kDialogBufferSize), '\0');
 
             OPENFILENAMEA dialog = {};
             dialog.lStructSize = sizeof(dialog);
             dialog.hwndOwner = nullptr;
-            dialog.lpstrFile = pathBuffer;
-            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFile = pathBuffer.data();
+            dialog.nMaxFile = kDialogBufferSize;
             dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
-            dialog.nFilterIndex = 1;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
+            dialog.nFilterIndex = 2;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
             dialog.lpstrDefExt = "vasp";
 
             if (GetOpenFileNameA(&dialog) != FALSE)
             {
-                outPath = pathBuffer;
-                return true;
+                outPaths.clear();
+
+                const char *firstEntry = pathBuffer.data();
+                if (*firstEntry == '\0')
+                {
+                    return false;
+                }
+
+                const char *secondEntry = firstEntry + std::strlen(firstEntry) + 1;
+                if (*secondEntry == '\0')
+                {
+                    outPaths.emplace_back(firstEntry);
+                    return true;
+                }
+
+                const std::string directory = firstEntry;
+                const char *cursor = secondEntry;
+                while (*cursor != '\0')
+                {
+                    outPaths.push_back(directory + "\\" + cursor);
+                    cursor += std::strlen(cursor) + 1;
+                }
+
+                return !outPaths.empty();
             }
 
             return false;
 #else
-            (void)outPath;
+            (void)outPaths;
             return false;
 #endif
+        }
+
+        bool OpenNativeFileDialog(std::string &outPath)
+        {
+            std::vector<std::string> paths;
+            if (!OpenNativeFilesDialog(paths) || paths.empty())
+            {
+                return false;
+            }
+
+            outPath = paths.front();
+            return true;
         }
 
         bool SaveNativeFileDialog(std::string &outPath)
@@ -533,7 +769,7 @@ namespace ds
         const bool transformModeActive = m_TranslateModeActive || m_RotateModeActive;
         const bool allowCameraInput = m_ViewportHovered && m_ViewportFocused && !transformModeActive;
         const float scrollDelta = ApplicationContext::Get().ConsumeScrollDelta();
-        m_Camera->OnUpdate(deltaTime, allowCameraInput, allowCameraInput ? scrollDelta : 0.0f);
+        m_Camera->OnUpdate(deltaTime, allowCameraInput, allowCameraInput ? scrollDelta : 0.0f, m_TouchpadNavigationEnabled);
 
         if (allowCameraInput && (ImGui::IsMouseDown(ImGuiMouseButton_Middle) || std::abs(scrollDelta) > 0.0001f))
         {
@@ -551,6 +787,10 @@ namespace ds
         {
             m_SceneSettings.lightDirection = glm::normalize(lightToOrigin);
         }
+
+        m_SceneSettings.drawCellEdges = m_ShowCellEdges;
+        m_SceneSettings.cellEdgeColor = glm::clamp(m_CellEdgeColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_SceneSettings.cellEdgeLineWidth = glm::clamp(m_CellEdgeLineWidth, 0.5f, 10.0f);
 
         m_RenderBackend->ResizeViewport(renderWidth, renderHeight);
         m_RenderBackend->BeginFrame(m_SceneSettings);
@@ -584,6 +824,11 @@ namespace ds
 
                 const std::string elementKey = NormalizeElementSymbol(atom.element);
                 glm::vec3 atomColor = ColorFromElement(elementKey);
+                const auto elementOverrideIt = m_ElementColorOverrides.find(elementKey);
+                if (elementOverrideIt != m_ElementColorOverrides.end())
+                {
+                    atomColor = glm::clamp(elementOverrideIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
+                }
                 if (m_SceneSettings.overrideAtomColor)
                 {
                     atomColor = m_SceneSettings.atomOverrideColor;
@@ -598,11 +843,15 @@ namespace ds
                     }
                 }
 
-                atomPositionsByElement[elementKey].push_back(position);
-                atomColorsByElement[elementKey].push_back(atomColor);
+                const bool atomVisible = !IsAtomHidden(i) && IsAtomCollectionVisible(i);
+                if (atomVisible)
+                {
+                    atomPositionsByElement[elementKey].push_back(position);
+                    atomColorsByElement[elementKey].push_back(atomColor);
+                }
                 atomResolvedColors.push_back(atomColor);
 
-                if (IsAtomSelected(i))
+                if (atomVisible && IsAtomSelected(i))
                 {
                     selectedPositions.push_back(position);
                     selectedColors.push_back(m_SelectionColor);
@@ -617,9 +866,10 @@ namespace ds
                     m_AutoBondsDirty = false;
                 }
             }
-            else if (!m_GeneratedBonds.empty())
+            else
             {
-                m_GeneratedBonds.clear();
+                // Keep only manually created bonds when auto generation is disabled.
+                RebuildAutoBonds(atomCartesianPositions);
             }
 
             if (!m_GeneratedBonds.empty())
@@ -650,7 +900,10 @@ namespace ds
                 for (const BondSegment &bond : m_GeneratedBonds)
                 {
                     const std::uint64_t bondKey = MakeBondPairKey(bond.atomA, bond.atomB);
-                    if (m_DeletedBondKeys.find(bondKey) != m_DeletedBondKeys.end())
+                    if (m_DeletedBondKeys.find(bondKey) != m_DeletedBondKeys.end() ||
+                        m_HiddenBondKeys.find(bondKey) != m_HiddenBondKeys.end() ||
+                        IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                        !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB))
                     {
                         continue;
                     }
@@ -785,6 +1038,85 @@ namespace ds
     bool EditorLayer::IsAtomSelected(std::size_t index) const
     {
         return std::find(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), index) != m_SelectedAtomIndices.end();
+    }
+
+    bool EditorLayer::IsAtomHidden(std::size_t index) const
+    {
+        return m_HiddenAtomIndices.find(index) != m_HiddenAtomIndices.end();
+    }
+
+    int EditorLayer::ResolveAtomCollectionIndex(std::size_t atomIndex) const
+    {
+        if (atomIndex >= m_AtomCollectionIndices.size())
+        {
+            return 0;
+        }
+
+        const int collectionIndex = m_AtomCollectionIndices[atomIndex];
+        if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return 0;
+        }
+
+        return collectionIndex;
+    }
+
+    bool EditorLayer::IsAtomCollectionVisible(std::size_t atomIndex) const
+    {
+        return IsCollectionVisible(ResolveAtomCollectionIndex(atomIndex));
+    }
+
+    bool EditorLayer::IsAtomCollectionSelectable(std::size_t atomIndex) const
+    {
+        return IsCollectionSelectable(ResolveAtomCollectionIndex(atomIndex));
+    }
+
+    void EditorLayer::EnsureAtomCollectionAssignments()
+    {
+        if (m_AtomCollectionIndices.size() < m_WorkingStructure.atoms.size())
+        {
+            m_AtomCollectionIndices.resize(m_WorkingStructure.atoms.size(), 0);
+        }
+        else if (m_AtomCollectionIndices.size() > m_WorkingStructure.atoms.size())
+        {
+            m_AtomCollectionIndices.resize(m_WorkingStructure.atoms.size());
+        }
+
+        if (m_Collections.empty())
+        {
+            return;
+        }
+
+        for (int &collectionIndex : m_AtomCollectionIndices)
+        {
+            if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+            {
+                collectionIndex = 0;
+            }
+        }
+    }
+
+    float EditorLayer::ResolveBondThresholdScaleForPair(const std::string &elementA, const std::string &elementB) const
+    {
+        const float globalScale = glm::clamp(m_BondThresholdScale, 0.80f, 1.80f);
+        if (!m_BondUsePairThresholdOverrides)
+        {
+            return globalScale;
+        }
+
+        const std::string key = BuildElementPairScaleKey(elementA, elementB);
+        if (key.empty())
+        {
+            return globalScale;
+        }
+
+        const auto it = m_BondPairThresholdScaleOverrides.find(key);
+        if (it == m_BondPairThresholdScaleOverrides.end())
+        {
+            return globalScale;
+        }
+
+        return glm::clamp(it->second, 0.40f, 3.00f);
     }
 
     void EditorLayer::ToggleInteractionMode()
@@ -933,6 +1265,11 @@ namespace ds
 
         for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
         {
+            if (IsAtomHidden(i) || !IsAtomCollectionVisible(i) || !IsAtomCollectionSelectable(i))
+            {
+                continue;
+            }
+
             glm::vec3 center = m_WorkingStructure.atoms[i].position;
             if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
             {
@@ -998,7 +1335,11 @@ namespace ds
         for (const BondSegment &bond : m_GeneratedBonds)
         {
             const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
-            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end() ||
+                m_HiddenBondKeys.find(key) != m_HiddenBondKeys.end() ||
+                IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB) ||
+                !IsAtomCollectionSelectable(bond.atomA) || !IsAtomCollectionSelectable(bond.atomB))
             {
                 continue;
             }
@@ -1414,6 +1755,8 @@ namespace ds
                 group.id = GenerateSceneUUID();
             }
         }
+
+        EnsureAtomCollectionAssignments();
     }
 
     void EditorLayer::DeleteTransformEmptyAtIndex(int emptyIndex)
@@ -2132,6 +2475,11 @@ namespace ds
 
         for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
         {
+            if (IsAtomHidden(i) || !IsAtomCollectionVisible(i) || !IsAtomCollectionSelectable(i))
+            {
+                continue;
+            }
+
             glm::vec3 center = m_WorkingStructure.atoms[i].position;
             if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
             {
@@ -2200,7 +2548,11 @@ namespace ds
         for (const BondSegment &bond : m_GeneratedBonds)
         {
             const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
-            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end() ||
+                m_HiddenBondKeys.find(key) != m_HiddenBondKeys.end() ||
+                IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB) ||
+                !IsAtomCollectionSelectable(bond.atomA) || !IsAtomCollectionSelectable(bond.atomB))
             {
                 continue;
             }
@@ -2781,11 +3133,18 @@ namespace ds
         m_HasStructureLoaded = true;
         EnsureAtomNodeIds();
         m_SelectedAtomIndices.clear();
+        m_OutlinerAtomSelectionAnchor.reset();
         m_SelectedBondKeys.clear();
         m_DeletedBondKeys.clear();
+        m_HiddenBondKeys.clear();
+        m_HiddenAtomIndices.clear();
         m_BondLabelStates.clear();
+        m_AngleLabelStates.clear();
         m_AtomColorOverrides.clear();
         m_SelectedBondLabelKey = 0;
+        m_AtomCollectionIndices.assign(m_WorkingStructure.atoms.size(), 0);
+        EnsureAtomCollectionAssignments();
+        m_ActiveCollectionIndex = 0;
         m_AutoBondsDirty = true;
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Imported structure from: " + path;
@@ -2818,6 +3177,86 @@ namespace ds
         }
 
         LogInfo(m_LastStructureMessage + " (atoms=" + std::to_string(m_WorkingStructure.GetAtomCount()) + ")");
+        return true;
+    }
+
+    bool EditorLayer::AppendStructureFromPathAsCollection(const std::string &path)
+    {
+        if (!m_HasStructureLoaded)
+        {
+            const bool loaded = LoadStructureFromPath(path);
+            if (loaded && !m_Collections.empty())
+            {
+                const std::string stem = std::filesystem::path(path).stem().string();
+                m_Collections[0].name = stem.empty() ? "Collection 1" : stem;
+                m_ActiveCollectionIndex = 0;
+            }
+            return loaded;
+        }
+
+        Structure parsed;
+        std::string error;
+        if (!m_PoscarParser.ParseFromFile(path, parsed, error))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Append import failed: " + error;
+            LogError(m_LastStructureMessage);
+            return false;
+        }
+
+        if (parsed.atoms.empty())
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Append import failed: file has no atoms.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        SceneCollection collection;
+        collection.id = GenerateSceneUUID();
+        const std::string stem = std::filesystem::path(path).stem().string();
+        collection.name = stem.empty() ? ("Collection " + std::to_string(m_CollectionCounter++)) : stem;
+        m_Collections.push_back(collection);
+        const int collectionIndex = static_cast<int>(m_Collections.size()) - 1;
+        m_ActiveCollectionIndex = collectionIndex;
+
+        std::size_t appendedCount = 0;
+        for (const Atom &sourceAtom : parsed.atoms)
+        {
+            Atom atom = sourceAtom;
+            glm::vec3 cart = sourceAtom.position;
+            if (parsed.coordinateMode == CoordinateMode::Direct)
+            {
+                cart = parsed.DirectToCartesian(sourceAtom.position);
+            }
+
+            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+            {
+                atom.position = m_WorkingStructure.CartesianToDirect(cart);
+            }
+            else
+            {
+                atom.position = cart;
+            }
+
+            m_WorkingStructure.atoms.push_back(atom);
+            m_AtomNodeIds.push_back(GenerateSceneUUID());
+            m_AtomCollectionIndices.push_back(collectionIndex);
+            ++appendedCount;
+        }
+
+        m_WorkingStructure.RebuildSpeciesFromAtoms();
+        m_AutoBondsDirty = true;
+        m_SelectedAtomIndices.clear();
+        m_OutlinerAtomSelectionAnchor.reset();
+        m_SelectedBondKeys.clear();
+        m_SelectedBondLabelKey = 0;
+        EnsureAtomCollectionAssignments();
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Appended " + std::to_string(appendedCount) + " atom(s) from: " + path +
+                                 " into collection '" + m_Collections[static_cast<std::size_t>(collectionIndex)].name + "'.";
+        LogInfo(m_LastStructureMessage);
         return true;
     }
 
@@ -2889,6 +3328,10 @@ namespace ds
 
         m_WorkingStructure.atoms.push_back(atom);
         m_AtomNodeIds.push_back(GenerateSceneUUID());
+        const int collectionIndex = (m_ActiveCollectionIndex >= 0 && m_ActiveCollectionIndex < static_cast<int>(m_Collections.size()))
+                                        ? m_ActiveCollectionIndex
+                                        : 0;
+        m_AtomCollectionIndices.push_back(collectionIndex);
         m_WorkingStructure.RebuildSpeciesFromAtoms();
         m_AutoBondsDirty = true;
 
@@ -2968,13 +3411,13 @@ namespace ds
         m_GeneratedBonds.clear();
         std::unordered_set<std::uint64_t> seenLabelKeys;
 
-        if (!m_AutoBondGenerationEnabled || !m_HasStructureLoaded)
+        if (!m_HasStructureLoaded)
         {
             return;
         }
 
         const std::size_t atomCount = std::min(atomCartesianPositions.size(), m_WorkingStructure.atoms.size());
-        if (atomCount < 2)
+        if (atomCount < 2 && m_ManualBondKeys.empty())
         {
             if (m_LastLoggedBondCount != 0)
             {
@@ -2989,57 +3432,115 @@ namespace ds
         constexpr float kMinBondDistance = 0.08f;
         constexpr std::size_t kMaxBondCount = 40000;
 
-        m_GeneratedBonds.reserve(std::min<std::size_t>(atomCount * 8, kMaxBondCount));
+        m_GeneratedBonds.reserve(std::min<std::size_t>(atomCount * 8 + m_ManualBondKeys.size(), kMaxBondCount));
 
-        for (std::size_t i = 0; i < atomCount; ++i)
+        if (m_AutoBondGenerationEnabled)
         {
-            const Atom &atomA = m_WorkingStructure.atoms[i];
-            const float radiusA = CovalentRadiusPmByElementSymbol(atomA.element);
-
-            for (std::size_t j = i + 1; j < atomCount; ++j)
+            for (std::size_t i = 0; i < atomCount; ++i)
             {
-                const Atom &atomB = m_WorkingStructure.atoms[j];
-                const float radiusB = CovalentRadiusPmByElementSymbol(atomB.element);
+                const Atom &atomA = m_WorkingStructure.atoms[i];
+                const float radiusA = CovalentRadiusPmByElementSymbol(atomA.element);
 
-                const glm::vec3 delta = atomCartesianPositions[j] - atomCartesianPositions[i];
-                const float distance = glm::length(delta);
-                if (distance < kMinBondDistance)
+                for (std::size_t j = i + 1; j < atomCount; ++j)
                 {
-                    continue;
-                }
+                    const Atom &atomB = m_WorkingStructure.atoms[j];
+                    const float radiusB = CovalentRadiusPmByElementSymbol(atomB.element);
 
-                const float cutoff = (radiusA + radiusB) * kPmToAngstrom * thresholdScale;
-                if (distance > cutoff)
-                {
-                    continue;
-                }
-
-                BondSegment bond;
-                bond.atomA = i;
-                bond.atomB = j;
-                bond.start = atomCartesianPositions[i];
-                bond.end = atomCartesianPositions[j];
-                bond.midpoint = (bond.start + bond.end) * 0.5f;
-                bond.length = distance;
-                m_GeneratedBonds.push_back(bond);
-
-                const std::uint64_t labelKey = MakeBondPairKey(i, j);
-                seenLabelKeys.insert(labelKey);
-                BondLabelState &labelState = m_BondLabelStates[labelKey];
-                labelState.atomA = i;
-                labelState.atomB = j;
-                labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
-
-                if (m_GeneratedBonds.size() >= kMaxBondCount)
-                {
-                    if (m_LastLoggedBondCount != m_GeneratedBonds.size())
+                    const glm::vec3 delta = atomCartesianPositions[j] - atomCartesianPositions[i];
+                    const float distance = glm::length(delta);
+                    if (distance < kMinBondDistance)
                     {
-                        m_LastLoggedBondCount = m_GeneratedBonds.size();
-                        LogWarn("Auto bond generation reached hard cap of " + std::to_string(kMaxBondCount) + " bonds.");
+                        continue;
                     }
-                    return;
+
+                    const float pairScale = ResolveBondThresholdScaleForPair(atomA.element, atomB.element);
+                    const float cutoff = (radiusA + radiusB) * kPmToAngstrom * pairScale;
+                    if (distance > cutoff)
+                    {
+                        continue;
+                    }
+
+                    BondSegment bond;
+                    bond.atomA = i;
+                    bond.atomB = j;
+                    bond.start = atomCartesianPositions[i];
+                    bond.end = atomCartesianPositions[j];
+                    bond.midpoint = (bond.start + bond.end) * 0.5f;
+                    bond.length = distance;
+                    m_GeneratedBonds.push_back(bond);
+
+                    const std::uint64_t labelKey = MakeBondPairKey(i, j);
+                    seenLabelKeys.insert(labelKey);
+                    BondLabelState &labelState = m_BondLabelStates[labelKey];
+                    labelState.atomA = i;
+                    labelState.atomB = j;
+                    labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
+
+                    if (m_GeneratedBonds.size() >= kMaxBondCount)
+                    {
+                        if (m_LastLoggedBondCount != m_GeneratedBonds.size())
+                        {
+                            m_LastLoggedBondCount = m_GeneratedBonds.size();
+                            LogWarn("Auto bond generation reached hard cap of " + std::to_string(kMaxBondCount) + " bonds.");
+                        }
+                        return;
+                    }
                 }
             }
+        }
+
+        for (auto manualIt = m_ManualBondKeys.begin(); manualIt != m_ManualBondKeys.end();)
+        {
+            const std::size_t atomA = static_cast<std::size_t>((*manualIt >> 32) & 0xffffffffull);
+            const std::size_t atomB = static_cast<std::size_t>(*manualIt & 0xffffffffull);
+            if (atomA >= atomCount || atomB >= atomCount || atomA == atomB)
+            {
+                manualIt = m_ManualBondKeys.erase(manualIt);
+                continue;
+            }
+
+            const glm::vec3 start = atomCartesianPositions[atomA];
+            const glm::vec3 end = atomCartesianPositions[atomB];
+            const float distance = glm::length(end - start);
+            if (distance < kMinBondDistance)
+            {
+                ++manualIt;
+                continue;
+            }
+
+            const std::uint64_t manualKey = MakeBondPairKey(atomA, atomB);
+            if (seenLabelKeys.find(manualKey) == seenLabelKeys.end())
+            {
+                BondSegment manualBond;
+                manualBond.atomA = atomA;
+                manualBond.atomB = atomB;
+                manualBond.start = start;
+                manualBond.end = end;
+                manualBond.midpoint = (start + end) * 0.5f;
+                manualBond.length = distance;
+                m_GeneratedBonds.push_back(manualBond);
+
+                BondLabelState &labelState = m_BondLabelStates[manualKey];
+                labelState.atomA = atomA;
+                labelState.atomB = atomB;
+                labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
+                labelState.deleted = false;
+                labelState.hidden = false;
+            }
+
+            seenLabelKeys.insert(manualKey);
+
+            if (m_GeneratedBonds.size() >= kMaxBondCount)
+            {
+                if (m_LastLoggedBondCount != m_GeneratedBonds.size())
+                {
+                    m_LastLoggedBondCount = m_GeneratedBonds.size();
+                    LogWarn("Bond generation reached hard cap of " + std::to_string(kMaxBondCount) + " bonds.");
+                }
+                return;
+            }
+
+            ++manualIt;
         }
 
         for (auto it = m_BondLabelStates.begin(); it != m_BondLabelStates.end();)
@@ -3071,6 +3572,16 @@ namespace ds
             if (seenLabelKeys.find(*it) == seenLabelKeys.end())
             {
                 it = m_DeletedBondKeys.erase(it);
+                continue;
+            }
+            ++it;
+        }
+
+        for (auto it = m_HiddenBondKeys.begin(); it != m_HiddenBondKeys.end();)
+        {
+            if (seenLabelKeys.find(*it) == seenLabelKeys.end())
+            {
+                it = m_HiddenBondKeys.erase(it);
                 continue;
             }
             ++it;
@@ -3428,6 +3939,10 @@ namespace ds
             {
                 m_SceneSettings.drawGrid = (value == "1");
             }
+            else if (key == "viewport_cell_edges")
+            {
+                m_ShowCellEdges = (value == "1");
+            }
             else if (key == "viewport_grid_extent")
             {
                 try
@@ -3523,6 +4038,46 @@ namespace ds
                 try
                 {
                     m_SceneSettings.gridOpacity = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cell_edge_color_r")
+            {
+                try
+                {
+                    m_CellEdgeColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cell_edge_color_g")
+            {
+                try
+                {
+                    m_CellEdgeColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cell_edge_color_b")
+            {
+                try
+                {
+                    m_CellEdgeColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_cell_edge_line_width")
+            {
+                try
+                {
+                    m_CellEdgeLineWidth = std::stof(value);
                 }
                 catch (...)
                 {
@@ -3652,6 +4207,10 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_atom_element_colors")
+            {
+                m_ElementColorOverrides = ParseElementColorOverrides(value);
+            }
             else if (key == "viewport_atom_brightness")
             {
                 try
@@ -3705,11 +4264,39 @@ namespace ds
                 {
                 }
             }
+            else if (key == "viewport_bonds_pair_override_enabled")
+            {
+                m_BondUsePairThresholdOverrides = (value == "1");
+            }
+            else if (key == "viewport_bond_pair_scales")
+            {
+                m_BondPairThresholdScaleOverrides = ParsePairScaleOverrides(value);
+            }
             else if (key == "viewport_bonds_line_width")
             {
                 try
                 {
                     m_BondLineWidth = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_line_width_min")
+            {
+                try
+                {
+                    m_BondLineWidthMin = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bonds_line_width_max")
+            {
+                try
+                {
+                    m_BondLineWidthMax = std::stof(value);
                 }
                 catch (...)
                 {
@@ -3948,6 +4535,104 @@ namespace ds
             {
                 m_CursorSnapToGrid = (value == "1");
             }
+            else if (key == "viewport_touchpad_navigation")
+            {
+                m_TouchpadNavigationEnabled = (value == "1");
+            }
+            else if (key == "viewport_clean_view_mode")
+            {
+                m_CleanViewMode = (value == "1");
+            }
+            else if (key == "viewport_append_import_collection")
+            {
+                m_AppendImportToNewCollection = (value == "1");
+            }
+            else if (key == "viewport_measurement_show")
+            {
+                m_ShowSelectionMeasurements = (value == "1");
+            }
+            else if (key == "viewport_measurement_distance")
+            {
+                m_ShowSelectionDistanceMeasurement = (value == "1");
+            }
+            else if (key == "viewport_measurement_angle")
+            {
+                m_ShowSelectionAngleMeasurement = (value == "1");
+            }
+            else if (key == "viewport_static_angle_labels")
+            {
+                m_ShowStaticAngleLabels = (value == "1");
+            }
+            else if (key == "viewport_measurement_precision")
+            {
+                try
+                {
+                    m_MeasurementPrecision = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_measurement_text_color_r")
+            {
+                try
+                {
+                    m_MeasurementTextColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_measurement_text_color_g")
+            {
+                try
+                {
+                    m_MeasurementTextColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_measurement_text_color_b")
+            {
+                try
+                {
+                    m_MeasurementTextColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_measurement_bg_color_r")
+            {
+                try
+                {
+                    m_MeasurementBackgroundColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_measurement_bg_color_g")
+            {
+                try
+                {
+                    m_MeasurementBackgroundColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_measurement_bg_color_b")
+            {
+                try
+                {
+                    m_MeasurementBackgroundColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "viewport_view_gizmo")
             {
                 m_ViewGuizmoEnabled = (value == "1");
@@ -4030,27 +4715,28 @@ namespace ds
                 {
                 }
             }
-            else if (key == "viewport_show_global_axes_overlay")
+            // Keep this tail section flat; MSVC can hit parser nesting limits on very long else-if chains.
+            if (key == "viewport_show_global_axes_overlay")
             {
                 m_ShowGlobalAxesOverlay = (value == "1");
             }
-            else if (key == "viewport_show_global_axis_x")
+            if (key == "viewport_show_global_axis_x")
             {
                 m_ShowGlobalAxis[0] = (value != "0");
             }
-            else if (key == "viewport_show_global_axis_y")
+            if (key == "viewport_show_global_axis_y")
             {
                 m_ShowGlobalAxis[1] = (value != "0");
             }
-            else if (key == "viewport_show_global_axis_z")
+            if (key == "viewport_show_global_axis_z")
             {
                 m_ShowGlobalAxis[2] = (value != "0");
             }
-            else if (key == "gizmo_use_temporary_local_axes")
+            if (key == "gizmo_use_temporary_local_axes")
             {
                 m_UseTemporaryLocalAxes = (value == "1");
             }
-            else if (key == "gizmo_temp_axes_source")
+            if (key == "gizmo_temp_axes_source")
             {
                 try
                 {
@@ -4062,7 +4748,7 @@ namespace ds
                     m_TemporaryAxesSource = TemporaryAxesSource::SelectionAtoms;
                 }
             }
-            else if (key == "gizmo_temp_axis_atom_a")
+            if (key == "gizmo_temp_axis_atom_a")
             {
                 try
                 {
@@ -4072,7 +4758,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_temp_axis_atom_b")
+            if (key == "gizmo_temp_axis_atom_b")
             {
                 try
                 {
@@ -4082,7 +4768,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_temp_axis_atom_c")
+            if (key == "gizmo_temp_axis_atom_c")
             {
                 try
                 {
@@ -4092,7 +4778,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_x_r")
+            if (key == "gizmo_axis_color_x_r")
             {
                 try
                 {
@@ -4102,7 +4788,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_x_g")
+            if (key == "gizmo_axis_color_x_g")
             {
                 try
                 {
@@ -4112,7 +4798,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_x_b")
+            if (key == "gizmo_axis_color_x_b")
             {
                 try
                 {
@@ -4122,7 +4808,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_y_r")
+            if (key == "gizmo_axis_color_y_r")
             {
                 try
                 {
@@ -4132,7 +4818,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_y_g")
+            if (key == "gizmo_axis_color_y_g")
             {
                 try
                 {
@@ -4142,7 +4828,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_y_b")
+            if (key == "gizmo_axis_color_y_b")
             {
                 try
                 {
@@ -4152,7 +4838,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_z_r")
+            if (key == "gizmo_axis_color_z_r")
             {
                 try
                 {
@@ -4162,7 +4848,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_z_g")
+            if (key == "gizmo_axis_color_z_g")
             {
                 try
                 {
@@ -4172,7 +4858,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "gizmo_axis_color_z_b")
+            if (key == "gizmo_axis_color_z_b")
             {
                 try
                 {
@@ -4182,7 +4868,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "ui_spacing_scale")
+            if (key == "ui_spacing_scale")
             {
                 try
                 {
@@ -4258,10 +4944,19 @@ namespace ds
             m_BondThresholdScale = 0.80f;
         if (m_BondThresholdScale > 1.80f)
             m_BondThresholdScale = 1.80f;
-        if (m_BondLineWidth < 1.0f)
-            m_BondLineWidth = 1.0f;
-        if (m_BondLineWidth > 6.0f)
-            m_BondLineWidth = 6.0f;
+        m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 20.0f);
+        m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 20.0f);
+        if (m_BondLineWidthMin > m_BondLineWidthMax)
+            std::swap(m_BondLineWidthMin, m_BondLineWidthMax);
+        m_BondLineWidth = glm::clamp(m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax);
+        if (m_CellEdgeLineWidth < 0.5f)
+            m_CellEdgeLineWidth = 0.5f;
+        if (m_CellEdgeLineWidth > 10.0f)
+            m_CellEdgeLineWidth = 10.0f;
+        if (m_MeasurementPrecision < 0)
+            m_MeasurementPrecision = 0;
+        if (m_MeasurementPrecision > 6)
+            m_MeasurementPrecision = 6;
         if (m_GizmoModeIndex < 0)
             m_GizmoModeIndex = 0;
         if (m_GizmoModeIndex > 2)
@@ -4270,6 +4965,10 @@ namespace ds
             m_UiSpacingScale = 0.75f;
         if (m_UiSpacingScale > 1.80f)
             m_UiSpacingScale = 1.80f;
+
+        m_SceneSettings.drawCellEdges = m_ShowCellEdges;
+        m_SceneSettings.cellEdgeColor = glm::clamp(m_CellEdgeColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_SceneSettings.cellEdgeLineWidth = m_CellEdgeLineWidth;
 
         // Keep simulation grid on the canonical XY plane.
         m_SceneSettings.gridOrigin.z = 0.0f;
@@ -4321,6 +5020,7 @@ namespace ds
         out << "viewport_bg_g=" << m_SceneSettings.clearColor.g << '\n';
         out << "viewport_bg_b=" << m_SceneSettings.clearColor.b << '\n';
         out << "viewport_grid_enabled=" << (m_SceneSettings.drawGrid ? "1" : "0") << '\n';
+        out << "viewport_cell_edges=" << (m_ShowCellEdges ? "1" : "0") << '\n';
         out << "viewport_grid_extent=" << m_SceneSettings.gridHalfExtent << '\n';
         out << "viewport_grid_spacing=" << m_SceneSettings.gridSpacing << '\n';
         out << "viewport_grid_line_width=" << m_SceneSettings.gridLineWidth << '\n';
@@ -4331,6 +5031,10 @@ namespace ds
         out << "viewport_grid_color_g=" << m_SceneSettings.gridColor.g << '\n';
         out << "viewport_grid_color_b=" << m_SceneSettings.gridColor.b << '\n';
         out << "viewport_grid_opacity=" << m_SceneSettings.gridOpacity << '\n';
+        out << "viewport_cell_edge_color_r=" << m_CellEdgeColor.r << '\n';
+        out << "viewport_cell_edge_color_g=" << m_CellEdgeColor.g << '\n';
+        out << "viewport_cell_edge_color_b=" << m_CellEdgeColor.b << '\n';
+        out << "viewport_cell_edge_line_width=" << m_CellEdgeLineWidth << '\n';
         out << "viewport_light_dir_x=" << m_SceneSettings.lightDirection.x << '\n';
         out << "viewport_light_dir_y=" << m_SceneSettings.lightDirection.y << '\n';
         out << "viewport_light_dir_z=" << m_SceneSettings.lightDirection.z << '\n';
@@ -4344,6 +5048,7 @@ namespace ds
         out << "viewport_atom_override_r=" << m_SceneSettings.atomOverrideColor.r << '\n';
         out << "viewport_atom_override_g=" << m_SceneSettings.atomOverrideColor.g << '\n';
         out << "viewport_atom_override_b=" << m_SceneSettings.atomOverrideColor.b << '\n';
+        out << "viewport_atom_element_colors=" << SerializeElementColorOverrides(m_ElementColorOverrides) << '\n';
         out << "viewport_atom_brightness=" << m_SceneSettings.atomBrightness << '\n';
         out << "viewport_atom_glow=" << m_SceneSettings.atomGlowStrength << '\n';
         out << "viewport_bonds_auto=" << (m_AutoBondGenerationEnabled ? "1" : "0") << '\n';
@@ -4351,7 +5056,11 @@ namespace ds
         out << "viewport_bonds_render_style=" << static_cast<int>(m_BondRenderStyle) << '\n';
         out << "viewport_bond_label_delete_only=" << (m_BondLabelDeleteOnlyMode ? "1" : "0") << '\n';
         out << "viewport_bonds_threshold_scale=" << m_BondThresholdScale << '\n';
+        out << "viewport_bonds_pair_override_enabled=" << (m_BondUsePairThresholdOverrides ? "1" : "0") << '\n';
+        out << "viewport_bond_pair_scales=" << SerializePairScaleOverrides(m_BondPairThresholdScaleOverrides) << '\n';
         out << "viewport_bonds_line_width=" << m_BondLineWidth << '\n';
+        out << "viewport_bonds_line_width_min=" << m_BondLineWidthMin << '\n';
+        out << "viewport_bonds_line_width_max=" << m_BondLineWidthMax << '\n';
         out << "viewport_bonds_color_r=" << m_BondColor.r << '\n';
         out << "viewport_bonds_color_g=" << m_BondColor.g << '\n';
         out << "viewport_bonds_color_b=" << m_BondColor.b << '\n';
@@ -4369,6 +5078,20 @@ namespace ds
         out << "viewport_cursor_x=" << m_CursorPosition.x << '\n';
         out << "viewport_cursor_y=" << m_CursorPosition.y << '\n';
         out << "viewport_cursor_z=" << m_CursorPosition.z << '\n';
+        out << "viewport_touchpad_navigation=" << (m_TouchpadNavigationEnabled ? "1" : "0") << '\n';
+        out << "viewport_clean_view_mode=" << (m_CleanViewMode ? "1" : "0") << '\n';
+        out << "viewport_append_import_collection=" << (m_AppendImportToNewCollection ? "1" : "0") << '\n';
+        out << "viewport_measurement_show=" << (m_ShowSelectionMeasurements ? "1" : "0") << '\n';
+        out << "viewport_measurement_distance=" << (m_ShowSelectionDistanceMeasurement ? "1" : "0") << '\n';
+        out << "viewport_measurement_angle=" << (m_ShowSelectionAngleMeasurement ? "1" : "0") << '\n';
+        out << "viewport_static_angle_labels=" << (m_ShowStaticAngleLabels ? "1" : "0") << '\n';
+        out << "viewport_measurement_precision=" << m_MeasurementPrecision << '\n';
+        out << "viewport_measurement_text_color_r=" << m_MeasurementTextColor.r << '\n';
+        out << "viewport_measurement_text_color_g=" << m_MeasurementTextColor.g << '\n';
+        out << "viewport_measurement_text_color_b=" << m_MeasurementTextColor.b << '\n';
+        out << "viewport_measurement_bg_color_r=" << m_MeasurementBackgroundColor.r << '\n';
+        out << "viewport_measurement_bg_color_g=" << m_MeasurementBackgroundColor.g << '\n';
+        out << "viewport_measurement_bg_color_b=" << m_MeasurementBackgroundColor.b << '\n';
         out << "scene_origin_x=" << m_SceneOriginPosition.x << '\n';
         out << "scene_origin_y=" << m_SceneOriginPosition.y << '\n';
         out << "scene_origin_z=" << m_SceneOriginPosition.z << '\n';
@@ -4447,6 +5170,7 @@ namespace ds
         m_TransformEmpties.clear();
         m_ObjectGroups.clear();
         m_CameraPresets.clear();
+        m_AngleLabelStates.clear();
         m_SelectedCameraPresetIndex = -1;
 
         int atomCount = 0;
@@ -4473,6 +5197,24 @@ namespace ds
                     m_AtomNodeIds.push_back(0);
                 }
             }
+
+            m_AtomCollectionIndices.assign(static_cast<std::size_t>(atomCount), 0);
+            const std::vector<std::string> collectionTokens = SplitCsv(getValue("scene_atom_collection_indices"));
+            for (std::size_t i = 0; i < m_AtomCollectionIndices.size() && i < collectionTokens.size(); ++i)
+            {
+                try
+                {
+                    m_AtomCollectionIndices[i] = std::stoi(collectionTokens[i]);
+                }
+                catch (...)
+                {
+                    m_AtomCollectionIndices[i] = 0;
+                }
+            }
+        }
+        else
+        {
+            m_AtomCollectionIndices.clear();
         }
 
         int collectionCount = 0;
@@ -4709,6 +5451,44 @@ namespace ds
             m_CameraPresets.push_back(preset);
         }
 
+        int angleLabelCount = 0;
+        try
+        {
+            angleLabelCount = std::stoi(getValue("scene_angle_label_count"));
+        }
+        catch (...)
+        {
+            angleLabelCount = 0;
+        }
+        for (int i = 0; i < angleLabelCount; ++i)
+        {
+            const std::string prefix = "scene_angle_label_" + std::to_string(i) + "_";
+            std::size_t atomA = 0;
+            std::size_t atomB = 0;
+            std::size_t atomC = 0;
+            try
+            {
+                atomA = static_cast<std::size_t>(std::stoull(getValue(prefix + "a")));
+                atomB = static_cast<std::size_t>(std::stoull(getValue(prefix + "b")));
+                atomC = static_cast<std::size_t>(std::stoull(getValue(prefix + "c")));
+            }
+            catch (...)
+            {
+                continue;
+            }
+
+            if (atomA == atomB || atomB == atomC || atomA == atomC)
+            {
+                continue;
+            }
+
+            AngleLabelState label;
+            label.atomA = atomA;
+            label.atomB = atomB;
+            label.atomC = atomC;
+            m_AngleLabelStates[MakeAngleTripletKey(atomA, atomB, atomC)] = label;
+        }
+
         try
         {
             m_SelectedCameraPresetIndex = std::stoi(getValue("scene_camera_preset_selected"));
@@ -4750,6 +5530,7 @@ namespace ds
         {
             out << "scene_atom_" << i << "_id=" << m_AtomNodeIds[i] << '\n';
         }
+        out << "scene_atom_collection_indices=" << JoinCsv(m_AtomCollectionIndices) << '\n';
         out << "scene_collection_count=" << m_Collections.size() << '\n';
         for (std::size_t i = 0; i < m_Collections.size(); ++i)
         {
@@ -4811,6 +5592,17 @@ namespace ds
             out << prefix << "yaw=" << preset.yaw << '\n';
             out << prefix << "pitch=" << preset.pitch << '\n';
             out << prefix << "roll=" << preset.roll << '\n';
+        }
+
+        out << "scene_angle_label_count=" << m_AngleLabelStates.size() << '\n';
+        std::size_t angleLabelIndex = 0;
+        for (const auto &[key, label] : m_AngleLabelStates)
+        {
+            (void)key;
+            const std::string prefix = "scene_angle_label_" + std::to_string(angleLabelIndex++) + "_";
+            out << prefix << "a=" << label.atomA << '\n';
+            out << prefix << "b=" << label.atomB << '\n';
+            out << prefix << "c=" << label.atomC << '\n';
         }
     }
 
@@ -4887,11 +5679,14 @@ namespace ds
             {
                 if (ImGui::MenuItem("Open POSCAR/CONTCAR", "Ctrl+O"))
                 {
-                    std::string selectedPath;
-                    if (OpenNativeFileDialog(selectedPath))
+                    std::vector<std::string> selectedPaths;
+                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
                     {
-                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
-                        LoadStructureFromPath(selectedPath);
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
+                        for (const std::string &selectedPath : selectedPaths)
+                        {
+                            AppendStructureFromPathAsCollection(selectedPath);
+                        }
                     }
                 }
 
@@ -5235,9 +6030,14 @@ namespace ds
                 return;
             }
 
-            if (!m_SelectedAtomIndices.empty() && m_HasStructureLoaded)
+            auto deleteAtomsByIndices = [&](const std::vector<std::size_t> &atomIndices) -> std::size_t
             {
-                std::vector<std::size_t> uniqueIndices = m_SelectedAtomIndices;
+                if (!m_HasStructureLoaded)
+                {
+                    return 0;
+                }
+
+                std::vector<std::size_t> uniqueIndices = atomIndices;
                 std::sort(uniqueIndices.begin(), uniqueIndices.end());
                 uniqueIndices.erase(std::unique(uniqueIndices.begin(), uniqueIndices.end()), uniqueIndices.end());
                 uniqueIndices.erase(
@@ -5247,24 +6047,100 @@ namespace ds
 
                 if (uniqueIndices.empty())
                 {
-                    return;
+                    return 0;
                 }
 
                 for (auto it = uniqueIndices.rbegin(); it != uniqueIndices.rend(); ++it)
                 {
                     const std::size_t atomIndex = *it;
                     m_WorkingStructure.atoms.erase(m_WorkingStructure.atoms.begin() + static_cast<std::ptrdiff_t>(atomIndex));
+                    m_HiddenAtomIndices.erase(atomIndex);
                     if (atomIndex < m_AtomNodeIds.size())
                     {
                         m_AtomColorOverrides.erase(m_AtomNodeIds[atomIndex]);
                         m_AtomNodeIds.erase(m_AtomNodeIds.begin() + static_cast<std::ptrdiff_t>(atomIndex));
                     }
+                    if (atomIndex < m_AtomCollectionIndices.size())
+                    {
+                        m_AtomCollectionIndices.erase(m_AtomCollectionIndices.begin() + static_cast<std::ptrdiff_t>(atomIndex));
+                    }
                 }
+
+                if (!m_HiddenAtomIndices.empty())
+                {
+                    std::unordered_set<std::size_t> remappedHidden;
+                    remappedHidden.reserve(m_HiddenAtomIndices.size());
+                    for (std::size_t hiddenIndex : m_HiddenAtomIndices)
+                    {
+                        std::size_t shift = 0;
+                        for (std::size_t removedIndex : uniqueIndices)
+                        {
+                            if (removedIndex < hiddenIndex)
+                            {
+                                ++shift;
+                            }
+                        }
+                        if (shift <= hiddenIndex)
+                        {
+                            remappedHidden.insert(hiddenIndex - shift);
+                        }
+                    }
+                    m_HiddenAtomIndices = std::move(remappedHidden);
+                }
+
+                if (!m_AngleLabelStates.empty())
+                {
+                    auto remapIndexAfterDelete = [&](std::size_t oldIndex, std::size_t &outIndex) -> bool
+                    {
+                        if (std::binary_search(uniqueIndices.begin(), uniqueIndices.end(), oldIndex))
+                        {
+                            return false;
+                        }
+
+                        const std::size_t shift = static_cast<std::size_t>(
+                            std::lower_bound(uniqueIndices.begin(), uniqueIndices.end(), oldIndex) - uniqueIndices.begin());
+                        outIndex = oldIndex - shift;
+                        return true;
+                    };
+
+                    std::unordered_map<std::string, AngleLabelState> remappedAngleLabels;
+                    remappedAngleLabels.reserve(m_AngleLabelStates.size());
+
+                    for (const auto &[key, state] : m_AngleLabelStates)
+                    {
+                        (void)key;
+                        std::size_t mappedA = 0;
+                        std::size_t mappedB = 0;
+                        std::size_t mappedC = 0;
+                        if (!remapIndexAfterDelete(state.atomA, mappedA) ||
+                            !remapIndexAfterDelete(state.atomB, mappedB) ||
+                            !remapIndexAfterDelete(state.atomC, mappedC))
+                        {
+                            continue;
+                        }
+                        if (mappedA == mappedB || mappedB == mappedC || mappedA == mappedC)
+                        {
+                            continue;
+                        }
+
+                        AngleLabelState remappedState;
+                        remappedState.atomA = mappedA;
+                        remappedState.atomB = mappedB;
+                        remappedState.atomC = mappedC;
+                        remappedAngleLabels[MakeAngleTripletKey(mappedA, mappedB, mappedC)] = remappedState;
+                    }
+
+                    m_AngleLabelStates = std::move(remappedAngleLabels);
+                }
+
+                EnsureAtomCollectionAssignments();
 
                 m_WorkingStructure.RebuildSpeciesFromAtoms();
                 m_AutoBondsDirty = true;
                 m_SelectedAtomIndices.clear();
                 m_SelectedTransformEmptyIndex = -1;
+                m_SelectedBondKeys.clear();
+                m_SelectedBondLabelKey = 0;
 
                 for (int groupIndex = 0; groupIndex < static_cast<int>(m_ObjectGroups.size()); ++groupIndex)
                 {
@@ -5272,8 +6148,18 @@ namespace ds
                 }
 
                 settingsChanged = true;
+                return uniqueIndices.size();
+            };
+
+            if (!m_SelectedAtomIndices.empty() && m_HasStructureLoaded)
+            {
+                const std::size_t removedAtomCount = deleteAtomsByIndices(m_SelectedAtomIndices);
+                if (removedAtomCount == 0)
+                {
+                    return;
+                }
                 m_LastStructureOperationFailed = false;
-                m_LastStructureMessage = "Deleted " + std::to_string(uniqueIndices.size()) + " selected atom(s).";
+                m_LastStructureMessage = "Deleted " + std::to_string(removedAtomCount) + " selected atom(s).";
                 LogInfo(m_LastStructureMessage);
                 return;
             }
@@ -5288,6 +6174,87 @@ namespace ds
                     LogInfo(m_LastStructureMessage);
                 }
             }
+        };
+
+        auto hideCurrentSelection = [&]()
+        {
+            std::size_t hiddenAtoms = 0;
+            std::size_t hiddenBonds = 0;
+            std::size_t hiddenLabels = 0;
+
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex >= m_WorkingStructure.atoms.size())
+                {
+                    continue;
+                }
+                const auto [it, inserted] = m_HiddenAtomIndices.insert(atomIndex);
+                (void)it;
+                if (inserted)
+                {
+                    ++hiddenAtoms;
+                }
+            }
+
+            for (std::uint64_t key : m_SelectedBondKeys)
+            {
+                const auto [it, inserted] = m_HiddenBondKeys.insert(key);
+                (void)it;
+                if (inserted)
+                {
+                    ++hiddenBonds;
+                }
+
+                auto labelIt = m_BondLabelStates.find(key);
+                if (labelIt != m_BondLabelStates.end() && !labelIt->second.hidden)
+                {
+                    labelIt->second.hidden = true;
+                    ++hiddenLabels;
+                }
+            }
+
+            if (m_SelectedBondLabelKey != 0)
+            {
+                auto labelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
+                if (labelIt != m_BondLabelStates.end() && !labelIt->second.hidden)
+                {
+                    labelIt->second.hidden = true;
+                    ++hiddenLabels;
+                }
+            }
+
+            m_SelectedAtomIndices.clear();
+            m_SelectedBondKeys.clear();
+            m_SelectedBondLabelKey = 0;
+            m_SelectedTransformEmptyIndex = -1;
+            m_SelectedSpecialNode = SpecialNodeSelection::None;
+
+            if (hiddenAtoms > 0 || hiddenBonds > 0 || hiddenLabels > 0)
+            {
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Hidden atoms=" + std::to_string(hiddenAtoms) +
+                                         ", bonds=" + std::to_string(hiddenBonds) +
+                                         ", labels=" + std::to_string(hiddenLabels) + ".";
+                settingsChanged = true;
+            }
+        };
+
+        auto unhideAllSceneElements = [&]()
+        {
+            m_HiddenAtomIndices.clear();
+            m_HiddenBondKeys.clear();
+            for (auto &[key, state] : m_BondLabelStates)
+            {
+                (void)key;
+                if (!state.deleted)
+                {
+                    state.hidden = false;
+                }
+            }
+
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Unhide All: atoms, bonds and labels restored.";
+            settingsChanged = true;
         };
 
         auto applyPieSelection = [&](int slice)
@@ -5445,6 +6412,21 @@ namespace ds
             }
 
             deleteCurrentSelection();
+            m_BlockSelectionThisFrame = true;
+        }
+
+        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_H, false))
+        {
+            if (io.KeyAlt)
+            {
+                unhideAllSceneElements();
+                AppendSelectionDebugLog("Hotkey: Alt+H -> Unhide All");
+            }
+            else
+            {
+                hideCurrentSelection();
+                AppendSelectionDebugLog("Hotkey: H -> Hide selection");
+            }
             m_BlockSelectionThisFrame = true;
         }
 
@@ -7102,7 +8084,10 @@ namespace ds
                         {
                             const BondSegment &bond = m_GeneratedBonds[i];
                             const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
-                            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+                            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end() ||
+                                m_HiddenBondKeys.find(key) != m_HiddenBondKeys.end() ||
+                                IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                                !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB))
                             {
                                 continue;
                             }
@@ -7322,6 +8307,190 @@ namespace ds
                             }
                         }
                     }
+
+                    if (m_Camera)
+                    {
+                        const int precision = std::clamp(m_MeasurementPrecision, 0, 6);
+                        const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                            glm::clamp(m_MeasurementTextColor.r, 0.0f, 1.0f),
+                            glm::clamp(m_MeasurementTextColor.g, 0.0f, 1.0f),
+                            glm::clamp(m_MeasurementTextColor.b, 0.0f, 1.0f),
+                            0.97f));
+                        const ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                            glm::clamp(m_MeasurementBackgroundColor.r, 0.0f, 1.0f),
+                            glm::clamp(m_MeasurementBackgroundColor.g, 0.0f, 1.0f),
+                            glm::clamp(m_MeasurementBackgroundColor.b, 0.0f, 1.0f),
+                            0.82f));
+                        const ImU32 angleGuideColor = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                            glm::clamp(m_BondSelectedColor.r, 0.0f, 1.0f),
+                            glm::clamp(m_BondSelectedColor.g, 0.0f, 1.0f),
+                            glm::clamp(m_BondSelectedColor.b, 0.0f, 1.0f),
+                            0.90f));
+
+                        auto drawMeasurementLabelAtScreen = [&](const glm::vec2 &screenPos, const std::string &text)
+                        {
+                            const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+                            const ImVec2 pos(screenPos.x - textSize.x * 0.5f, screenPos.y - 12.0f - textSize.y);
+                            overlayDraw->AddRectFilled(
+                                ImVec2(pos.x - 4.0f, pos.y - 3.0f),
+                                ImVec2(pos.x + textSize.x + 4.0f, pos.y + textSize.y + 3.0f),
+                                bgColor,
+                                2.0f);
+                            overlayDraw->AddText(pos, textColor, text.c_str());
+                        };
+
+                        auto drawMeasurementLabelAtWorld = [&](const glm::vec3 &worldPos, const std::string &text)
+                        {
+                            glm::vec2 screen(0.0f);
+                            if (!projectWorldToScreen(worldPos, screen))
+                            {
+                                return;
+                            }
+                            drawMeasurementLabelAtScreen(screen, text);
+                        };
+
+                        if (m_ShowStaticAngleLabels && !m_AngleLabelStates.empty())
+                        {
+                            for (auto it = m_AngleLabelStates.begin(); it != m_AngleLabelStates.end();)
+                            {
+                                const AngleLabelState &state = it->second;
+                                if (state.atomA >= m_WorkingStructure.atoms.size() ||
+                                    state.atomB >= m_WorkingStructure.atoms.size() ||
+                                    state.atomC >= m_WorkingStructure.atoms.size() ||
+                                    state.atomA == state.atomB ||
+                                    state.atomB == state.atomC ||
+                                    state.atomA == state.atomC)
+                                {
+                                    it = m_AngleLabelStates.erase(it);
+                                    continue;
+                                }
+
+                                if (IsAtomHidden(state.atomA) || IsAtomHidden(state.atomB) || IsAtomHidden(state.atomC) ||
+                                    !IsAtomCollectionVisible(state.atomA) || !IsAtomCollectionVisible(state.atomB) || !IsAtomCollectionVisible(state.atomC))
+                                {
+                                    ++it;
+                                    continue;
+                                }
+
+                                const glm::vec3 posA = GetAtomCartesianPosition(state.atomA);
+                                const glm::vec3 posB = GetAtomCartesianPosition(state.atomB);
+                                const glm::vec3 posC = GetAtomCartesianPosition(state.atomC);
+                                const glm::vec3 ba = posA - posB;
+                                const glm::vec3 bc = posC - posB;
+                                if (glm::length2(ba) <= 1e-10f || glm::length2(bc) <= 1e-10f)
+                                {
+                                    ++it;
+                                    continue;
+                                }
+
+                                glm::vec2 screenA(0.0f);
+                                glm::vec2 screenB(0.0f);
+                                glm::vec2 screenC(0.0f);
+                                if (!projectWorldToScreen(posA, screenA) ||
+                                    !projectWorldToScreen(posB, screenB) ||
+                                    !projectWorldToScreen(posC, screenC))
+                                {
+                                    ++it;
+                                    continue;
+                                }
+
+                                const glm::vec2 dirA = screenA - screenB;
+                                const glm::vec2 dirC = screenC - screenB;
+                                const float lenA = glm::length(dirA);
+                                const float lenC = glm::length(dirC);
+                                if (lenA <= 1e-4f || lenC <= 1e-4f)
+                                {
+                                    ++it;
+                                    continue;
+                                }
+
+                                const glm::vec2 normA = dirA / lenA;
+                                const glm::vec2 normC = dirC / lenC;
+                                const float rayLength = std::min(std::min(lenA, lenC) * 0.55f, 80.0f);
+                                const glm::vec2 rayAEnd = screenB + normA * rayLength;
+                                const glm::vec2 rayCEnd = screenB + normC * rayLength;
+                                overlayDraw->AddLine(ImVec2(screenB.x, screenB.y), ImVec2(rayAEnd.x, rayAEnd.y), angleGuideColor, 1.5f);
+                                overlayDraw->AddLine(ImVec2(screenB.x, screenB.y), ImVec2(rayCEnd.x, rayCEnd.y), angleGuideColor, 1.5f);
+
+                                const float arcRadius = glm::clamp(rayLength * 0.55f, 12.0f, 56.0f);
+                                const float startAngle = std::atan2(normA.y, normA.x);
+                                const float deltaAngle = NormalizeAngleRadians(std::atan2(normC.y, normC.x) - startAngle);
+                                const int arcSegments = 24;
+                                std::vector<ImVec2> arcPoints;
+                                arcPoints.reserve(static_cast<std::size_t>(arcSegments) + 1);
+                                for (int segment = 0; segment <= arcSegments; ++segment)
+                                {
+                                    const float t = static_cast<float>(segment) / static_cast<float>(arcSegments);
+                                    const float a = startAngle + deltaAngle * t;
+                                    arcPoints.emplace_back(screenB.x + std::cos(a) * arcRadius, screenB.y + std::sin(a) * arcRadius);
+                                }
+                                if (!arcPoints.empty())
+                                {
+                                    overlayDraw->AddPolyline(arcPoints.data(), static_cast<int>(arcPoints.size()), angleGuideColor, false, 1.5f);
+                                }
+
+                                const float cosTheta = glm::clamp(glm::dot(glm::normalize(ba), glm::normalize(bc)), -1.0f, 1.0f);
+                                const float angleDeg = glm::degrees(std::acos(cosTheta));
+                                std::ostringstream label;
+                                label << "angle = " << std::fixed << std::setprecision(precision) << angleDeg << " deg";
+
+                                glm::vec2 bisector = normA + normC;
+                                if (glm::length2(bisector) <= 1e-6f)
+                                {
+                                    bisector = normA;
+                                }
+                                else
+                                {
+                                    bisector = glm::normalize(bisector);
+                                }
+                                drawMeasurementLabelAtScreen(screenB + bisector * (arcRadius + 14.0f), label.str());
+
+                                ++it;
+                            }
+                        }
+
+                        if (m_ShowSelectionMeasurements && !m_SelectedAtomIndices.empty())
+                        {
+                            if (m_ShowSelectionDistanceMeasurement && m_SelectedAtomIndices.size() >= 2)
+                            {
+                                const std::size_t atomA = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2];
+                                const std::size_t atomB = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1];
+                                if (atomA < m_WorkingStructure.atoms.size() && atomB < m_WorkingStructure.atoms.size() && atomA != atomB)
+                                {
+                                    const glm::vec3 posA = GetAtomCartesianPosition(atomA);
+                                    const glm::vec3 posB = GetAtomCartesianPosition(atomB);
+                                    const float distance = glm::length(posB - posA);
+                                    std::ostringstream label;
+                                    label << "d = " << std::fixed << std::setprecision(precision) << distance << " A";
+                                    drawMeasurementLabelAtWorld((posA + posB) * 0.5f, label.str());
+                                }
+                            }
+
+                            if (m_ShowSelectionAngleMeasurement && m_SelectedAtomIndices.size() >= 3)
+                            {
+                                const std::size_t atomA = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 3];
+                                const std::size_t atomB = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2];
+                                const std::size_t atomC = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1];
+                                if (atomA < m_WorkingStructure.atoms.size() && atomB < m_WorkingStructure.atoms.size() && atomC < m_WorkingStructure.atoms.size() &&
+                                    atomA != atomB && atomB != atomC && atomA != atomC)
+                                {
+                                    const glm::vec3 posA = GetAtomCartesianPosition(atomA);
+                                    const glm::vec3 posB = GetAtomCartesianPosition(atomB);
+                                    const glm::vec3 posC = GetAtomCartesianPosition(atomC);
+                                    const glm::vec3 ba = posA - posB;
+                                    const glm::vec3 bc = posC - posB;
+                                    if (glm::length2(ba) > 1e-10f && glm::length2(bc) > 1e-10f)
+                                    {
+                                        const float cosTheta = glm::clamp(glm::dot(glm::normalize(ba), glm::normalize(bc)), -1.0f, 1.0f);
+                                        const float angleDeg = glm::degrees(std::acos(cosTheta));
+                                        std::ostringstream label;
+                                        label << "angle = " << std::fixed << std::setprecision(precision) << angleDeg << " deg";
+                                        drawMeasurementLabelAtWorld(posB, label.str());
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if (m_ReopenViewportSelectionContextMenu)
@@ -7369,7 +8538,10 @@ namespace ds
                         m_SelectedAtomIndices.reserve(m_WorkingStructure.atoms.size());
                         for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
                         {
-                            m_SelectedAtomIndices.push_back(i);
+                            if (!IsAtomHidden(i) && IsAtomCollectionVisible(i) && IsAtomCollectionSelectable(i))
+                            {
+                                m_SelectedAtomIndices.push_back(i);
+                            }
                         }
                         AppendSelectionDebugLog("Context menu: Select All");
                     }
@@ -7390,7 +8562,7 @@ namespace ds
                         inverted.reserve(m_WorkingStructure.atoms.size());
                         for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
                         {
-                            if (!IsAtomSelected(i))
+                            if (!IsAtomHidden(i) && IsAtomCollectionVisible(i) && IsAtomCollectionSelectable(i) && !IsAtomSelected(i))
                             {
                                 inverted.push_back(i);
                             }
@@ -7943,6 +9115,7 @@ namespace ds
         ImGui::BulletText("MMB orbit");
         ImGui::BulletText("Shift + MMB pan");
         ImGui::BulletText("Mouse Wheel zoom");
+        ImGui::BulletText("Touchpad mode: Alt+LMB orbit, Alt+Shift+LMB pan, Alt+RMB zoom");
         ImGui::BulletText("RMB on viewport: selection/cursor context menu");
         ImGui::BulletText("Top-right axis gizmo: rotate view");
         ImGui::BulletText("ViewSet mode keys: T top, B bottom, L left, R right, P front, K back");
@@ -7988,6 +9161,26 @@ namespace ds
                 {
                     settingsChanged = true;
                 }
+                ImGui::SameLine();
+                if (ImGui::Checkbox("Draw cell edges", &m_ShowCellEdges))
+                {
+                    m_SceneSettings.drawCellEdges = m_ShowCellEdges;
+                    settingsChanged = true;
+                }
+                if (ImGui::Button(m_CleanViewMode ? "Disable clean view" : "Enable clean view"))
+                {
+                    m_CleanViewMode = !m_CleanViewMode;
+                    if (m_CleanViewMode)
+                    {
+                        m_SceneSettings.drawGrid = false;
+                        m_ShowCellEdges = false;
+                        m_ShowGlobalAxesOverlay = false;
+                        m_Show3DCursor = false;
+                        m_ShowTransformEmpties = false;
+                        m_ShowBondLengthLabels = false;
+                    }
+                    settingsChanged = true;
+                }
                 if (ImGui::InputInt2("Grid half extent min/max", &m_GridHalfExtentMin))
                 {
                     ensureIntRange(m_GridHalfExtentMin, m_GridHalfExtentMax, 1, 128);
@@ -8025,6 +9218,14 @@ namespace ds
                     settingsChanged = true;
                 }
                 if (ImGui::SliderFloat("Grid opacity", &m_SceneSettings.gridOpacity, m_GridOpacityMin, m_GridOpacityMax, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::ColorEdit3("Cell edge color", &m_CellEdgeColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderFloat("Cell edge width", &m_CellEdgeLineWidth, 0.5f, 10.0f, "%.1f"))
                 {
                     settingsChanged = true;
                 }
@@ -8107,44 +9308,160 @@ namespace ds
 
             if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
             {
-                ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
-                ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
-                ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
-
-                if (ImGui::DragFloatRange2("Atom size min/max", &m_AtomSizeMin, &m_AtomSizeMax, 0.01f, 0.01f, 4.0f, "min %.2f", "max %.2f"))
+                if (ImGui::CollapsingHeader("Rendering", defaultOpenFlags))
                 {
                     ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
-                    settingsChanged = true;
-                }
-                if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, m_AtomSizeMin, m_AtomSizeMax, "%.2f"))
-                {
-                    settingsChanged = true;
-                }
-                if (ImGui::DragFloatRange2("Atom brightness min/max", &m_AtomBrightnessMin, &m_AtomBrightnessMax, 0.01f, 0.05f, 6.0f, "min %.2f", "max %.2f"))
-                {
                     ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
-                    settingsChanged = true;
-                }
-                if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, m_AtomBrightnessMin, m_AtomBrightnessMax, "%.2f"))
-                {
-                    settingsChanged = true;
-                }
-                if (ImGui::DragFloatRange2("Atom glow min/max", &m_AtomGlowMin, &m_AtomGlowMax, 0.005f, 0.0f, 2.0f, "min %.2f", "max %.2f"))
-                {
                     ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
-                    settingsChanged = true;
+
+                    if (ImGui::DragFloatRange2("Atom size min/max", &m_AtomSizeMin, &m_AtomSizeMax, 0.01f, 0.01f, 4.0f, "min %.2f", "max %.2f"))
+                    {
+                        ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
+                        settingsChanged = true;
+                    }
+                    if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, m_AtomSizeMin, m_AtomSizeMax, "%.2f"))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::DragFloatRange2("Atom brightness min/max", &m_AtomBrightnessMin, &m_AtomBrightnessMax, 0.01f, 0.05f, 6.0f, "min %.2f", "max %.2f"))
+                    {
+                        ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
+                        settingsChanged = true;
+                    }
+                    if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, m_AtomBrightnessMin, m_AtomBrightnessMax, "%.2f"))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::DragFloatRange2("Atom glow min/max", &m_AtomGlowMin, &m_AtomGlowMax, 0.005f, 0.0f, 2.0f, "min %.2f", "max %.2f"))
+                    {
+                        ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
+                        settingsChanged = true;
+                    }
+                    if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, m_AtomGlowMin, m_AtomGlowMax, "%.2f"))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (m_SceneSettings.overrideAtomColor &&
+                        ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x,
+                                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+                    {
+                        settingsChanged = true;
+                    }
                 }
-                if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, m_AtomGlowMin, m_AtomGlowMax, "%.2f"))
+
+                if (ImGui::CollapsingHeader("Per-element colors", defaultOpenFlags))
                 {
-                    settingsChanged = true;
+                    if (!m_HasStructureLoaded || m_WorkingStructure.species.empty())
+                    {
+                        ImGui::TextDisabled("Load structure to edit per-element colors.");
+                    }
+                    else
+                    {
+                        std::vector<std::string> species = m_WorkingStructure.species;
+                        std::sort(species.begin(), species.end());
+                        species.erase(std::unique(species.begin(), species.end()), species.end());
+
+                        for (const std::string &rawElement : species)
+                        {
+                            const std::string element = NormalizeElementSymbol(rawElement);
+                            if (element.empty())
+                            {
+                                continue;
+                            }
+
+                            glm::vec3 color = ColorFromElement(element);
+                            const auto overrideIt = m_ElementColorOverrides.find(element);
+                            if (overrideIt != m_ElementColorOverrides.end())
+                            {
+                                color = overrideIt->second;
+                            }
+
+                            std::string label = element + "##ElementColor_" + element;
+                            if (ImGui::ColorEdit3(label.c_str(), &color.x,
+                                                  ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+                            {
+                                m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                                settingsChanged = true;
+                            }
+                        }
+
+                        if (ImGui::Button("Reset per-element colors"))
+                        {
+                            m_ElementColorOverrides.clear();
+                            settingsChanged = true;
+                        }
+                    }
                 }
-                if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
+
+                if (ImGui::CollapsingHeader("Atom editing", defaultOpenFlags))
                 {
-                    settingsChanged = true;
-                }
-                if (m_SceneSettings.overrideAtomColor && ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x))
-                {
-                    settingsChanged = true;
+                    const char *inputCoordinateModes[] = {"Direct", "Cartesian"};
+
+                    ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Periodic table"))
+                    {
+                        m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
+                        m_PeriodicTableOpenedFromContextMenu = false;
+                        m_PeriodicTableOpen = true;
+                    }
+                    ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
+                    ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, inputCoordinateModes, IM_ARRAYSIZE(inputCoordinateModes));
+
+                    if (ImGui::Button("Use camera target") && m_Camera)
+                    {
+                        m_AddAtomPosition = m_Camera->GetTarget();
+                        m_AddAtomCoordinateModeIndex = 1;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Use 3D cursor"))
+                    {
+                        m_AddAtomPosition = m_CursorPosition;
+                        m_AddAtomCoordinateModeIndex = 1;
+                    }
+                    ImGui::SameLine();
+                    const bool canAddAtom = m_HasStructureLoaded;
+                    if (!canAddAtom)
+                    {
+                        ImGui::BeginDisabled();
+                    }
+                    if (ImGui::Button("Add atom"))
+                    {
+                        m_ShowAddAtomDialog = true;
+                    }
+                    if (!canAddAtom)
+                    {
+                        ImGui::EndDisabled();
+                    }
+
+                    ImGui::SeparatorText("Change selected atom type");
+                    ImGui::InputText("New element", m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Apply type to selection"))
+                    {
+                        if (ApplyElementToSelectedAtoms(std::string(m_ChangeAtomElementBuffer.data())))
+                        {
+                            settingsChanged = true;
+                        }
+                    }
+
+                    const bool canDeleteSelectedAtoms = !m_SelectedAtomIndices.empty() && m_HasStructureLoaded;
+                    if (!canDeleteSelectedAtoms)
+                    {
+                        ImGui::BeginDisabled();
+                    }
+                    if (ImGui::Button("Remove selected atoms"))
+                    {
+                        deleteCurrentSelection();
+                    }
+                    if (!canDeleteSelectedAtoms)
+                    {
+                        ImGui::EndDisabled();
+                    }
                 }
             }
 
@@ -8161,6 +9478,38 @@ namespace ds
                     settingsChanged = true;
                 }
                 if (ImGui::SliderFloat("Selection outline", &m_SelectionOutlineThickness, m_SelectionOutlineMin, m_SelectionOutlineMax, "%.1f"))
+                {
+                    settingsChanged = true;
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Measurements", defaultOpenFlags))
+            {
+                if (ImGui::Checkbox("Show selection measurements", &m_ShowSelectionMeasurements))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Checkbox("Distance (last 2 selected atoms)", &m_ShowSelectionDistanceMeasurement))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Checkbox("Angle (last 3 selected atoms)", &m_ShowSelectionAngleMeasurement))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Checkbox("Static angle labels", &m_ShowStaticAngleLabels))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::SliderInt("Measurement precision", &m_MeasurementPrecision, 0, 6))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::ColorEdit3("Measurement text color", &m_MeasurementTextColor.x))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::ColorEdit3("Measurement background", &m_MeasurementBackgroundColor.x))
                 {
                     settingsChanged = true;
                 }
@@ -8244,6 +9593,11 @@ namespace ds
                 {
                     m_CameraZoomSensitivity = zoomSensitivity;
                     ApplyCameraSensitivity();
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Checkbox("Touchpad-friendly navigation", &m_TouchpadNavigationEnabled))
+                {
                     settingsChanged = true;
                 }
 
@@ -8437,23 +9791,40 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Browse##Import"))
                 {
-                    std::string selectedPath;
-                    if (OpenNativeFileDialog(selectedPath))
+                    std::vector<std::string> selectedPaths;
+                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
                     {
-                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPath.c_str());
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
+                        for (const std::string &selectedPath : selectedPaths)
+                        {
+                            AppendStructureFromPathAsCollection(selectedPath);
+                        }
+                    }
+                }
+
+                if (ImGui::Button("Load multiple files"))
+                {
+                    std::vector<std::string> selectedPaths;
+                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                    {
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
+                        for (const std::string &selectedPath : selectedPaths)
+                        {
+                            AppendStructureFromPathAsCollection(selectedPath);
+                        }
                     }
                 }
 
                 if (ImGui::Button("Load POSCAR/CONTCAR"))
                 {
-                    LoadStructureFromPath(std::string(m_ImportPathBuffer.data()));
+                    AppendStructureFromPathAsCollection(std::string(m_ImportPathBuffer.data()));
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Load sample"))
                 {
                     const char *samplePath = "assets/samples/POSCAR";
                     std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
-                    LoadStructureFromPath(samplePath);
+                    AppendStructureFromPathAsCollection(samplePath);
                 }
 
                 ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
@@ -8498,6 +9869,180 @@ namespace ds
                 }
             }
 
+            auto drawAtomsToolsSection = [&]()
+            {
+                if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
+                {
+                    if (ImGui::CollapsingHeader("Rendering", defaultOpenFlags))
+                    {
+                        m_AtomSizeMin = glm::clamp(m_AtomSizeMin, 0.01f, 4.0f);
+                        m_AtomSizeMax = glm::clamp(m_AtomSizeMax, 0.01f, 4.0f);
+                        if (m_AtomSizeMin > m_AtomSizeMax)
+                        {
+                            std::swap(m_AtomSizeMin, m_AtomSizeMax);
+                        }
+                        m_AtomBrightnessMin = glm::clamp(m_AtomBrightnessMin, 0.05f, 6.0f);
+                        m_AtomBrightnessMax = glm::clamp(m_AtomBrightnessMax, 0.05f, 6.0f);
+                        if (m_AtomBrightnessMin > m_AtomBrightnessMax)
+                        {
+                            std::swap(m_AtomBrightnessMin, m_AtomBrightnessMax);
+                        }
+                        m_AtomGlowMin = glm::clamp(m_AtomGlowMin, 0.0f, 2.0f);
+                        m_AtomGlowMax = glm::clamp(m_AtomGlowMax, 0.0f, 2.0f);
+                        if (m_AtomGlowMin > m_AtomGlowMax)
+                        {
+                            std::swap(m_AtomGlowMin, m_AtomGlowMax);
+                        }
+
+                        if (ImGui::DragFloatRange2("Atom size min/max", &m_AtomSizeMin, &m_AtomSizeMax, 0.01f, 0.01f, 4.0f, "min %.2f", "max %.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, m_AtomSizeMin, m_AtomSizeMax, "%.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::DragFloatRange2("Atom brightness min/max", &m_AtomBrightnessMin, &m_AtomBrightnessMax, 0.01f, 0.05f, 6.0f, "min %.2f", "max %.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, m_AtomBrightnessMin, m_AtomBrightnessMax, "%.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::DragFloatRange2("Atom glow min/max", &m_AtomGlowMin, &m_AtomGlowMax, 0.005f, 0.0f, 2.0f, "min %.2f", "max %.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, m_AtomGlowMin, m_AtomGlowMax, "%.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (m_SceneSettings.overrideAtomColor &&
+                            ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x,
+                                              ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+                        {
+                            settingsChanged = true;
+                        }
+                    }
+
+                    if (ImGui::CollapsingHeader("Per-element colors", defaultOpenFlags))
+                    {
+                        if (!m_HasStructureLoaded || m_WorkingStructure.species.empty())
+                        {
+                            ImGui::TextDisabled("Load structure to edit per-element colors.");
+                        }
+                        else
+                        {
+                            std::vector<std::string> species = m_WorkingStructure.species;
+                            std::sort(species.begin(), species.end());
+                            species.erase(std::unique(species.begin(), species.end()), species.end());
+
+                            for (const std::string &rawElement : species)
+                            {
+                                const std::string element = NormalizeElementSymbol(rawElement);
+                                if (element.empty())
+                                {
+                                    continue;
+                                }
+
+                                glm::vec3 color = ColorFromElement(element);
+                                const auto overrideIt = m_ElementColorOverrides.find(element);
+                                if (overrideIt != m_ElementColorOverrides.end())
+                                {
+                                    color = overrideIt->second;
+                                }
+
+                                std::string label = element + "##ToolsElementColor_" + element;
+                                if (ImGui::ColorEdit3(label.c_str(), &color.x,
+                                                      ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+                                {
+                                    m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                                    settingsChanged = true;
+                                }
+                            }
+
+                            if (ImGui::Button("Reset per-element colors"))
+                            {
+                                m_ElementColorOverrides.clear();
+                                settingsChanged = true;
+                            }
+                        }
+                    }
+
+                    if (ImGui::CollapsingHeader("Atom editing", defaultOpenFlags))
+                    {
+                        const char *inputCoordinateModes[] = {"Direct", "Cartesian"};
+
+                        ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
+                        ImGui::SameLine();
+                        if (ImGui::Button("Periodic table"))
+                        {
+                            m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
+                            m_PeriodicTableOpenedFromContextMenu = false;
+                            m_PeriodicTableOpen = true;
+                        }
+                        ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
+                        ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, inputCoordinateModes, IM_ARRAYSIZE(inputCoordinateModes));
+
+                        if (ImGui::Button("Use camera target") && m_Camera)
+                        {
+                            m_AddAtomPosition = m_Camera->GetTarget();
+                            m_AddAtomCoordinateModeIndex = 1;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Use 3D cursor"))
+                        {
+                            m_AddAtomPosition = m_CursorPosition;
+                            m_AddAtomCoordinateModeIndex = 1;
+                        }
+                        ImGui::SameLine();
+                        const bool canAddAtom = m_HasStructureLoaded;
+                        if (!canAddAtom)
+                        {
+                            ImGui::BeginDisabled();
+                        }
+                        if (ImGui::Button("Add atom"))
+                        {
+                            m_ShowAddAtomDialog = true;
+                        }
+                        if (!canAddAtom)
+                        {
+                            ImGui::EndDisabled();
+                        }
+
+                        ImGui::SeparatorText("Change selected atom type");
+                        ImGui::InputText("New element", m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size());
+                        ImGui::SameLine();
+                        if (ImGui::Button("Apply type to selection"))
+                        {
+                            if (ApplyElementToSelectedAtoms(std::string(m_ChangeAtomElementBuffer.data())))
+                            {
+                                settingsChanged = true;
+                            }
+                        }
+
+                        const bool canDeleteSelectedAtoms = !m_SelectedAtomIndices.empty() && m_HasStructureLoaded;
+                        if (!canDeleteSelectedAtoms)
+                        {
+                            ImGui::BeginDisabled();
+                        }
+                        if (ImGui::Button("Remove selected atoms"))
+                        {
+                            deleteCurrentSelection();
+                        }
+                        if (!canDeleteSelectedAtoms)
+                        {
+                            ImGui::EndDisabled();
+                        }
+                    }
+                }
+            };
+
             if (ImGui::CollapsingHeader("Selection & Transform", defaultOpenFlags))
             {
                 const char *interactionModeLabel = "Navigate";
@@ -8531,6 +10076,53 @@ namespace ds
                 }
                 ImGui::SameLine();
                 DrawInlineHelpMarker("Transform shortcuts in viewport: G translate, R rotate, S scale.\nIn ViewSet, R works as Right View.");
+
+                if (ImGui::Button("Hide selected (H)"))
+                {
+                    if (!m_SelectedAtomIndices.empty())
+                    {
+                        for (std::size_t atomIndex : m_SelectedAtomIndices)
+                        {
+                            m_HiddenAtomIndices.insert(atomIndex);
+                        }
+                        m_SelectedAtomIndices.clear();
+                    }
+                    for (std::uint64_t key : m_SelectedBondKeys)
+                    {
+                        m_HiddenBondKeys.insert(key);
+                        auto labelIt = m_BondLabelStates.find(key);
+                        if (labelIt != m_BondLabelStates.end())
+                        {
+                            labelIt->second.hidden = true;
+                        }
+                    }
+                    m_SelectedBondKeys.clear();
+                    if (m_SelectedBondLabelKey != 0)
+                    {
+                        auto labelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
+                        if (labelIt != m_BondLabelStates.end())
+                        {
+                            labelIt->second.hidden = true;
+                        }
+                        m_SelectedBondLabelKey = 0;
+                    }
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Unhide all (Alt+H)"))
+                {
+                    m_HiddenAtomIndices.clear();
+                    m_HiddenBondKeys.clear();
+                    for (auto &[key, state] : m_BondLabelStates)
+                    {
+                        (void)key;
+                        if (!state.deleted)
+                        {
+                            state.hidden = false;
+                        }
+                    }
+                    settingsChanged = true;
+                }
 
                 const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
                 const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
@@ -8651,45 +10243,7 @@ namespace ds
                 }
             }
 
-            if (ImGui::CollapsingHeader("Add Atom", defaultOpenFlags))
-            {
-                ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
-                ImGui::SameLine();
-                if (ImGui::Button("Periodic table"))
-                {
-                    m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                    m_PeriodicTableOpenedFromContextMenu = false;
-                    m_PeriodicTableOpen = true;
-                }
-                ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
-                ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-
-                if (ImGui::Button("Use camera target") && m_Camera)
-                {
-                    m_AddAtomPosition = m_Camera->GetTarget();
-                    m_AddAtomCoordinateModeIndex = 1;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Use 3D cursor"))
-                {
-                    m_AddAtomPosition = m_CursorPosition;
-                    m_AddAtomCoordinateModeIndex = 1;
-                }
-                ImGui::SameLine();
-                const bool canAddAtom = m_HasStructureLoaded;
-                if (!canAddAtom)
-                {
-                    ImGui::BeginDisabled();
-                }
-                if (ImGui::Button("Add atom"))
-                {
-                    m_ShowAddAtomDialog = true;
-                }
-                if (!canAddAtom)
-                {
-                    ImGui::EndDisabled();
-                }
-            }
+            drawAtomsToolsSection();
 
             if (ImGui::CollapsingHeader("Bonds", defaultOpenFlags))
             {
@@ -8739,6 +10293,47 @@ namespace ds
                     settingsChanged = true;
                 }
 
+                if (ImGui::Checkbox("Enable per-element-pair cutoff overrides", &m_BondUsePairThresholdOverrides))
+                {
+                    m_AutoBondsDirty = true;
+                    settingsChanged = true;
+                }
+
+                if (m_BondUsePairThresholdOverrides && m_HasStructureLoaded && !m_WorkingStructure.species.empty())
+                {
+                    if (ImGui::TreeNode("Pair cutoff overrides"))
+                    {
+                        for (std::size_t i = 0; i < m_WorkingStructure.species.size(); ++i)
+                        {
+                            for (std::size_t j = i; j < m_WorkingStructure.species.size(); ++j)
+                            {
+                                const std::string key = BuildElementPairScaleKey(m_WorkingStructure.species[i], m_WorkingStructure.species[j]);
+                                if (key.empty())
+                                {
+                                    continue;
+                                }
+
+                                float pairScale = ResolveBondThresholdScaleForPair(m_WorkingStructure.species[i], m_WorkingStructure.species[j]);
+                                if (ImGui::SliderFloat(key.c_str(), &pairScale, 0.40f, 3.00f, "%.2f"))
+                                {
+                                    m_BondPairThresholdScaleOverrides[key] = pairScale;
+                                    m_AutoBondsDirty = true;
+                                    settingsChanged = true;
+                                }
+                            }
+                        }
+
+                        if (ImGui::Button("Clear pair overrides"))
+                        {
+                            m_BondPairThresholdScaleOverrides.clear();
+                            m_AutoBondsDirty = true;
+                            settingsChanged = true;
+                        }
+
+                        ImGui::TreePop();
+                    }
+                }
+
                 const bool canRegenerateBonds = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
                 if (!canRegenerateBonds)
                 {
@@ -8757,7 +10352,19 @@ namespace ds
                 ImGui::SameLine();
                 ImGui::TextUnformatted(m_AutoBondsDirty ? "Status: pending rebuild" : "Status: cached");
 
-                if (ImGui::SliderFloat("Bond line width", &m_BondLineWidth, 1.0f, 6.0f, "%.1f"))
+                if (ImGui::DragFloatRange2("Bond line width min/max", &m_BondLineWidthMin, &m_BondLineWidthMax, 0.05f, 0.2f, 20.0f, "min %.2f", "max %.2f"))
+                {
+                    m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 20.0f);
+                    m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 20.0f);
+                    if (m_BondLineWidthMin > m_BondLineWidthMax)
+                    {
+                        std::swap(m_BondLineWidthMin, m_BondLineWidthMax);
+                    }
+                    m_BondLineWidth = glm::clamp(m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax);
+                    settingsChanged = true;
+                }
+
+                if (ImGui::SliderFloat("Bond line width", &m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax, "%.1f"))
                 {
                     settingsChanged = true;
                 }
@@ -8797,7 +10404,138 @@ namespace ds
                     settingsChanged = true;
                 }
                 ImGui::SameLine();
+                const bool canCreateManualBond =
+                    m_SelectedAtomIndices.size() == 2 &&
+                    m_SelectedAtomIndices[0] < m_WorkingStructure.atoms.size() &&
+                    m_SelectedAtomIndices[1] < m_WorkingStructure.atoms.size() &&
+                    m_SelectedAtomIndices[0] != m_SelectedAtomIndices[1];
+                if (!canCreateManualBond)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Create bond from selected atoms") && canCreateManualBond)
+                {
+                    const std::size_t atomA = m_SelectedAtomIndices[0];
+                    const std::size_t atomB = m_SelectedAtomIndices[1];
+                    const std::uint64_t bondKey = MakeBondPairKey(atomA, atomB);
+
+                    m_ManualBondKeys.insert(bondKey);
+                    m_DeletedBondKeys.erase(bondKey);
+                    m_HiddenBondKeys.erase(bondKey);
+
+                    BondLabelState &labelState = m_BondLabelStates[bondKey];
+                    labelState.atomA = std::min(atomA, atomB);
+                    labelState.atomB = std::max(atomA, atomB);
+                    labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
+                    labelState.deleted = false;
+                    labelState.hidden = false;
+
+                    m_AutoBondsDirty = true;
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Manual bond created between atom " +
+                                             std::to_string(labelState.atomA) + " and atom " +
+                                             std::to_string(labelState.atomB) + ".";
+                    settingsChanged = true;
+                }
+                if (!canCreateManualBond)
+                {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                const bool canCreateAngleLabel =
+                    m_SelectedAtomIndices.size() >= 3 &&
+                    m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 3] < m_WorkingStructure.atoms.size() &&
+                    m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2] < m_WorkingStructure.atoms.size() &&
+                    m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1] < m_WorkingStructure.atoms.size() &&
+                    m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 3] != m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2] &&
+                    m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2] != m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1] &&
+                    m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 3] != m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1];
+                if (!canCreateAngleLabel)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Create angle label (last 3 selected)") && canCreateAngleLabel)
+                {
+                    const std::size_t atomA = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 3];
+                    const std::size_t atomB = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2];
+                    const std::size_t atomC = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1];
+
+                    AngleLabelState angleState;
+                    angleState.atomA = atomA;
+                    angleState.atomB = atomB;
+                    angleState.atomC = atomC;
+                    m_AngleLabelStates[MakeAngleTripletKey(atomA, atomB, atomC)] = angleState;
+
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Added static angle label for atoms " +
+                                             std::to_string(atomA) + "-" +
+                                             std::to_string(atomB) + "-" +
+                                             std::to_string(atomC) + ".";
+                    settingsChanged = true;
+                }
+                if (!canCreateAngleLabel)
+                {
+                    ImGui::EndDisabled();
+                }
+                ImGui::TextDisabled("Angle order: last 3 selected atoms = A-B-C (B is the vertex).");
+                if (ImGui::Button("Hide selected bonds/labels"))
+                {
+                    for (std::uint64_t key : m_SelectedBondKeys)
+                    {
+                        m_HiddenBondKeys.insert(key);
+                        auto stateIt = m_BondLabelStates.find(key);
+                        if (stateIt != m_BondLabelStates.end())
+                        {
+                            stateIt->second.hidden = true;
+                        }
+                    }
+                    if (m_SelectedBondLabelKey != 0)
+                    {
+                        auto stateIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
+                        if (stateIt != m_BondLabelStates.end())
+                        {
+                            stateIt->second.hidden = true;
+                        }
+                    }
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Restore hidden bonds"))
+                {
+                    m_HiddenBondKeys.clear();
+                    for (auto &[key, state] : m_BondLabelStates)
+                    {
+                        (void)key;
+                        if (!state.deleted)
+                        {
+                            state.hidden = false;
+                        }
+                    }
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
                 ImGui::Text("Selected bonds: %zu", m_SelectedBondKeys.size());
+
+                if (ImGui::Checkbox("Show static angle labels", &m_ShowStaticAngleLabels))
+                {
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                ImGui::Text("Angle labels: %zu", m_AngleLabelStates.size());
+                const bool hasAngleLabels = !m_AngleLabelStates.empty();
+                if (!hasAngleLabels)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Clear all angle labels") && hasAngleLabels)
+                {
+                    m_AngleLabelStates.clear();
+                    settingsChanged = true;
+                }
+                if (!hasAngleLabels)
+                {
+                    ImGui::EndDisabled();
+                }
                 if (ImGui::SliderInt("Label precision", &m_BondLabelPrecision, 0, 6))
                 {
                     settingsChanged = true;
@@ -8939,6 +10677,127 @@ namespace ds
             }
 
             ImGui::SameLine();
+            const bool canDeleteCollection =
+                m_Collections.size() > 1 &&
+                m_ActiveCollectionIndex >= 0 &&
+                m_ActiveCollectionIndex < static_cast<int>(m_Collections.size());
+            if (!canDeleteCollection)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Delete active collection") && canDeleteCollection)
+            {
+                const int deletedCollectionIndex = m_ActiveCollectionIndex;
+                std::vector<std::size_t> atomIndicesToDelete;
+                atomIndicesToDelete.reserve(m_AtomCollectionIndices.size());
+                for (std::size_t atomIndex = 0; atomIndex < m_AtomCollectionIndices.size(); ++atomIndex)
+                {
+                    if (m_AtomCollectionIndices[atomIndex] == deletedCollectionIndex)
+                    {
+                        atomIndicesToDelete.push_back(atomIndex);
+                    }
+                }
+
+                std::vector<int> emptyIndicesToDelete;
+                emptyIndicesToDelete.reserve(m_TransformEmpties.size());
+                for (int emptyIndex = 0; emptyIndex < static_cast<int>(m_TransformEmpties.size()); ++emptyIndex)
+                {
+                    if (m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].collectionIndex == deletedCollectionIndex)
+                    {
+                        emptyIndicesToDelete.push_back(emptyIndex);
+                    }
+                }
+
+                const std::size_t removedAtomCount = atomIndicesToDelete.size();
+                if (!atomIndicesToDelete.empty())
+                {
+                    m_SelectedAtomIndices = atomIndicesToDelete;
+                    m_SelectedTransformEmptyIndex = -1;
+                    m_SelectedSpecialNode = SpecialNodeSelection::None;
+                    m_SelectedBondKeys.clear();
+                    m_SelectedBondLabelKey = 0;
+                    deleteCurrentSelection();
+                }
+
+                const std::size_t removedEmptyCount = emptyIndicesToDelete.size();
+                for (auto it = emptyIndicesToDelete.rbegin(); it != emptyIndicesToDelete.rend(); ++it)
+                {
+                    DeleteTransformEmptyAtIndex(*it);
+                }
+
+                m_Collections.erase(m_Collections.begin() + deletedCollectionIndex);
+
+                for (int &collectionIndex : m_AtomCollectionIndices)
+                {
+                    if (collectionIndex > deletedCollectionIndex)
+                    {
+                        --collectionIndex;
+                    }
+                }
+                EnsureAtomCollectionAssignments();
+
+                for (TransformEmpty &empty : m_TransformEmpties)
+                {
+                    if (empty.collectionIndex > deletedCollectionIndex)
+                    {
+                        --empty.collectionIndex;
+                    }
+
+                    if (empty.collectionIndex < 0 || empty.collectionIndex >= static_cast<int>(m_Collections.size()))
+                    {
+                        empty.collectionIndex = 0;
+                    }
+
+                    if (!m_Collections.empty())
+                    {
+                        empty.collectionId = m_Collections[static_cast<std::size_t>(empty.collectionIndex)].id;
+                    }
+                }
+
+                if (m_ActiveCollectionIndex >= static_cast<int>(m_Collections.size()))
+                {
+                    m_ActiveCollectionIndex = static_cast<int>(m_Collections.size()) - 1;
+                }
+                if (m_ActiveCollectionIndex < 0)
+                {
+                    m_ActiveCollectionIndex = 0;
+                }
+
+                settingsChanged = true;
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Deleted active collection with atoms=" + std::to_string(removedAtomCount) +
+                                         ", empties=" + std::to_string(removedEmptyCount) + ".";
+            }
+            if (!canDeleteCollection)
+            {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::SameLine();
+            const bool canAssignAtomsToCollection = !m_SelectedAtomIndices.empty() &&
+                                                    m_ActiveCollectionIndex >= 0 &&
+                                                    m_ActiveCollectionIndex < static_cast<int>(m_Collections.size());
+            if (!canAssignAtomsToCollection)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Assign selected atoms -> active collection") && canAssignAtomsToCollection)
+            {
+                for (std::size_t atomIndex : m_SelectedAtomIndices)
+                {
+                    if (atomIndex < m_AtomCollectionIndices.size())
+                    {
+                        m_AtomCollectionIndices[atomIndex] = m_ActiveCollectionIndex;
+                    }
+                }
+                settingsChanged = true;
+            }
+            if (!canAssignAtomsToCollection)
+            {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::SameLine();
             const bool canCreateGroup = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
             if (!canCreateGroup)
             {
@@ -8954,6 +10813,41 @@ namespace ds
             }
 
             ImGui::SeparatorText("Collections");
+
+            auto selectAtomRangeInCollection = [&](std::size_t collectionIndex, std::size_t anchorIndex, std::size_t clickedIndex, bool additive)
+            {
+                const std::size_t rangeStart = std::min(anchorIndex, clickedIndex);
+                const std::size_t rangeEnd = std::max(anchorIndex, clickedIndex);
+
+                if (!additive)
+                {
+                    m_SelectedAtomIndices.clear();
+                }
+
+                for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+                {
+                    if (ResolveAtomCollectionIndex(atomIndex) != static_cast<int>(collectionIndex))
+                    {
+                        continue;
+                    }
+
+                    if (atomIndex < rangeStart || atomIndex > rangeEnd)
+                    {
+                        continue;
+                    }
+
+                    if (IsAtomHidden(atomIndex) || !IsAtomCollectionSelectable(atomIndex))
+                    {
+                        continue;
+                    }
+
+                    if (!IsAtomSelected(atomIndex))
+                    {
+                        m_SelectedAtomIndices.push_back(atomIndex);
+                    }
+                }
+            };
+
             for (std::size_t collectionIndex = 0; collectionIndex < m_Collections.size(); ++collectionIndex)
             {
                 SceneCollection &collection = m_Collections[collectionIndex];
@@ -9011,6 +10905,7 @@ namespace ds
                                 m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
                                 m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
                                 m_SelectedAtomIndices.clear();
+                                m_OutlinerAtomSelectionAnchor.reset();
                             }
 
                             const int dragIndex = static_cast<int>(emptyIndex);
@@ -9050,19 +10945,48 @@ namespace ds
 
                     drawEmptyHierarchy(0);
 
-                    if (collectionIndex == 0)
                     {
-                        const std::string atomsLabel = "Atoms (" + std::to_string(m_WorkingStructure.atoms.size()) + ")";
+                        std::size_t collectionAtomCount = 0;
+                        for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+                        {
+                            if (ResolveAtomCollectionIndex(atomIndex) == static_cast<int>(collectionIndex))
+                            {
+                                ++collectionAtomCount;
+                            }
+                        }
+
+                        const std::string atomsLabel = "Atoms (" + std::to_string(collectionAtomCount) + ")";
                         if (ImGui::TreeNode(atomsLabel.c_str()))
                         {
                             for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
                             {
+                                if (ResolveAtomCollectionIndex(atomIndex) != static_cast<int>(collectionIndex))
+                                {
+                                    continue;
+                                }
+
+                                const bool hidden = IsAtomHidden(atomIndex);
+                                const bool selectableAtom = IsAtomCollectionSelectable(atomIndex);
                                 const bool isSelected = IsAtomSelected(atomIndex);
-                                const std::string atomLabel =
-                                    m_WorkingStructure.atoms[atomIndex].element + " [" + std::to_string(atomIndex) + "]";
+                                std::string atomLabel = m_WorkingStructure.atoms[atomIndex].element + " [" + std::to_string(atomIndex) + "]";
+                                if (hidden)
+                                {
+                                    atomLabel += " (hidden)";
+                                }
+
+                                if (!selectableAtom)
+                                {
+                                    ImGui::BeginDisabled();
+                                }
+
                                 if (ImGui::Selectable(atomLabel.c_str(), isSelected))
                                 {
-                                    if (io.KeyCtrl)
+                                    const bool shiftSelection = io.KeyShift && m_OutlinerAtomSelectionAnchor.has_value();
+                                    if (shiftSelection)
+                                    {
+                                        selectAtomRangeInCollection(collectionIndex, *m_OutlinerAtomSelectionAnchor, atomIndex, io.KeyCtrl);
+                                    }
+                                    else if (io.KeyCtrl)
                                     {
                                         if (isSelected)
                                         {
@@ -9070,7 +10994,7 @@ namespace ds
                                                 std::remove(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), atomIndex),
                                                 m_SelectedAtomIndices.end());
                                         }
-                                        else
+                                        else if (!hidden)
                                         {
                                             m_SelectedAtomIndices.push_back(atomIndex);
                                         }
@@ -9078,14 +11002,29 @@ namespace ds
                                     else
                                     {
                                         m_SelectedAtomIndices.clear();
-                                        m_SelectedAtomIndices.push_back(atomIndex);
+                                        if (!hidden)
+                                        {
+                                            m_SelectedAtomIndices.push_back(atomIndex);
+                                        }
                                     }
                                     m_SelectedTransformEmptyIndex = -1;
+                                    if (!hidden && selectableAtom)
+                                    {
+                                        m_OutlinerAtomSelectionAnchor = atomIndex;
+                                    }
+                                }
+
+                                if (!selectableAtom)
+                                {
+                                    ImGui::EndDisabled();
                                 }
                             }
                             ImGui::TreePop();
                         }
+                    }
 
+                    if (collectionIndex == 0)
+                    {
                         if (ImGui::TreeNode("Groups"))
                         {
                             for (std::size_t groupIndex = 0; groupIndex < m_ObjectGroups.size(); ++groupIndex)
