@@ -14,12 +14,15 @@ namespace ds
         glm::vec3 clearColor = glm::vec3(0.14f, 0.16f, 0.20f);
 
         bool drawGrid = true;
+        bool drawCellEdges = false;
         int gridHalfExtent = 12;
         float gridSpacing = 1.0f;
         float gridLineWidth = 1.0f;
         glm::vec3 gridOrigin = glm::vec3(0.0f, 0.0f, 0.0f);
         glm::vec3 gridColor = glm::vec3(0.36f, 0.39f, 0.45f);
         float gridOpacity = 0.50f;
+        glm::vec3 cellEdgeColor = glm::vec3(0.78f, 0.86f, 0.94f);
+        float cellEdgeLineWidth = 1.8f;
 
         glm::vec3 lightDirection = glm::vec3(-0.5f, -1.0f, -0.4f);
         glm::vec3 lightColor = glm::vec3(1.0f, 0.98f, 0.92f);

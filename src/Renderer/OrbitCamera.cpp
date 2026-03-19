@@ -48,7 +48,7 @@ namespace ds
         m_ZoomSensitivity = zoom;
     }
 
-    void OrbitCamera::OnUpdate(float deltaTime, bool allowInput, float scrollDelta)
+    void OrbitCamera::OnUpdate(float deltaTime, bool allowInput, float scrollDelta, bool touchpadNavigationEnabled)
     {
         GLFWwindow *window = ApplicationContext::Get().GetWindow();
 
@@ -64,9 +64,16 @@ namespace ds
             return;
         }
         const bool mmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+        const bool lmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        const bool rmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        const bool altPressed = glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
         const bool shiftPressed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+        const bool touchpadOrbit = touchpadNavigationEnabled && altPressed && lmb;
+        const bool touchpadPan = touchpadNavigationEnabled && altPressed && shiftPressed && lmb;
+        const bool touchpadZoom = touchpadNavigationEnabled && altPressed && rmb;
+        const bool dragActiveInput = mmb || touchpadOrbit || touchpadPan || touchpadZoom;
 
-        if (!mmb)
+        if (!dragActiveInput)
         {
             m_DragActive = false;
             m_LastMousePos = mousePos;
@@ -103,7 +110,7 @@ namespace ds
             }
         }
 
-        if (!mmb)
+        if (!dragActiveInput)
             return;
 
         if (!m_DragActive)
@@ -139,7 +146,15 @@ namespace ds
             up = glm::normalize(glm::vec3(rollRotation * glm::vec4(up, 0.0f)));
         }
 
-        if (!shiftPressed)
+        if (touchpadZoom)
+        {
+            m_Distance += delta.y * 0.020f * m_Distance * m_ZoomSensitivity;
+            if (m_Distance < 0.5f)
+                m_Distance = 0.5f;
+            if (m_Distance > 100.0f)
+                m_Distance = 100.0f;
+        }
+        else if (!(shiftPressed || touchpadPan))
         {
             // Orbit in camera-local frame: horizontal drag rotates around current local up,
             // vertical drag rotates around current local right.
