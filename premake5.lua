@@ -17,6 +17,7 @@ IncludeDir["glm"] = "vendor/glm"
 IncludeDir["glad"] = "vendor/glad_gen/include"
 IncludeDir["imguizmo"] = "vendor/imguizmo"
 IncludeDir["imviewguizmo"] = "vendor/imviewguizmo"
+IncludeDir["tracy"] = "vendor/tracy/public"
 
 filter "action:vs*"
     flags { "MultiProcessorCompile" }
@@ -187,6 +188,7 @@ project "DefectsStudio"
     {
         "src/**.h",
         "src/**.cpp",
+        "vendor/tracy/public/TracyClient.cpp",
         "assets/icon.rc"
     }
 
@@ -198,7 +200,8 @@ project "DefectsStudio"
         IncludeDir["imguizmo"],
         IncludeDir["imviewguizmo"],
         IncludeDir["glm"],
-        IncludeDir["glad"]
+        IncludeDir["glad"],
+        IncludeDir["tracy"]
     }
 
     links
@@ -228,7 +231,11 @@ project "DefectsStudio"
         symbols "on"
         defines
         {
-            "DS_CONFIG_DEBUG"
+            "DS_CONFIG_DEBUG",
+            "DS_ENABLE_TRACY",
+            "TRACY_ENABLE",
+            "TRACY_ON_DEMAND",
+            "TRACY_NO_SYSTEM_TRACING"
         }
 
     filter "configurations:Release"
@@ -236,5 +243,9 @@ project "DefectsStudio"
         optimize "on"
         defines
         {
-            "DS_CONFIG_RELEASE"
+            "DS_CONFIG_RELEASE",
+            "DS_ENABLE_TRACY",
+            "TRACY_ENABLE",
+            "TRACY_ON_DEMAND",
+            "TRACY_NO_SYSTEM_TRACING"
         }

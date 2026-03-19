@@ -12,6 +12,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <glm/vec2.hpp>
@@ -67,6 +69,27 @@ namespace ds
             ActiveEmpty = 1
         };
 
+        enum class SelectionFilter
+        {
+            AtomsOnly = 0,
+            AtomsAndBonds = 1,
+            BondsOnly = 2,
+            BondLabelsOnly = 3
+        };
+
+        enum class BondRenderStyle
+        {
+            UnicolorLine = 0,
+            BicolorLine = 1,
+            ColorGradient = 2
+        };
+
+        enum class PeriodicTableTarget
+        {
+            AddAtomEntry = 0,
+            ChangeSelectedAtoms = 1
+        };
+
         struct TransformEmpty
         {
             SceneUUID id = 0;
@@ -102,6 +125,43 @@ namespace ds
             std::vector<int> emptyIndices;
         };
 
+        struct BondSegment
+        {
+            std::size_t atomA = 0;
+            std::size_t atomB = 0;
+            glm::vec3 start = glm::vec3(0.0f);
+            glm::vec3 end = glm::vec3(0.0f);
+            glm::vec3 midpoint = glm::vec3(0.0f);
+            float length = 0.0f;
+        };
+
+        struct BondLabelState
+        {
+            std::size_t atomA = 0;
+            std::size_t atomB = 0;
+            glm::vec3 worldOffset = glm::vec3(0.0f);
+            float scale = 1.0f;
+            bool hidden = false;
+            bool deleted = false;
+        };
+
+        struct AngleLabelState
+        {
+            std::size_t atomA = 0;
+            std::size_t atomB = 0;
+            std::size_t atomC = 0;
+        };
+
+        struct CameraPreset
+        {
+            std::string name;
+            glm::vec3 target = glm::vec3(0.0f);
+            float distance = 6.0f;
+            float yaw = 0.6f;
+            float pitch = 0.5f;
+            float roll = 0.0f;
+        };
+
         enum class SpecialNodeSelection
         {
             None = 0,
@@ -120,14 +180,21 @@ namespace ds
         void LoadSceneState();
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
+        bool AppendStructureFromPathAsCollection(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
         bool AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode);
+        bool ApplyElementToSelectedAtoms(const std::string &elementInput, std::size_t *outChangedCount = nullptr);
         bool IsAtomSelected(std::size_t index) const;
+        bool IsAtomHidden(std::size_t index) const;
         void ToggleInteractionMode();
         void HandleViewportSelection();
         void SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
+        void SelectBondsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
+        void SelectAtomsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection);
+        void SelectBondsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection);
         void AppendSelectionDebugLog(const std::string &message) const;
         bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
+        bool PickBondAtScreenPoint(const glm::vec2 &mousePos, std::uint64_t &outBondKey) const;
         bool PickTransformEmptyAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outEmptyIndex) const;
         glm::vec3 GetAtomCartesianPosition(std::size_t atomIndex) const;
         void SetAtomCartesianPosition(std::size_t atomIndex, const glm::vec3 &position);
@@ -136,6 +203,10 @@ namespace ds
         bool HasActiveTransformEmpty() const;
         bool IsCollectionVisible(int collectionIndex) const;
         bool IsCollectionSelectable(int collectionIndex) const;
+        bool IsAtomCollectionVisible(std::size_t atomIndex) const;
+        bool IsAtomCollectionSelectable(std::size_t atomIndex) const;
+        int ResolveAtomCollectionIndex(std::size_t atomIndex) const;
+        void EnsureAtomCollectionAssignments();
         void EnsureSceneDefaults();
         void DeleteTransformEmptyAtIndex(int emptyIndex);
         bool AlignEmptyZAxisFromSelectedAtoms(int emptyIndex);
@@ -148,7 +219,10 @@ namespace ds
         bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
         void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
         void DrawPeriodicTableWindow();
-        void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch);
+        void DrawChangeAtomTypeConfirmDialog();
+        void RebuildAutoBonds(const std::vector<glm::vec3> &atomCartesianPositions);
+        float ResolveBondThresholdScaleForPair(const std::string &elementA, const std::string &elementB) const;
+        void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll = std::nullopt);
         void UpdateCameraOrbitTransition(float deltaTime);
 
         bool m_ShowDemoWindow = false;
@@ -179,18 +253,65 @@ namespace ds
         int m_ExportPrecision = 8;
         int m_ExportCoordinateModeIndex = 0;
         std::array<char, 16> m_AddAtomElementBuffer = {'S', 'i', '\0'};
+        std::array<char, 16> m_ChangeAtomElementBuffer = {'G', 'e', '\0'};
         glm::vec3 m_AddAtomPosition = glm::vec3(0.0f);
         float m_AddAtomUniformPositionValue = 0.0f;
         int m_AddAtomCoordinateModeIndex = 1;
         bool m_PeriodicTableOpen = false;
+        PeriodicTableTarget m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
+        std::array<char, 16> m_PendingChangeAtomElementBuffer = {};
+        bool m_ChangeAtomTypeConfirmOpen = false;
+        bool m_PeriodicTableOpenedFromContextMenu = false;
+        bool m_ReopenViewportSelectionContextMenu = false;
         bool m_ShowAddAtomDialog = false;
+        bool m_AutoBondGenerationEnabled = true;
+        bool m_AutoBondsDirty = true;
+        bool m_ShowBondLengthLabels = true;
+        float m_BondThresholdScale = 1.12f;
+        float m_BondLineWidth = 2.0f;
+        glm::vec3 m_BondColor = glm::vec3(0.72f, 0.78f, 0.90f);
+        glm::vec3 m_BondSelectedColor = glm::vec3(0.98f, 0.88f, 0.42f);
+        BondRenderStyle m_BondRenderStyle = BondRenderStyle::UnicolorLine;
+        std::vector<BondSegment> m_GeneratedBonds;
+        std::unordered_map<std::uint64_t, BondLabelState> m_BondLabelStates;
+        std::unordered_set<std::uint64_t> m_SelectedBondKeys;
+        std::unordered_set<std::uint64_t> m_DeletedBondKeys;
+        std::uint64_t m_SelectedBondLabelKey = 0;
+        SelectionFilter m_SelectionFilter = SelectionFilter::AtomsAndBonds;
+        bool m_BondLabelDeleteOnlyMode = false;
+        bool m_BondLabelGizmoEnabled = true;
+        int m_BondLabelGizmoOperation = 0;
+        float m_BondLabelMultiScaleValue = 1.0f;
+        bool m_BondUsePairThresholdOverrides = true;
+        std::unordered_map<std::string, float> m_BondPairThresholdScaleOverrides;
+        glm::vec3 m_BondLabelTextColor = glm::vec3(0.84f, 0.88f, 0.93f);
+        glm::vec3 m_BondLabelBackgroundColor = glm::vec3(0.08f, 0.09f, 0.12f);
+        glm::vec3 m_BondLabelBorderColor = glm::vec3(0.72f, 0.76f, 0.88f);
+        int m_BondLabelPrecision = 3;
+        bool m_ShowSelectionMeasurements = true;
+        bool m_ShowSelectionDistanceMeasurement = true;
+        bool m_ShowSelectionAngleMeasurement = true;
+        glm::vec3 m_MeasurementTextColor = glm::vec3(0.95f, 0.95f, 0.80f);
+        glm::vec3 m_MeasurementBackgroundColor = glm::vec3(0.08f, 0.10f, 0.14f);
+        int m_MeasurementPrecision = 3;
+        std::unordered_set<std::size_t> m_HiddenAtomIndices;
+        std::unordered_set<std::uint64_t> m_HiddenBondKeys;
+        std::unordered_set<std::uint64_t> m_ManualBondKeys;
+        std::unordered_map<std::string, AngleLabelState> m_AngleLabelStates;
+        bool m_ShowStaticAngleLabels = true;
+        glm::vec3 m_SelectedAtomCustomColor = glm::vec3(0.95f, 0.42f, 0.42f);
+        std::unordered_map<std::string, glm::vec3> m_ElementColorOverrides;
+        std::unordered_map<SceneUUID, glm::vec3> m_AtomColorOverrides;
+        std::size_t m_LastLoggedBondCount = std::numeric_limits<std::size_t>::max();
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
         SpecialNodeSelection m_SelectedSpecialNode = SpecialNodeSelection::None;
         glm::vec3 m_SceneOriginPosition = glm::vec3(0.0f);
         glm::vec3 m_LightPosition = glm::vec3(3.0f, -2.0f, 2.5f);
         std::vector<SceneUUID> m_AtomNodeIds;
+        std::vector<int> m_AtomCollectionIndices;
         std::vector<std::size_t> m_SelectedAtomIndices;
+        std::optional<std::size_t> m_OutlinerAtomSelectionAnchor;
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
         glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);
         float m_SelectionOutlineThickness = 2.0f;
@@ -223,6 +344,7 @@ namespace ds
             glm::vec3(0.27f, 0.90f, 0.27f),
             glm::vec3(0.27f, 0.47f, 0.96f)};
         bool m_ShowGlobalAxesOverlay = true;
+        std::array<bool, 3> m_ShowGlobalAxis = {true, true, true};
         bool m_GizmoSnapEnabled = false;
         float m_GizmoTranslateSnap = 0.1f;
         float m_GizmoRotateSnapDeg = 15.0f;
@@ -231,9 +353,13 @@ namespace ds
         float m_ViewGizmoScale = 0.72f;
         float m_ViewGizmoOffsetRight = 16.0f;
         float m_ViewGizmoOffsetTop = 72.0f;
+        float m_ViewportRotateStepDeg = 15.0f;
         bool m_SelectionDebugToFile = true;
         bool m_BoxSelectArmed = false;
         bool m_BoxSelecting = false;
+        bool m_CircleSelectArmed = false;
+        bool m_CircleSelecting = false;
+        float m_CircleSelectRadius = 52.0f;
         bool m_BlockSelectionThisFrame = false;
         bool m_ShowToolsPanel = true;
         bool m_GizmoConsumedMouseThisFrame = false;
@@ -282,12 +408,15 @@ namespace ds
         glm::vec3 m_CursorColor = glm::vec3(0.22f, 0.95f, 0.95f);
         float m_CursorVisualScale = 0.20f;
         bool m_CursorSnapToGrid = true;
+        bool m_TouchpadNavigationEnabled = true;
+        bool m_AppendImportToNewCollection = true;
 
         bool m_HasPersistedCameraState = false;
         glm::vec3 m_CameraTargetPersisted = glm::vec3(0.0f, 0.0f, 0.0f);
         float m_CameraDistancePersisted = 6.0f;
         float m_CameraYawPersisted = 0.6f;
         float m_CameraPitchPersisted = 0.5f;
+        float m_CameraRollPersisted = 0.0f;
 
         bool m_CameraTransitionActive = false;
         float m_CameraTransitionElapsed = 0.0f;
@@ -300,8 +429,42 @@ namespace ds
         float m_CameraTransitionEndYaw = 0.0f;
         float m_CameraTransitionStartPitch = 0.0f;
         float m_CameraTransitionEndPitch = 0.0f;
+        float m_CameraTransitionStartRoll = 0.0f;
+        float m_CameraTransitionEndRoll = 0.0f;
+
+        std::vector<CameraPreset> m_CameraPresets;
+        int m_SelectedCameraPresetIndex = -1;
+        std::array<char, 64> m_CameraPresetNameBuffer = {'P', 'r', 'e', 's', 'e', 't', ' ', '1', '\0'};
 
         SceneRenderSettings m_SceneSettings;
+        int m_GridHalfExtentMin = 1;
+        int m_GridHalfExtentMax = 64;
+        float m_GridSpacingMin = 0.1f;
+        float m_GridSpacingMax = 5.0f;
+        float m_GridLineWidthMin = 1.0f;
+        float m_GridLineWidthMax = 4.0f;
+        float m_GridOpacityMin = 0.05f;
+        float m_GridOpacityMax = 1.0f;
+        bool m_CleanViewMode = false;
+        bool m_ShowCellEdges = false;
+        glm::vec3 m_CellEdgeColor = glm::vec3(0.78f, 0.86f, 0.94f);
+        float m_CellEdgeLineWidth = 1.8f;
+        float m_AmbientMin = 0.0f;
+        float m_AmbientMax = 1.5f;
+        float m_DiffuseMin = 0.0f;
+        float m_DiffuseMax = 2.0f;
+        float m_RenderScaleMin = 0.25f;
+        float m_RenderScaleMax = 1.0f;
+        float m_AtomSizeMin = 0.05f;
+        float m_AtomSizeMax = 1.25f;
+        float m_AtomBrightnessMin = 0.3f;
+        float m_AtomBrightnessMax = 2.2f;
+        float m_AtomGlowMin = 0.0f;
+        float m_AtomGlowMax = 0.60f;
+        float m_BondLineWidthMin = 1.0f;
+        float m_BondLineWidthMax = 6.0f;
+        float m_SelectionOutlineMin = 1.0f;
+        float m_SelectionOutlineMax = 8.0f;
         float m_ViewportRenderScale = 1.0f;
         float m_UiSpacingScale = 1.0f;
         int m_ProjectionModeIndex = 0;

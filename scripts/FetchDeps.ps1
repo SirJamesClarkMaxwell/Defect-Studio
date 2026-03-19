@@ -1,18 +1,27 @@
+param(
+    [switch]$SkipSubmoduleSync
+)
+
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
-Write-Host "Syncing git submodules..."
-& git submodule sync --recursive
-if ($LASTEXITCODE -ne 0) {
-    throw "git submodule sync failed"
+if ($SkipSubmoduleSync) {
+    Write-Host "Skipping git submodule sync/update."
 }
+else {
+    Write-Host "Syncing git submodules..."
+    & git submodule sync --recursive
+    if ($LASTEXITCODE -ne 0) {
+        throw "git submodule sync failed"
+    }
 
-Write-Host "Initializing/updating git submodules..."
-& git submodule update --init --recursive
-if ($LASTEXITCODE -ne 0) {
-    throw "git submodule update failed"
+    Write-Host "Initializing/updating git submodules..."
+    & git submodule update --init --recursive
+    if ($LASTEXITCODE -ne 0) {
+        throw "git submodule update failed"
+    }
 }
 
 foreach ($requiredPath in @("vendor/glfw", "vendor/glad", "vendor/imgui", "vendor/glm")) {

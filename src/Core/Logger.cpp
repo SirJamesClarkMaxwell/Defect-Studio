@@ -45,7 +45,7 @@ namespace ds
         const std::string timestamp = BuildTimestampNow();
         const std::string text(message);
         m_Entries.push_back(LogEntry{level, timestamp, text});
-        if (level == LogLevel::Error)
+        if (level == LogLevel::Error || level == LogLevel::Fatal)
         {
             ++m_ErrorCount;
         }
@@ -55,13 +55,21 @@ namespace ds
         if (out.is_open())
         {
             const char *levelText = "INFO";
-            if (level == LogLevel::Warn)
+            if (level == LogLevel::Trace)
+            {
+                levelText = "TRACE";
+            }
+            else if (level == LogLevel::Warn)
             {
                 levelText = "WARN";
             }
             else if (level == LogLevel::Error)
             {
                 levelText = "ERROR";
+            }
+            else if (level == LogLevel::Fatal)
+            {
+                levelText = "FATAL";
             }
 
             out << '[' << timestamp << "] [" << levelText << "] " << text << '\n';
@@ -94,6 +102,11 @@ namespace ds
         return m_ErrorCount;
     }
 
+    void LogTrace(std::string_view message)
+    {
+        Logger::Get().Log(LogLevel::Trace, message);
+    }
+
     void LogInfo(std::string_view message)
     {
         Logger::Get().Log(LogLevel::Info, message);
@@ -107,6 +120,11 @@ namespace ds
     void LogError(std::string_view message)
     {
         Logger::Get().Log(LogLevel::Error, message);
+    }
+
+    void LogFatal(std::string_view message)
+    {
+        Logger::Get().Log(LogLevel::Fatal, message);
     }
 
 } // namespace ds

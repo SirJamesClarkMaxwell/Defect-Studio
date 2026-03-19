@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
+$LocalBuildConfigPath = Join-Path $Root "scripts/local/build-toolchain.local.json"
 
 function Invoke-Step {
     param(
@@ -14,28 +15,199 @@ function Invoke-Step {
     & $Action
 }
 
-function Get-MSBuildPath {
+function Get-VisualStudioToolchainInfo {
     $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
     if (-not (Test-Path $vsWhere)) {
         return $null
     }
 
-    $installationPath = & $vsWhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+    $json = & $vsWhere -latest -products * -requires Microsoft.Component.MSBuild -format json
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        return $null
+    }
+
+    $parsed = $null
+    try {
+        $parsed = $json | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+
+    if ($null -eq $parsed -or $parsed.Count -lt 1) {
+        return $null
+    }
+
+    $entry = $parsed[0]
+    if ($null -eq $entry) {
+        return $null
+    }
+
+    $installationPath = $entry.installationPath
     if ([string]::IsNullOrWhiteSpace($installationPath)) {
         return $null
     }
 
     $msbuild = Join-Path $installationPath "MSBuild\Current\Bin\MSBuild.exe"
-    if (Test-Path $msbuild) {
-        return $msbuild
+    if (-not (Test-Path $msbuild)) {
+        return $null
     }
 
-    return $null
+    $productDisplayVersion = ""
+    if ($entry.catalog -and $entry.catalog.productDisplayVersion) {
+        $productDisplayVersion = [string]$entry.catalog.productDisplayVersion
+    }
+
+    $installationVersion = ""
+    if ($entry.installationVersion) {
+        $installationVersion = [string]$entry.installationVersion
+    }
+
+    $majorVersion = ""
+    if (-not [string]::IsNullOrWhiteSpace($installationVersion)) {
+        $majorVersion = $installationVersion.Split('.')[0]
+    }
+
+    return @{
+        compiler = "visualstudio"
+        visualStudioVersion = $productDisplayVersion
+        visualStudioInstallationVersion = $installationVersion
+        visualStudioMajor = $majorVersion
+        installationPath = $installationPath
+        msbuildPath = $msbuild
+    }
+}
+
+function Read-LocalBuildConfig {
+    if (-not (Test-Path $LocalBuildConfigPath)) {
+        return $null
+    }
+
+    try {
+        $cfg = Get-Content -Path $LocalBuildConfigPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+
+    if ($null -eq $cfg) {
+        return $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$cfg.msbuildPath)) {
+        return $null
+    }
+
+    if (-not (Test-Path ([string]$cfg.msbuildPath))) {
+        return $null
+    }
+
+    return $cfg
+}
+
+function Test-ValidPlatformToolset {
+    param(
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    return [bool]([string]$Value -match '^v\d+$')
+}
+
+function Write-LocalBuildConfig {
+    param(
+        [Parameter(Mandatory = $true)]$ToolchainInfo
+    )
+
+    $configDir = Split-Path -Parent $LocalBuildConfigPath
+    if (-not (Test-Path $configDir)) {
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    }
+
+    $platformToolset = $null
+    if (-not [string]::IsNullOrWhiteSpace($env:DEFECTSSTUDIO_PLATFORM_TOOLSET)) {
+        $envToolset = [string]$env:DEFECTSSTUDIO_PLATFORM_TOOLSET
+        if (Test-ValidPlatformToolset -Value $envToolset) {
+            $platformToolset = $envToolset
+        }
+    }
+    else {
+        $vsPath = $ToolchainInfo.installationPath
+        $platformToolsetsPath = Join-Path $vsPath "MSBuild\Microsoft\VC\v180\Platforms\x64\PlatformToolsets"
+        
+        if (Test-Path $platformToolsetsPath) {
+            $available = @((Get-ChildItem -Path $platformToolsetsPath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Where-Object { $_ -match '^v\d+$' }))
+            if ($available.Count -gt 0) {
+                $sorted = $available | Sort-Object { [version]($_ -replace '[^0-9.]', '') } -Descending
+                $sorted = @($sorted)
+                $platformToolset = $sorted[0]
+            }
+        }
+    }
+
+    $payload = [ordered]@{
+        schemaVersion = 1
+        compiler = $ToolchainInfo.compiler
+        visualStudioVersion = $ToolchainInfo.visualStudioVersion
+        visualStudioInstallationVersion = $ToolchainInfo.visualStudioInstallationVersion
+        visualStudioMajor = $ToolchainInfo.visualStudioMajor
+        installationPath = $ToolchainInfo.installationPath
+        msbuildPath = $ToolchainInfo.msbuildPath
+        generatedBy = "scripts/Verify-Build.ps1"
+        generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    }
+
+    if ($null -ne $platformToolset) {
+        $payload.platformToolset = $platformToolset
+    }
+
+    $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $LocalBuildConfigPath -Encoding UTF8
+}
+
+function Resolve-MSBuildPath {
+    $localConfig = Read-LocalBuildConfig
+    if ($null -ne $localConfig) {
+        Write-Host "Using local build toolchain config: $LocalBuildConfigPath" -ForegroundColor DarkGray
+        return [string]$localConfig.msbuildPath
+    }
+
+    $detected = Get-VisualStudioToolchainInfo
+    if ($null -eq $detected) {
+        return $null
+    }
+
+    Write-LocalBuildConfig -ToolchainInfo $detected
+    Write-Host "Created local build toolchain config: $LocalBuildConfigPath" -ForegroundColor DarkGray
+    return [string]$detected.msbuildPath
+}
+
+function Stop-RunningDefectsStudio {
+    $running = Get-Process -Name "DefectsStudio" -ErrorAction SilentlyContinue
+    if ($null -eq $running) {
+        return
+    }
+
+    Write-Host "Stopping running DefectsStudio instances to avoid linker file lock..." -ForegroundColor Yellow
+    foreach ($process in $running) {
+        try {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        }
+        catch {
+            throw "Failed to stop DefectsStudio process (PID $($process.Id)). Close the app and retry."
+        }
+    }
+}
+
+Invoke-Step -Name "Close running DefectsStudio" -Action {
+    Stop-RunningDefectsStudio
 }
 
 Invoke-Step -Name "Run setup" -Action {
-    & (Join-Path $Root "scripts/Setup.bat")
+    & (Join-Path $Root "scripts/Setup.bat") --skip-submodule-sync
     if ($LASTEXITCODE -ne 0) {
         throw "Setup failed"
     }
@@ -46,7 +218,7 @@ if (-not (Test-Path $solutionPath)) {
     throw "Solution file not found: $solutionPath"
 }
 
-$msbuildPath = Get-MSBuildPath
+$msbuildPath = Resolve-MSBuildPath
 if ($null -eq $msbuildPath) {
     throw "MSBuild was not found. Install Visual Studio 2022 with Desktop development with C++ and MSBuild component."
 }
@@ -57,6 +229,18 @@ $msbuildParallelArgs = @(
     "/p:UseMultiToolTask=true",
     "/p:CL_MPCount=$cpuCount"
 )
+
+$localConfig = Read-LocalBuildConfig
+if ($null -ne $localConfig -and -not [string]::IsNullOrWhiteSpace([string]$localConfig.platformToolset)) {
+    $platformToolset = [string]$localConfig.platformToolset
+    if (Test-ValidPlatformToolset -Value $platformToolset) {
+        $msbuildParallelArgs += "/p:PlatformToolset=$platformToolset"
+        Write-Host "Using PlatformToolset: $platformToolset" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "Ignoring invalid platformToolset in local config: '$platformToolset'" -ForegroundColor DarkYellow
+    }
+}
 
 Invoke-Step -Name "Build Debug|x64" -Action {
     & $msbuildPath $solutionPath /t:Build /p:Configuration=Debug /p:Platform=x64 @msbuildParallelArgs

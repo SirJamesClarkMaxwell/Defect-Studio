@@ -6,25 +6,20 @@ cd /d "%ROOT_DIR%"
 
 echo === Verify build ===
 call scripts\Verify-Build.bat
-if errorlevel 1 (
+set VERIFY_EXIT=%errorlevel%
+if not "%VERIFY_EXIT%"=="0" (
+    echo Verify step failed with exit code %VERIFY_EXIT%.
     echo Build verification failed. Application will not start.
     exit /b 1
 )
 
-set DEBUG_EXE=%ROOT_DIR%\bin\Debug-windows-x86_64\DefectsStudio\DefectsStudio.exe
-set RELEASE_EXE=%ROOT_DIR%\bin\Release-windows-x86_64\DefectsStudio\DefectsStudio.exe
-
-if exist "%DEBUG_EXE%" (
-    echo Starting Debug build...
-    start "DefectsStudio" "%DEBUG_EXE%"
-    exit /b 0
+echo === Run application ===
+call scripts\Run.bat
+set RUN_EXIT=%errorlevel%
+if not "%RUN_EXIT%"=="0" (
+    echo Run step failed with exit code %RUN_EXIT%.
+    echo Application failed to start.
+    exit /b 1
 )
 
-if exist "%RELEASE_EXE%" (
-    echo Starting Release build...
-    start "DefectsStudio" "%RELEASE_EXE%"
-    exit /b 0
-)
-
-echo Could not find DefectsStudio executable in Debug or Release output folders.
-exit /b 1
+exit /b 0

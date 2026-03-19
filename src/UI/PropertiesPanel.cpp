@@ -358,6 +358,37 @@ namespace ds
             {
                 ImGui::SeparatorText("Atoms");
 
+                constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
+                if (ImGui::ColorEdit3("Custom color (selected atoms)", &editor.m_SelectedAtomCustomColor.x, kPickerOnlyFlags))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::Button("Apply custom color"))
+                {
+                    for (std::size_t atomIndex : editor.m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= editor.m_AtomNodeIds.size())
+                        {
+                            continue;
+                        }
+                        editor.m_AtomColorOverrides[editor.m_AtomNodeIds[atomIndex]] = editor.m_SelectedAtomCustomColor;
+                    }
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear custom color"))
+                {
+                    for (std::size_t atomIndex : editor.m_SelectedAtomIndices)
+                    {
+                        if (atomIndex >= editor.m_AtomNodeIds.size())
+                        {
+                            continue;
+                        }
+                        editor.m_AtomColorOverrides.erase(editor.m_AtomNodeIds[atomIndex]);
+                    }
+                    settingsChanged = true;
+                }
+
                 if (editor.m_SelectedAtomIndices.size() == 1)
                 {
                     const std::size_t atomIndex = editor.m_SelectedAtomIndices.front();
@@ -366,11 +397,12 @@ namespace ds
                         auto &atom = editor.m_WorkingStructure.atoms[atomIndex];
                         std::array<char, 16> elementBuffer = {};
                         std::snprintf(elementBuffer.data(), elementBuffer.size(), "%s", atom.element.c_str());
-                        if (ImGui::InputText("Element", elementBuffer.data(), elementBuffer.size()))
+                        if (ImGui::InputText("Element", elementBuffer.data(), elementBuffer.size(), ImGuiInputTextFlags_EnterReturnsTrue))
                         {
-                            atom.element = std::string(elementBuffer.data());
-                            editor.m_WorkingStructure.RebuildSpeciesFromAtoms();
-                            settingsChanged = true;
+                            if (editor.ApplyElementToSelectedAtoms(std::string(elementBuffer.data())))
+                            {
+                                settingsChanged = true;
+                            }
                         }
 
                         glm::vec3 atomPosition = editor.GetAtomCartesianPosition(atomIndex);
@@ -418,6 +450,24 @@ namespace ds
                             }
                             editor.SetAtomCartesianPosition(atomIndex, editor.GetAtomCartesianPosition(atomIndex) + delta);
                         }
+                        settingsChanged = true;
+                    }
+                }
+
+                ImGui::SeparatorText("Change atom type");
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputText("Target element", editor.m_ChangeAtomElementBuffer.data(), editor.m_ChangeAtomElementBuffer.size());
+                ImGui::SameLine();
+                if (ImGui::Button("Periodic table"))
+                {
+                    editor.m_PeriodicTableTarget = EditorLayer::PeriodicTableTarget::ChangeSelectedAtoms;
+                    editor.m_PeriodicTableOpen = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Apply to selection"))
+                {
+                    if (editor.ApplyElementToSelectedAtoms(std::string(editor.m_ChangeAtomElementBuffer.data())))
+                    {
                         settingsChanged = true;
                     }
                 }
