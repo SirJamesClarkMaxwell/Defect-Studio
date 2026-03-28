@@ -1,6 +1,7 @@
 #include "IO/PoscarSerializer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -58,6 +59,20 @@ namespace ds
             return !outSpecies.empty() || rebuilt.atoms.empty();
         }
 
+        float WrapUnitCoordinate(float value)
+        {
+            float wrapped = static_cast<float>(value - std::floor(value));
+            if (wrapped < 0.0f)
+            {
+                wrapped += 1.0f;
+            }
+            if (wrapped >= 1.0f)
+            {
+                wrapped = 0.0f;
+            }
+            return wrapped;
+        }
+
     } // namespace
 
     bool PoscarSerializer::WriteToFile(const Structure &structure, const std::string &path, const PoscarWriteOptions &options, std::string &error) const
@@ -107,6 +122,16 @@ namespace ds
         {
             error = conversionError;
             return false;
+        }
+
+        if (options.coordinateMode == CoordinateMode::Direct)
+        {
+            for (Atom &atom : writable.atoms)
+            {
+                atom.position.x = WrapUnitCoordinate(atom.position.x);
+                atom.position.y = WrapUnitCoordinate(atom.position.y);
+                atom.position.z = WrapUnitCoordinate(atom.position.z);
+            }
         }
 
         std::vector<std::string> species;

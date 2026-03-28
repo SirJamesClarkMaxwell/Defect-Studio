@@ -162,13 +162,24 @@ namespace ds
                         ExportStructureToPath(selectedPath, exportMode, m_ExportPrecision);
                     }
                 }
+                if (ImGui::MenuItem("Export Active Collection to POSCAR", nullptr, false, m_HasStructureLoaded && m_ActiveCollectionIndex >= 0))
+                {
+                    std::string selectedPath;
+                    if (SaveNativeFileDialog(selectedPath))
+                    {
+                        const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                              ? CoordinateMode::Direct
+                                                              : CoordinateMode::Cartesian;
+                        ExportCollectionToPath(m_ActiveCollectionIndex, selectedPath, exportMode, m_ExportPrecision);
+                    }
+                }
 
                 ImGui::Separator();
 
                 if (ImGui::MenuItem("Create Project..."))
                 {
                     std::string projectFolder;
-                    if (OpenNativeFolderDialog(projectFolder, "Create DefectsStudio project"))
+                    if (OpenNativeFolderDialog(projectFolder, "Create DefectsStudio project", m_LastProjectDialogPath))
                     {
                         settingsChanged |= CreateProjectAt(projectFolder);
                     }
@@ -177,7 +188,7 @@ namespace ds
                 if (ImGui::MenuItem("Open Project..."))
                 {
                     std::string projectFolder;
-                    if (OpenNativeFolderDialog(projectFolder, "Open DefectsStudio project"))
+                    if (OpenNativeFolderDialog(projectFolder, "Open DefectsStudio project", m_LastProjectDialogPath))
                     {
                         settingsChanged |= OpenProjectAt(projectFolder);
                     }
@@ -246,6 +257,11 @@ namespace ds
                 if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, canCopySelection))
                 {
                     settingsChanged |= DuplicateCurrentSelection();
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Select All", "Ctrl+A", false, m_HasStructureLoaded))
+                {
+                    settingsChanged |= SelectAllVisibleByCurrentFilter();
                 }
                 ImGui::EndMenu();
             }
@@ -1146,6 +1162,11 @@ namespace ds
             settingsChanged |= DuplicateCurrentSelection();
             m_BlockSelectionThisFrame = settingsChanged;
         }
+        else if (!io.WantTextInput && io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_A, false))
+        {
+            settingsChanged |= SelectAllVisibleByCurrentFilter();
+            m_BlockSelectionThisFrame = settingsChanged;
+        }
 
         if (m_ViewportFocused &&
             !io.WantTextInput &&
@@ -1154,7 +1175,20 @@ namespace ds
             !m_RotateModeActive &&
             (ImGui::IsKeyPressed(ImGuiKey_Period, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal, false)))
         {
-            settingsChanged |= FocusCameraOnCursor();
+            float focusDistanceMultiplier = 1.0f;
+            bool persistFocusAdjustment = false;
+            if (io.KeyShift)
+            {
+                focusDistanceMultiplier = 0.80f;
+                persistFocusAdjustment = true;
+            }
+            else if (io.KeyAlt)
+            {
+                focusDistanceMultiplier = 1.25f;
+                persistFocusAdjustment = true;
+            }
+
+            settingsChanged |= FocusCameraOnCursor(focusDistanceMultiplier, persistFocusAdjustment);
             m_BlockSelectionThisFrame = settingsChanged;
         }
 
@@ -1403,9 +1437,6 @@ namespace ds
                 const glm::vec3 right = glm::normalize(glm::cross(forward, worldUp));
                 const glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
-                const float panSpeed = 0.006f * m_Camera->GetDistance();
-                glm::vec3 frameDelta = (-right * mouseDelta.x + up * mouseDelta.y) * panSpeed;
-
                 glm::vec3 translatePivot(0.0f);
                 if (!m_TranslateInitialCartesian.empty())
                 {
@@ -1419,6 +1450,22 @@ namespace ds
                 {
                     translatePivot = m_TranslateEmptyInitialPosition;
                 }
+
+                const float viewportHeight = std::max(1.0f, m_ViewportRectMax.y - m_ViewportRectMin.y);
+                float worldPerPixel = 0.0f;
+                if (m_ProjectionModeIndex == 1)
+                {
+                    worldPerPixel = (2.0f * m_Camera->GetOrthographicSize()) / viewportHeight;
+                }
+                else
+                {
+                    const glm::vec3 cameraPosition = m_Camera->GetTarget() - forward * m_Camera->GetDistance();
+                    const float pivotDepth = std::max(0.25f, glm::dot(translatePivot - cameraPosition, forward));
+                    const float halfFovRadians = glm::radians(m_Camera->GetPerspectiveFovDegrees()) * 0.5f;
+                    worldPerPixel = (2.0f * std::tan(halfFovRadians) * pivotDepth) / viewportHeight;
+                }
+
+                glm::vec3 frameDelta = (-right * mouseDelta.x + up * mouseDelta.y) * std::max(0.0005f, worldPerPixel);
 
                 std::array<glm::vec3, 3> transformAxes = ResolveTransformAxes(translatePivot);
                 if (m_TranslateEmptyIndex >= 0 && m_TranslateEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
@@ -3470,20 +3517,7 @@ namespace ds
 
                     if (ImGui::MenuItem("Select All", nullptr, false, hasLoadedAtoms))
                     {
-                        m_SelectedAtomIndices.clear();
-                        m_SelectedBondKeys.clear();
-                        m_SelectedBondLabelKey = 0;
-                        m_SelectedTransformEmptyIndex = -1;
-                        m_SelectedSpecialNode = SpecialNodeSelection::None;
-                        m_SelectedAtomIndices.reserve(m_WorkingStructure.atoms.size());
-                        for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
-                        {
-                            if (!IsAtomHidden(i) && IsAtomCollectionVisible(i) && IsAtomCollectionSelectable(i))
-                            {
-                                m_SelectedAtomIndices.push_back(i);
-                            }
-                        }
-                        AppendSelectionDebugLog("Context menu: Select All");
+                        settingsChanged |= SelectAllVisibleByCurrentFilter();
                     }
 
                     if (ImGui::MenuItem("Clear Selection", nullptr, false, !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0))
@@ -4299,6 +4333,13 @@ namespace ds
                         m_Camera->SetOrthographicSize(orthoSize);
                     }
                 }
+
+                if (ImGui::SliderFloat("Cursor focus distance", &m_CursorFocusDistanceFactor, 0.10f, 1.25f, "%.2fx"))
+                {
+                    m_CursorFocusDistanceFactor = glm::clamp(m_CursorFocusDistanceFactor, 0.10f, 1.25f);
+                    settingsChanged = true;
+                }
+                DrawInlineHelpMarker("Period focuses the camera on the 3D cursor. Shift+. stores a closer focus distance, Alt+. stores a farther one.");
             }
 
             if (ImGui::CollapsingHeader("Selection highlight", defaultOpenFlags))
@@ -4679,6 +4720,14 @@ namespace ds
                                                               ? CoordinateMode::Direct
                                                               : CoordinateMode::Cartesian;
                         ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Export active collection") && m_HasStructureLoaded && m_ActiveCollectionIndex >= 0)
+                    {
+                        const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                              ? CoordinateMode::Direct
+                                                              : CoordinateMode::Cartesian;
+                        ExportCollectionToPath(m_ActiveCollectionIndex, std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
                     }
                     ImGui::SameLine();
                     if (ImGui::Button("Restore original state"))
@@ -5823,6 +5872,47 @@ namespace ds
                 }
             };
 
+            auto appendVisibleAtomsFromCollection = [&](std::size_t collectionIndex)
+            {
+                for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+                {
+                    if (ResolveAtomCollectionIndex(atomIndex) != static_cast<int>(collectionIndex))
+                    {
+                        continue;
+                    }
+
+                    if (IsAtomHidden(atomIndex) || !IsAtomCollectionVisible(atomIndex) || !IsAtomCollectionSelectable(atomIndex))
+                    {
+                        continue;
+                    }
+
+                    if (!IsAtomSelected(atomIndex))
+                    {
+                        m_SelectedAtomIndices.push_back(atomIndex);
+                    }
+                }
+            };
+
+            auto selectCollectionRange = [&](std::size_t anchorCollectionIndex, std::size_t clickedCollectionIndex, bool additive)
+            {
+                const std::size_t rangeStart = std::min(anchorCollectionIndex, clickedCollectionIndex);
+                const std::size_t rangeEnd = std::max(anchorCollectionIndex, clickedCollectionIndex);
+
+                if (!additive)
+                {
+                    m_SelectedAtomIndices.clear();
+                    m_SelectedBondKeys.clear();
+                    m_SelectedBondLabelKey = 0;
+                    m_SelectedTransformEmptyIndex = -1;
+                    m_SelectedSpecialNode = SpecialNodeSelection::None;
+                }
+
+                for (std::size_t currentCollectionIndex = rangeStart; currentCollectionIndex <= rangeEnd; ++currentCollectionIndex)
+                {
+                    appendVisibleAtomsFromCollection(currentCollectionIndex);
+                }
+            };
+
             auto trimOutlinerName = [](std::string value) -> std::string
             {
                 const std::string whitespace = " \t\r\n";
@@ -5861,6 +5951,21 @@ namespace ds
                 if (ImGui::Selectable(collection.name.c_str(), isActiveCollection))
                 {
                     m_ActiveCollectionIndex = static_cast<int>(collectionIndex);
+                    const bool additiveCollectionSelection = io.KeyCtrl;
+                    const bool rangeCollectionSelection = io.KeyShift && m_OutlinerCollectionSelectionAnchor.has_value();
+                    if (rangeCollectionSelection)
+                    {
+                        selectCollectionRange(*m_OutlinerCollectionSelectionAnchor, collectionIndex, additiveCollectionSelection);
+                    }
+                    else if (additiveCollectionSelection)
+                    {
+                        m_SelectedBondKeys.clear();
+                        m_SelectedBondLabelKey = 0;
+                        m_SelectedTransformEmptyIndex = -1;
+                        m_SelectedSpecialNode = SpecialNodeSelection::None;
+                        appendVisibleAtomsFromCollection(collectionIndex);
+                    }
+                    m_OutlinerCollectionSelectionAnchor = collectionIndex;
                 }
                 if (ImGui::BeginPopupContextItem("CollectionContext"))
                 {
@@ -5876,6 +5981,17 @@ namespace ds
                     if (ImGui::MenuItem("Paste", "Ctrl+V", false, HasClipboardPayload()))
                     {
                         settingsChanged |= PasteClipboard();
+                    }
+                    if (ImGui::MenuItem("Export POSCAR"))
+                    {
+                        std::string selectedPath;
+                        if (SaveNativeFileDialog(selectedPath))
+                        {
+                            const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                                  ? CoordinateMode::Direct
+                                                                  : CoordinateMode::Cartesian;
+                            settingsChanged |= ExportCollectionToPath(static_cast<int>(collectionIndex), selectedPath, exportMode, m_ExportPrecision);
+                        }
                     }
                     if (ImGui::MenuItem("Duplicate"))
                     {
@@ -6384,6 +6500,7 @@ namespace ds
             drawShortcutSection("Selection & View", {
                                                        {"LMB", "Select atom, bond or helper"},
                                                        {"Ctrl+LMB", "Add or remove from selection"},
+                                                       {"Ctrl+A", "Select all visible items for the current selection filter"},
                                                        {"Shift + C-drag", "Subtract from circle selection"},
                                                        {boxShortcut.c_str(), "Arm box selection"},
                                                        {circleShortcut.c_str(), "Arm circle selection"},
@@ -6405,7 +6522,7 @@ namespace ds
                                                   {deleteShortcut.c_str(), "Delete current selection"},
                                                   {"Ctrl+C / Ctrl+V", "Copy and paste selection with internal editor clipboard"},
                                                   {"Ctrl+D", "Duplicate current selection"},
-                                                  {".", "Focus camera on 3D cursor"},
+                                                  {". / Shift+. / Alt+.", "Focus camera on 3D cursor; Shift stores a closer distance, Alt stores a farther one"},
                                                   {"F2", "Rename active collection in Scene Outliner"},
                                                   {"Mouse Wheel", "Zoom viewport / adjust circle radius while C-select"},
                                                   {"MMB / Shift+MMB", "Orbit / pan viewport"},

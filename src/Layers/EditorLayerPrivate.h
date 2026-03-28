@@ -65,6 +65,22 @@ namespace ds
         constexpr float kBaseZoomSensitivity = 0.17f;
         constexpr const char *kSelectionDebugLogPath = "logs/selection_debug.log";
 
+#ifdef _WIN32
+        int CALLBACK BrowseFolderInitialSelectionCallback(HWND hwnd, UINT message, LPARAM, LPARAM userData)
+        {
+            if (message == BFFM_INITIALIZED && userData != 0)
+            {
+                const char *initialPath = reinterpret_cast<const char *>(userData);
+                if (initialPath != nullptr && initialPath[0] != '\0')
+                {
+                    SendMessageA(hwnd, BFFM_SETSELECTIONA, TRUE, userData);
+                }
+            }
+
+            return 0;
+        }
+#endif
+
         std::string NormalizeElementSymbol(const std::string &symbol);
 
         SceneUUID GenerateSceneUUID()
@@ -788,13 +804,25 @@ namespace ds
 #endif
         }
 
-        bool OpenNativeFolderDialog(std::string &outPath, const char *title = "Select folder")
+        bool OpenNativeFolderDialog(std::string &outPath, const char *title = "Select folder", const std::string &initialPath = std::string())
         {
 #ifdef _WIN32
+            std::string initialFolder;
             BROWSEINFOA browseInfo = {};
             browseInfo.hwndOwner = nullptr;
             browseInfo.lpszTitle = title;
             browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+            if (!initialPath.empty())
+            {
+                std::filesystem::path normalized(initialPath);
+                if (!std::filesystem::exists(normalized))
+                {
+                    normalized = normalized.parent_path();
+                }
+                initialFolder = normalized.string();
+                browseInfo.lpfn = BrowseFolderInitialSelectionCallback;
+                browseInfo.lParam = reinterpret_cast<LPARAM>(initialFolder.c_str());
+            }
 
             LPITEMIDLIST itemIdList = SHBrowseForFolderA(&browseInfo);
             if (itemIdList == nullptr)
@@ -815,6 +843,7 @@ namespace ds
 #else
             (void)outPath;
             (void)title;
+            (void)initialPath;
             return false;
 #endif
         }

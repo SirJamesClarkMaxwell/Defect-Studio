@@ -355,6 +355,8 @@ namespace ds
         bool LoadStructureFromPath(const std::string &path);
         bool AppendStructureFromPathAsCollection(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
+        bool BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const;
+        bool ExportCollectionToPath(int collectionIndex, const std::string &path, CoordinateMode mode, int precision);
         bool AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode);
         bool ApplyElementToSelectedAtoms(const std::string &elementInput, std::size_t *outChangedCount = nullptr);
         bool IsAtomSelected(std::size_t index) const;
@@ -442,7 +444,8 @@ namespace ds
         float ResolveBondThresholdScaleForPair(const std::string &elementA, const std::string &elementB) const;
         void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll = std::nullopt);
         void UpdateCameraOrbitTransition(float deltaTime);
-        bool FocusCameraOnCursor();
+        bool SelectAllVisibleByCurrentFilter();
+        bool FocusCameraOnCursor(float distanceFactorMultiplier = 1.0f, bool persistAdjustment = false);
 
         bool m_ShowDemoWindow = false;
         bool m_ShowLogPanel = true;
@@ -570,6 +573,7 @@ namespace ds
         std::vector<int> m_AtomCollectionIndices;
         std::vector<std::size_t> m_SelectedAtomIndices;
         std::optional<std::size_t> m_OutlinerAtomSelectionAnchor;
+        std::optional<std::size_t> m_OutlinerCollectionSelectionAnchor;
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
         glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);
         float m_SelectionOutlineThickness = 2.0f;
@@ -671,6 +675,7 @@ namespace ds
         glm::vec3 m_CursorPosition = glm::vec3(0.0f, 0.0f, 0.0f);
         glm::vec3 m_CursorColor = glm::vec3(0.22f, 0.95f, 0.95f);
         float m_CursorVisualScale = 0.20f;
+        float m_CursorFocusDistanceFactor = 0.35f;
         bool m_CursorSnapToGrid = true;
         bool m_TouchpadNavigationEnabled = true;
         bool m_InvertViewportZoom = false;
@@ -737,6 +742,7 @@ namespace ds
         float m_UiSpacingScale = 1.0f;
         int m_ProjectionModeIndex = 0;
         bool m_ViewportSettingsOpen = true;
+        std::string m_LastProjectDialogPath;
         std::uint32_t m_HotkeyAddMenu = 0;
         std::uint32_t m_HotkeyOpenRender = 0;
         std::uint32_t m_HotkeyToggleSidePanels = 0;

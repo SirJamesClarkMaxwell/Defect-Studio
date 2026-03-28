@@ -4,6 +4,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cmath>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -297,15 +298,17 @@ namespace ds
     void OrbitCamera::RecalculateProjection()
     {
         const float aspect = m_ViewportWidth / m_ViewportHeight;
+        const float effectiveNear = std::clamp(m_Distance * 0.0015f, 0.0005f, 0.02f);
+        const float effectiveFar = std::max(m_FarClip, std::max(250.0f, m_Distance * 80.0f));
         if (m_ProjectionMode == ProjectionMode::Orthographic)
         {
             const float halfHeight = m_OrthographicSize;
             const float halfWidth = m_OrthographicSize * aspect;
-            m_Projection = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, m_NearClip, m_FarClip);
+            m_Projection = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, effectiveNear, effectiveFar);
             return;
         }
 
-        m_Projection = glm::perspective(glm::radians(m_FovYDegrees), aspect, m_NearClip, m_FarClip);
+        m_Projection = glm::perspective(glm::radians(m_FovYDegrees), aspect, effectiveNear, effectiveFar);
     }
 
     void OrbitCamera::RecalculateView()

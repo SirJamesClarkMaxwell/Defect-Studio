@@ -1811,15 +1811,78 @@ namespace ds
         return true;
     }
 
-    bool EditorLayer::FocusCameraOnCursor()
+    bool EditorLayer::SelectAllVisibleByCurrentFilter()
+    {
+        if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            return false;
+        }
+
+        const bool includeAtoms =
+            (m_SelectionFilter == SelectionFilter::AtomsOnly) ||
+            (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
+        const bool includeBonds =
+            (m_SelectionFilter == SelectionFilter::AtomsAndBonds) ||
+            (m_SelectionFilter == SelectionFilter::BondsOnly) ||
+            (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
+
+        m_SelectedAtomIndices.clear();
+        m_SelectedBondKeys.clear();
+        m_SelectedBondLabelKey = 0;
+        m_SelectedTransformEmptyIndex = -1;
+        m_SelectedSpecialNode = SpecialNodeSelection::None;
+
+        if (includeAtoms)
+        {
+            m_SelectedAtomIndices.reserve(m_WorkingStructure.atoms.size());
+            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+            {
+                if (!IsAtomHidden(atomIndex) && IsAtomCollectionVisible(atomIndex) && IsAtomCollectionSelectable(atomIndex))
+                {
+                    m_SelectedAtomIndices.push_back(atomIndex);
+                }
+            }
+        }
+
+        if (includeBonds)
+        {
+            for (const BondSegment &bond : m_GeneratedBonds)
+            {
+                const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
+                if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end() ||
+                    m_HiddenBondKeys.find(key) != m_HiddenBondKeys.end() ||
+                    IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                    !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB) ||
+                    !IsAtomCollectionSelectable(bond.atomA) || !IsAtomCollectionSelectable(bond.atomB))
+                {
+                    continue;
+                }
+
+                m_SelectedBondKeys.insert(key);
+            }
+        }
+
+        m_OutlinerAtomSelectionAnchor = m_SelectedAtomIndices.empty() ? std::nullopt : std::optional<std::size_t>(m_SelectedAtomIndices.front());
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Selected all visible items for current filter.";
+        AppendSelectionDebugLog(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::FocusCameraOnCursor(float distanceFactorMultiplier, bool persistAdjustment)
     {
         if (!m_Camera)
         {
             return false;
         }
 
+        if (persistAdjustment)
+        {
+            m_CursorFocusDistanceFactor = glm::clamp(m_CursorFocusDistanceFactor * distanceFactorMultiplier, 0.10f, 1.25f);
+        }
+
         const float currentDistance = m_Camera->GetDistance();
-        float focusDistance = std::max(1.5f, currentDistance * 0.35f);
+        float focusDistance = std::max(1.5f, currentDistance * m_CursorFocusDistanceFactor);
         if (!m_SelectedAtomIndices.empty())
         {
             float maxRadius = 0.0f;
@@ -1844,7 +1907,9 @@ namespace ds
             m_Camera->GetPitch(),
             m_Camera->GetRoll());
         m_LastStructureOperationFailed = false;
-        m_LastStructureMessage = "Camera focused on 3D cursor.";
+        std::ostringstream focusMessage;
+        focusMessage << "Camera focused on 3D cursor (distance factor " << std::fixed << std::setprecision(2) << m_CursorFocusDistanceFactor << ").";
+        m_LastStructureMessage = focusMessage.str();
         LogInfo(m_LastStructureMessage);
         return true;
     }
