@@ -2,96 +2,90 @@
 
 ## Current state
 - Integration target: `main`
-- Recently completed work:
-  - T07 offscreen render / F12 pipeline quality pass
-  - render preview / export separation from the main viewport
-  - shared bond-label layout and export composition path
-  - `EditorLayer` split into multiple `.cpp` files for faster incremental builds
-- Recommended next branch: `task/09-ui-panels-ux`
+- Recently completed task: `T10 - Editing workflow polish`
+- Recommended next branch: `task/11-volumetrics-mvp`
 - Build status in this session:
-  - `DefectsStudio.sln` builds successfully in `Debug|x64` via direct MSBuild
-  - `scripts/Verify-Build.bat` is still not the most reliable source of truth in this environment
+  - `scripts/Verify-Build.bat` passes in `Debug|x64` and `Release|x64`
+  - Remaining warning is the known `stb_image_write.h` `C4996`
 
-## What changed in this session
-- Finalized T07 render/export behavior:
-  - independent render preview backend and texture
-  - dockable `Render Preview` window
-  - preview/export no longer resize or reuse the main viewport render target
-  - MSAA resolve path for preview/export backend
-  - offscreen bond rendering moved away from driver-dependent line width assumptions
-- Unified bond-label handling:
-  - one layout path for viewport, preview, and export
-  - proper font-based labels instead of the older synthetic export overlay look
-  - export label placement aligned with label background frames
-  - render settings for preview/export decoupled from viewport look
-- Improved editor structure:
-  - `EditorLayer.cpp`
-  - `EditorLayer.Update.cpp`
-  - `EditorLayer.Scene.cpp`
-  - `EditorLayer.Render.cpp`
-  - `EditorLayer.Selection.cpp`
-  - `EditorLayer.Persistence.cpp`
-  - `EditorLayer.ImGui.cpp`
-  - shared private include: `EditorLayerPrivate.h`
+## What changed in the finished T10 pass
+- Editing workflow polish:
+  - circle-select subtract on `Shift`
+  - undo/redo coverage for core transform workflows
+  - internal copy / paste / duplicate for atoms, empties, and collections
+  - richer viewport and outliner context menus
+  - collection duplicate/delete shortcuts from `Scene Outliner`
+- Scene Outliner improvements:
+  - multi-select collections
+  - range selection with `Shift`
+  - `Select all` on collection atom trees
+  - drag-drop atoms between collections
+  - more stable context menus and item IDs
+- Camera and transform UX:
+  - focus workflow around current selection via `.`
+  - focus tuning in `Settings`
+  - scene-aware clip diagnostics
+  - align empty axes to camera view
+  - typed modal translate and temporary local axes workflow
+- Project workflow:
+  - explicit project root concept
+  - `Create Project`, `Open Project`, and `Open Recent Project`
+  - recent-project popup and keyboard shortcuts
+  - safer project-root normalization to avoid nested `config/project/config/project`
+- Config ownership cleanup:
+  - per-project element appearance overrides moved out of `scene_state.ini`
+  - dedicated `config/project/project_appearance.yaml`
+  - import / export / reset flow for project appearance overrides
+  - project-local editor and viewport settings now serialize to `PROJECT_ROOT/config/ui_settings.yaml`
+  - loading order is now effectively `global app UI defaults -> project UI overrides`
+- POSCAR export polish:
+  - more stable `Direct` export when the whole cell or structure was translated
+  - collection export to POSCAR
 
-## Deferred to later large task
-The following items were intentionally moved out of T07 into a later post-refactor / post-documentation task:
+## Current config model
+- Global app defaults:
+  - `config/default.yaml`
+  - `config/atom_settings.yaml`
+  - app-level `config/ui_settings.yaml`
+- Project-local state:
+  - `PROJECT_ROOT/project.yaml`
+  - `PROJECT_ROOT/config/ui_settings.yaml`
+  - `PROJECT_ROOT/config/project/project_appearance.yaml`
+  - `PROJECT_ROOT/config/scene_state.ini`
 
-- Evaluate `msdfgen` / 3D label strategy and decide implementation path
-- Investigate fuller mesh-based atoms/bonds rendering direction
-- Add SVG export
-- Multi-viewport support (different defects in different viewports)
-
-See `TODO.md` task:
-- `T12c - Advanced render architecture follow-up`
-
-## Next recommended task: T09
-Goal: clean up editor UX and align the app more closely with the Hazel-style guide.
+## Recommended next task: T11
+Goal: start volumetric data support without blocking the later refactor and documentation pass.
 
 Recommended first steps:
-1. Define panel taxonomy:
-   - what belongs in `Appearance`
-   - what belongs in `Settings`
-   - what belongs in `Viewport Settings`
-   - what belongs in `Render Image`
-   - keep scene actions separate from scene appearance controls
-2. Apply Hazel-style visual pass:
-   - hierarchy left
-   - properties right
-   - viewport center
-   - bottom zone for logs / stats / profiler
-3. Rebuild logging window UX:
-   - level icons
-   - clearer filter states
-   - denser but readable layout
-4. Normalize section framing, headers, spacing, and collapsible indentation across panels
-5. Persist remaining UI preferences that still reset between runs
+1. Define supported input scope for `CHG`, `CHGCAR`, and `PARCHG`.
+2. Decide what "multi-block support" means in the UI and data model.
+3. Add a minimal scalar-field data container independent from the atom renderer.
+4. Implement parser loading and basic diagnostics first, before isosurface rendering.
+5. Add a tiny debug UI for block selection and scalar range preview.
 
-## Relevant files touched in the finished T07 pass
+## Relevant files touched in late T10
 - `src/Layers/EditorLayer.cpp`
-- `src/Layers/EditorLayer.Update.cpp`
-- `src/Layers/EditorLayer.Scene.cpp`
-- `src/Layers/EditorLayer.Render.cpp`
-- `src/Layers/EditorLayer.Selection.cpp`
-- `src/Layers/EditorLayer.Persistence.cpp`
 - `src/Layers/EditorLayer.ImGui.cpp`
-- `src/Layers/EditorLayerPrivate.h`
+- `src/Layers/EditorLayer.Persistence.cpp`
+- `src/Layers/EditorLayer.Scene.cpp`
+- `src/Layers/EditorLayer.Selection.cpp`
+- `src/Layers/EditorLayer.Update.cpp`
+- `src/Layers/EditorLayer.Render.cpp`
 - `src/Layers/EditorLayer.h`
-- `src/Layers/ImGuiLayer.cpp`
-- `src/Layers/ImGuiLayer.h`
-- `src/Renderer/IRenderBackend.h`
-- `src/Renderer/OpenGLRendererBackend.cpp`
-- `src/Renderer/OpenGLRendererBackend.h`
+- `src/Layers/EditorLayerPrivate.h`
+- `src/UI/SettingsPanel.cpp`
+- `src/UI/PropertiesPanel.cpp`
+- `src/IO/PoscarSerializer.cpp`
+- `src/IO/PoscarSerializer.h`
 - `docs/project-control/TODO.md`
 - `README.md`
 
 ## Ready-to-paste starter prompt for next chat
-I am continuing after the completed T07 pass.
+I am continuing after the completed T10 editing workflow pass.
 Please:
-1. read `docs/project-control/TODO.md`, `docs/project-control/SESSION_HANDOFF.md`, and `docs/project-control/hazel-ui-style-guide.md`,
+1. read `docs/project-control/TODO.md`, `docs/project-control/SESSION_HANDOFF.md`, and `README.md`,
 2. confirm the current branch and git status,
-3. start T09 on `task/09-ui-panels-ux`,
-4. propose a clear split between `Appearance`, `Settings`, `Viewport Settings`, and `Render Image`,
-5. implement the first Hazel-style UI cleanup pass,
-6. improve the logging window UX,
-7. summarize what was finished and what UI decisions still need owner input.
+3. start `T11` on `task/11-volumetrics-mvp`,
+4. inspect existing VASP I/O code and propose the minimal scalar-field data model for `CHGCAR` / `PARCHG`,
+5. implement parser-first volumetric MVP before any advanced rendering,
+6. summarize what was finished and what design decisions still need owner input.

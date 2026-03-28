@@ -7,9 +7,9 @@
 - Track only significant tasks/features in this TODO; do not add tiny fixes
 
 ## Current priority queue (ordered)
-- [ ] P1: Start T10 editing workflow polish (selection completion, transform undo/redo, multi-edit actions, richer context menus)
-- [ ] P1: Validate YAML config migration + Element Catalog / Periodic Table flow in a focused manual smoke test
-- [ ] P2: Decide and extract dedicated per-project appearance overrides from `scene_state.ini` into a clearer project config
+- [ ] P1: Start T11 volumetrics MVP (`CHGCAR` / `PARCHG`, iso controls, block handling)
+- [ ] P1: Run a focused manual smoke test for T10 project workflow, collection editing, and drag-drop
+- [ ] P2: Start T12 Python build-script migration after T11 is scoped
 - [ ] P3: After T13a/T13b, start deferred advanced render architecture task (MSDF / SVG / multi-viewport / mesh-only follow-up)
 
 ## Milestones
@@ -134,23 +134,55 @@
 - [x] add possibility of changing shortcuts or mouse behavior
 - [x] add possibility of changing viewport resolution to reduce GPU load on weaker/slower hardware
 
-### [ ] T10 - Editing workflow polish (`task/10-editing-workflow-polish`)
+### [x] T10 - Editing workflow polish (`task/10-editing-workflow-polish`)
 - [x] add possibility of regenerating bonds after atom movement/addition/removal
-- [ ] add deselect (shift+c) in circle selection mode
-- [ ] add undo-redo for atom movement
-- [ ] add copy-paste, duplicate for atoms, collections, and multi-atom type changes
-- [ ] add more actions into context menu in viewport
+- [x] add deselect (shift+c) in circle selection mode
+- [x] add undo-redo for atom movement
+- [x] add copy-paste, duplicate for atoms, collections, and multi-atom type changes
+- [x] add more actions into context menu in viewport
 - [x] stabilize `Periodic Table` / `Element Catalog` selection UX for add-atom workflow and elements outside the loaded structure
-- [ ] extract per-project element appearance overrides from `scene_state.ini` into a dedicated project config file
-- [ ] add import/export/reset workflow for project element appearance overrides
-- [ ] add context menu for scene outline (rename, duplicate, delete)
+- [x] extract per-project element appearance overrides from `scene_state.ini` into a dedicated project config file
+- [x] add import/export/reset workflow for project element appearance overrides
+- [x] add context menu for scene outline (rename, duplicate, delete)
+
+- [x] add extract selected to new collection
+- [x] add toggle for adding auto recalculation of the bonds
+- [x] in circle select scroll should (in/de)crease size of circle (block the world zooming)
+- [x] add behaviour that after pressing the . in view the camera would go to the 3D cursor with some distance 
+- [x] ctrl+d for duplicating things
+- [x] add gizmo snap with movement when ctrl is pressed
+- [x] add movement into selected axes and typing number
+- [x] make proper settings, in settings window should be two columns (label - setting) and those should be alligned properly
+- [x] make UI more aligned
+- [x] important bug, podczas eksportu rzeczy typu `project_apperance` tworzy się nested sequence config->project->config->project
+- [x] dodaj zewnętrzny folder projektu
+- [x] możliwość open, create, recent open, project
+- [x] add export collection to poscar
+- [x] add ctrl+a to select everything
+- [x] when I want to create/open the project the path to something should be remebered
+- [x] stabilize Scene Outliner context menu rendering / IDs
+- [x] keep Scene Outliner trees expanded when actions are triggered from context menus (dalej nie działa)
+- [x] add align empty to camera view
+- [x] add camera clip diagnostics / tuning in `Settings`
+- [x] improve scene-aware camera clipping while orbiting medium/far from the structure
+- [x] make `.` focus adjustable from `Settings` (distance factor, minimum distance, selection padding)
+- [x] multiple selection in collections
+- [X] resolve how the poscar are saved if the whole cell was moved (maybe some internal coordinate system)
+- [X] range selection in collections when `Shift` is pressed
+- [x] serialization of all settings
+- [x] serialize editor and viewport settings into the project as project-local overrides
+- [x] drag-drop atoms between collections in Scene Outliner
+- [x] `Ctrl+D` and `Delete` for active collection while Scene Outliner is focused
+- [x] keyboard shortcuts for `Create Project`, `Open Project`, and `Open Recent Project`
 
 ### [ ] T11 - Volumetrics MVP (`task/11-volumetrics-mvp`)
-- [ ] CHG/CHGCAR/PARCHG parser (FFT ordering)
-- [ ] Multi-block support
-- [ ] Iso-surface controls incl. dual iso mode
+- [ ] CHG/CHGCAR/PARCHG parser 
+- [ ] Multi-block support (what does it mean?)
+- [ ] Iso-surface controls incl. dual iso mode (what does it mean)
 
 ### [ ] T12 - Migrate build scripts to Python (`task/12-scripts-python-migration`)
+- [ ] Add uv as dependency to project
+- [ ] make python project and during the installation create a .venv, install all dependencies
 - [ ] Replace `scripts/Setup.bat` with `scripts/setup.py`
 - [ ] Replace `scripts/Verify-Build.bat` with `scripts/verify_build.py`
 - [ ] Ensure Python scripts produce identical output/exit codes to original bat equivalents
@@ -191,11 +223,12 @@
 - [ ] Verify fully offline local usage (`mdbook serve` / `mdbook build`)
 
 ### [ ] T13c - Advanced render architecture follow-up (`task/13c-advanced-render-architecture`)
-- [ ] Start only after T13a and T13b are in good shape
+- [ ] Start only after T11a and T11b are in good shape
 - [ ] Evaluate msdfgen / 3D label strategy and decide implementation path
 - [ ] Investigate a fuller mesh-based atoms/bonds rendering direction (replace remaining line-based paths, scene/ECS implications, `entt?`)
 - [ ] Add SVG export
 - [ ] Multi-viewport support (different defects in different viewports)
+
 
 ### [ ] T14 - Python ecosystem integration (`task/14-python-integration`)
 - [ ] Python integration layer
@@ -207,24 +240,34 @@
 - [ ] Structure manipulation using ASE workflows
 - [ ] Optional ASE calculator bridge (phase 2)
 
-### [ ] T15 - Advanced materials science tools (`task/15-materials-tools`)
+### [ ] T15 - Project concept
+- [ ] Tracking added files
+- [ ] auto-save
+- [ ] conception of the defect
+- [ ] different chanrge states (adding filters (charge state, spin channel))
+- [ ] identifying defect symetry
+- [ ] adding tags
+- [ ] change from collection to poscar amd contcar
+
+
+### [ ] T16 - Advanced materials science tools (`task/15-materials-tools`)
 - [ ] Crystal generator from Bravais lattices
 - [ ] Define lattice system presets (sc, bcc, fcc, hcp, diamond, custom)
 - [ ] Define and edit basis atoms (element + fractional coordinates)
 - [ ] Interactive editing of lattice vectors and lattice constants
 - [ ] Supercell generation options at creation time (Nx, Ny, Nz)
 - [ ] Quick generation wizard for common structures
-- [ ] CIF file support
-- [ ] Import CIF structures
-- [ ] Convert CIF model to internal structure model
-- [ ] Export imported CIF structures to POSCAR/CONTCAR
-- [ ] CIF validation report (unsupported symmetry/occupancy fallback)
 - [ ] KPOINTS convergence generator
 - [ ] EnergyCutoff convergence generator
 - [ ] supercell convergence test
 - [ ] INCAR editor
 - [ ] atoms info panel (when the atom in periodic table is selected the second popup is opened and there some informationa about the atom gonna be displayed, maybe interactive preview of the structure)
 - [ ] defining a user set of materials
+- [ ] CIF file support
+- [ ] Import CIF structures
+- [ ] Convert CIF model to internal structure model
+- [ ] Export imported CIF structures to POSCAR/CONTCAR
+- [ ] CIF validation report (unsupported symmetry/occupancy fallback)
 
 ### [ ] T16 - Local CI equivalents (`task/16-local-ci`)
 - [ ] Add `scripts/ci_check.py` - master check script that runs full verification sequence locally
@@ -267,7 +310,10 @@
 - [ ] GPU implementation of Freysoldt correction
 - [ ] CUDA/OpenGL compute backend prototype
 - [ ] Enable large-supercell correction workflow
-
+### T20 - remote axes to list of servers
+- [ ] winscp like
+- [ ] autorefresh server
+- [ ] copy-paste files
 ### [ ] T20 - Other-builds (`task/20-multiplatform`)
 - [ ] Verify Premake5 generates valid Makefiles (premake5 gmake2)
 - [ ] Build with g++ on WSL - fix any Linux-specific compilation errors
