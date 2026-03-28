@@ -439,7 +439,8 @@ namespace ds
         bool m_CircleSelecting = false;
         float m_CircleSelectRadius = 52.0f;
         bool m_BlockSelectionThisFrame = false;
-        bool m_ShowToolsPanel = true;
+        bool m_ShowActionsPanel = true;
+        bool m_ShowAppearancePanel = true;
         bool m_GizmoConsumedMouseThisFrame = false;
         bool m_FallbackGizmoDragging = false;
         float m_FallbackGizmoVisualScale = 2.0f;

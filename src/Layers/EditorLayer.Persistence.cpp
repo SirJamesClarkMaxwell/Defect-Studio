@@ -644,7 +644,15 @@ namespace ds
             }
             else if (key == "show_tools_panel")
             {
-                m_ShowToolsPanel = (value == "1");
+                m_ShowActionsPanel = (value == "1");
+            }
+            else if (key == "show_actions_panel")
+            {
+                m_ShowActionsPanel = (value == "1");
+            }
+            else if (key == "show_appearance_panel")
+            {
+                m_ShowAppearancePanel = (value == "1");
             }
             else if (key == "show_settings_panel")
             {
@@ -1873,7 +1881,8 @@ namespace ds
         out << "theme=" << ThemeName(m_CurrentTheme) << '\n';
         out << "show_demo_window=" << (m_ShowDemoWindow ? "1" : "0") << '\n';
         out << "show_log_panel=" << (m_ShowLogPanel ? "1" : "0") << '\n';
-        out << "show_tools_panel=" << (m_ShowToolsPanel ? "1" : "0") << '\n';
+        out << "show_actions_panel=" << (m_ShowActionsPanel ? "1" : "0") << '\n';
+        out << "show_appearance_panel=" << (m_ShowAppearancePanel ? "1" : "0") << '\n';
         out << "show_settings_panel=" << (m_ShowSettingsPanel ? "1" : "0") << '\n';
         out << "font_scale=" << m_FontScale << '\n';
         out << "log_filter=" << m_LogFilter << '\n';

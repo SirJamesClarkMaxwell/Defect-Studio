@@ -7,11 +7,11 @@
 - Track only significant tasks/features in this TODO; do not add tiny fixes
 
 ## Current priority queue (ordered)
-- [ ] P1: Start T08 UI cleanup with Hazel-style panel hierarchy and visual polish
-- [ ] P1: Unify ownership of controls across `Tools`, `Settings`, and `Viewport Settings`
+- [ ] P1: Start T09 UI cleanup with Hazel-style panel hierarchy and visual polish
+- [ ] P1: Unify ownership of controls across `Appearance`, `Settings`, `Viewport Settings`, and `Render Image`
 - [ ] P1: Rebuild logging window UX with per-level icons, filtering, and clearer status affordances
 - [ ] P2: Persist remaining UI and renderer-facing preferences that still reset between runs
-- [ ] P3: After T11a/T11b, start deferred advanced render architecture task (MSDF / SVG / multi-viewport / mesh-only follow-up)
+- [ ] P3: After T12a/T12b, start deferred advanced render architecture task (MSDF / SVG / multi-viewport / mesh-only follow-up)
 
 ## Milestones
 
@@ -88,7 +88,7 @@
 - [x] Clean view + cell edge toggle
 - [x] add touchpad support in 3D viewport
 
-### [x] T07 - Offscreen render and F12 pipeline (`task/08-offscreen-render`)
+### [x] T07 - Offscreen render and F12 pipeline (`task/07-offscreen-render`)
 - [x] Render dialog and camera frame preview
 - [x] Offscreen render to PNG/JPG at chosen resolution
 - [x] Queue-driven export path in `OnUpdate`
@@ -101,15 +101,15 @@
 - [x] Render settings decoupled from main viewport appearance
 - [x] Split `EditorLayer.cpp` into multiple `.cpp` files for faster incremental builds
 
-### [ ] T08 - UI panels and UX polishing (`task/08-ui-panels-ux`)
-- [x] Dockspace + tool panels
+### [ ] T09 - UI panels and UX polishing (`task/09-ui-panels-ux`)
+- [x] Dockspace + core editor panels
 - [x] Extract dedicated `Settings` window to separate UI class (`SettingsPanel`)
 - [x] Viewport settings panel: background, grid, lighting, projection mode, atom color override
 - [x] File dialogs with fallback path
 - [x] Configurable UI spacing scale (saved in editor settings)
 - [ ] Hazel-like visual pass guided by `docs/project-control/hazel-ui-style-guide.md`
-- [ ] Define and apply a clear panel taxonomy for `Tools`, `Settings`, `Viewport Settings`, and render popups
-- [ ] Establish Hazel-like default docking layout: hierarchy left, properties right, viewport center, logs/stats bottom
+- [ ] Define and apply a clear panel taxonomy for `Appearance`, `Settings`, `Viewport Settings`, and `Render Image`
+- [ ] Separate scene appearance controls (atoms, bonds, labels, colors) from action-oriented panels
 - [ ] Refine toolbar, panel headers, tab states, and section framing for a consistent editor feel
 - [ ] Persist axis settings (colors + orientation) together with renderer settings
 - [x] Persist ImGui dock/panel layout across runs
@@ -119,13 +119,15 @@
 - [ ] Add editor undo/redo stack (`Ctrl+Z` / `Ctrl+Y`) for delete/hide and core scene edit actions
 - [ ] Add keyboard shortcut reference panel (overlay or separate window)
 - [ ] Save remaining UI settings (colors, checkboxes, atom colors, bond appearance, panel toggles, layout defaults)
+- [ ] add (?) help affordances near advanced controls to explain how to use things
+- [ ] add icons in scene chierarcy panel (like in blender, if you need the input files ask for it)
+- [ ] add posibility of regenerating bonds after a atom movement/addition/removing
 
-### [ ] T09 - Volumetrics MVP (`task/09-volumetrics-mvp`)
+### [ ] T10 - Volumetrics MVP (`task/10-volumetrics-mvp`)
 - [ ] CHG/CHGCAR/PARCHG parser (FFT ordering)
 - [ ] Multi-block support
 - [ ] Iso-surface controls incl. dual iso mode
-
-### [ ] T10 Scripts - Migrate build scripts to Python (`task/scripts-python-migration`)
+### [ ] T11 - Migrate build scripts to Python (`task/11-scripts-python-migration`)
 - [ ] Replace `scripts/Setup.bat` with `scripts/setup.py`
 - [ ] Replace `scripts/Verify-Build.bat` with `scripts/verify_build.py`
 - [ ] Ensure Python scripts produce identical output/exit codes to original bat equivalents
@@ -133,7 +135,7 @@
 - [ ] Update `COPILOT_GUIDELINES.md` and `SESSION_HANDOFF.md` - replace bat references with py
 - [ ] Update `README.md` with new canonical commands
 
-### [ ] T11a - General code refactor (`task/11a-general-refactor`)
+### [ ] T12a - General code refactor (`task/12a-general-refactor`)
 - [ ] Define refactor scope and module boundaries (no feature changes)
 - [ ] Stronger Core <-> App separation (dependency direction and responsibilities)
 - [ ] Modularize large source files into focused modules/components
@@ -153,8 +155,8 @@
 - [ ] Do NOT propagate exceptions through OpenGL/render hot path - document this boundary explicitly
 - [ ] Add static_assert or comment at renderer boundary: "exception-free zone below this point"
 
-### [ ] T11b - Local code documentation site (mdBook) (`task/11b-local-docs-mdbook`)
-- [ ] Start after T11 completion (minimum fallback: after T09)
+### [ ] T12b - Local code documentation site (mdBook) (`task/12b-local-docs-mdbook`)
+- [ ] Start after T12 completion (minimum fallback: after T10)
 - [ ] Initialize local mdBook project in `docs/`
 - [ ] Define documentation structure (`SUMMARY.md`) for core modules
 - [ ] Add architecture pages for Core, DataModel, IO, Renderer, Layers, UI
@@ -164,14 +166,14 @@
 - [ ] Add quick link/instructions in main `README.md`
 - [ ] Verify fully offline local usage (`mdbook serve` / `mdbook build`)
 
-### [ ] T11c - Advanced render architecture follow-up (`task/11c-advanced-render-architecture`)
-- [ ] Start only after T11a and T11b are in good shape
+### [ ] T12c - Advanced render architecture follow-up (`task/12c-advanced-render-architecture`)
+- [ ] Start only after T12a and T12b are in good shape
 - [ ] Evaluate msdfgen / 3D label strategy and decide implementation path
 - [ ] Investigate a fuller mesh-based atoms/bonds rendering direction (replace remaining line-based paths, scene/ECS implications, `entt?`)
 - [ ] Add SVG export
 - [ ] Multi-viewport support (different defects in different viewports)
 
-### [ ] T12 - Python ecosystem integration (`task/14-python-integration`)
+### [ ] T13 - Python ecosystem integration (`task/13-python-integration`)
 - [ ] Python integration layer
 - [ ] Embedded Python interpreter lifecycle management
 - [ ] Script runner with project-context bindings
@@ -181,7 +183,7 @@
 - [ ] Structure manipulation using ASE workflows
 - [ ] Optional ASE calculator bridge (phase 2)
 
-### [ ] T13 - Advanced materials science tools (`task/10-materials-tools`)
+### [ ] T14 - Advanced materials science tools (`task/14-materials-tools`)
 - [ ] Crystal generator from Bravais lattices
 - [ ] Define lattice system presets (sc, bcc, fcc, hcp, diamond, custom)
 - [ ] Define and edit basis atoms (element + fractional coordinates)
@@ -200,7 +202,7 @@
 - [ ] atoms info panel (when the atom in periodic table is selected the second popup is opened and there some informationa about the atom gonna be displayed, maybe interactive preview of the structure)
 - [ ] defining a user set of materials
 
-### [ ] T14 - Local CI equivalents (`task/16-local-ci`)
+### [ ] T15 - Local CI equivalents (`task/15-local-ci`)
 - [ ] Add `scripts/ci_check.py` - master check script that runs full verification sequence locally
 - [ ] ci_check.py step 1: run `verify_build.py` (Debug + Release)
 - [ ] ci_check.py step 2: run build on WSL (g++/clang) via subprocess
@@ -208,7 +210,7 @@
 - [ ] Integrate `ci_check.py` into Copilot workflow: run before every merge to main
 - [ ] Document usage in README.md
 
-### [ ] T15 - VASP ecosystem integration (`task/11-vasp-integration`)
+### [ ] T16 - VASP ecosystem integration (`task/16-vasp-integration`)
 - [ ] Full OUTCAR parser
 - [ ] Parse electronic structure metadata
 - [ ] Extract energies per ionic step
@@ -220,7 +222,7 @@
 - [ ] Enable orbital projection data pipeline
 - [ ] Prepare wavefunction-derived data for visualization
 
-### [ ] T16 - Volumetric visualization extensions (`task/12-volumetric-extensions`)
+### [ ] T17 - Volumetric visualization extensions (`task/17-volumetric-extensions`)
 - [ ] Isosurface rendering module
 - [ ] Visualize charge density fields (CHGCAR/PARCHG)
 - [ ] Adjustable isosurface level and opacity controls
@@ -231,7 +233,7 @@
 - [ ] Customizable polyhedra colors and edge styles
 - [ ] VESTA-like visualization presets
 
-### [ ] T17 - Defect correction workflows (`task/13-defect-corrections`)
+### [ ] T18 - Defect correction workflows (`task/18-defect-corrections`)
 - [ ] Freysoldt correction workflow automation
 - [ ] Generate folder structure and correction input templates
 - [ ] Prepare correction calculation points automatically
@@ -241,20 +243,20 @@
 - [ ] GPU implementation of Freysoldt correction
 - [ ] CUDA/OpenGL compute backend prototype
 - [ ] Enable large-supercell correction workflow
-- [ ]
 
-### [ ] T18 - Other-builds (`task/ob-multiplatform`)
+
+### [ ] T19 - Other-builds (`task/19-multiplatform`)
 - [ ] Verify Premake5 generates valid Makefiles (premake5 gmake2)
 - [ ] Build with g++ on WSL - fix any Linux-specific compilation errors
 - [ ] Build with clang on WSL - fix any clang-specific warnings/errors
 - [ ] Verify `scripts/ci_check.py` passes on WSL end-to-end
 
-### [ ] T18 - Tests, samples, docs (`task/15-tests-samples-docs`)
+### [ ] T20 - Tests, samples, docs (`task/20-tests-samples-docs`)
 - [ ] Parser unit tests + POSCAR round-trip
 - [ ] `assets/samples` small input files
 - [ ] README (build/run/controls)
 
 ## Current focus
 - Recently completed: **T07 - Offscreen render and F12 pipeline**
-- Next planned task: **T08 - UI panels and UX polishing**
-- Planned branch: **task/08-ui-panels-ux**
+- Next planned task: **T09 - UI panels and UX polishing**
+- Planned branch: **task/09-ui-panels-ux**

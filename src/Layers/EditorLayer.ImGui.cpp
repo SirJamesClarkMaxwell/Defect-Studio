@@ -118,6 +118,14 @@ namespace ds
                 {
                     settingsChanged = true;
                 }
+                if (ImGui::MenuItem("Actions", nullptr, &m_ShowActionsPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Appearance", nullptr, &m_ShowAppearancePanel))
+                {
+                    settingsChanged = true;
+                }
                 if (ImGui::MenuItem("Viewport Settings", nullptr, &m_ViewportSettingsOpen))
                 {
                     settingsChanged = true;
@@ -839,7 +847,9 @@ namespace ds
 
         if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_N, false))
         {
-            m_ShowToolsPanel = !m_ShowToolsPanel;
+            const bool anySidePanelVisible = m_ShowActionsPanel || m_ShowAppearancePanel;
+            m_ShowActionsPanel = !anySidePanelVisible;
+            m_ShowAppearancePanel = !anySidePanelVisible;
             settingsChanged = true;
         }
 
@@ -3723,167 +3733,6 @@ namespace ds
                 }
             }
 
-            if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
-            {
-                ImGui::Indent(nestedSectionIndent);
-                if (ImGui::CollapsingHeader("Rendering", defaultOpenFlags))
-                {
-                    ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
-                    ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
-                    ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
-
-                    if (ImGui::DragFloatRange2("Atom size min/max", &m_AtomSizeMin, &m_AtomSizeMax, 0.01f, 0.01f, 4.0f, "min %.2f", "max %.2f"))
-                    {
-                        ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, m_AtomSizeMin, m_AtomSizeMax, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::DragFloatRange2("Atom brightness min/max", &m_AtomBrightnessMin, &m_AtomBrightnessMax, 0.01f, 0.05f, 6.0f, "min %.2f", "max %.2f"))
-                    {
-                        ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, m_AtomBrightnessMin, m_AtomBrightnessMax, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::DragFloatRange2("Atom glow min/max", &m_AtomGlowMin, &m_AtomGlowMax, 0.005f, 0.0f, 2.0f, "min %.2f", "max %.2f"))
-                    {
-                        ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, m_AtomGlowMin, m_AtomGlowMax, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (m_SceneSettings.overrideAtomColor &&
-                        ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x,
-                                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
-                    {
-                        settingsChanged = true;
-                    }
-                }
-
-                if (ImGui::CollapsingHeader("Per-element colors", defaultOpenFlags))
-                {
-                    if (!m_HasStructureLoaded || m_WorkingStructure.species.empty())
-                    {
-                        ImGui::TextDisabled("Load structure to edit per-element colors.");
-                    }
-                    else
-                    {
-                        std::vector<std::string> species = m_WorkingStructure.species;
-                        std::sort(species.begin(), species.end());
-                        species.erase(std::unique(species.begin(), species.end()), species.end());
-
-                        for (const std::string &rawElement : species)
-                        {
-                            const std::string element = NormalizeElementSymbol(rawElement);
-                            if (element.empty())
-                            {
-                                continue;
-                            }
-
-                            glm::vec3 color = ColorFromElement(element);
-                            const auto overrideIt = m_ElementColorOverrides.find(element);
-                            if (overrideIt != m_ElementColorOverrides.end())
-                            {
-                                color = overrideIt->second;
-                            }
-
-                            std::string label = element + "##ElementColor_" + element;
-                            if (ImGui::ColorEdit3(label.c_str(), &color.x,
-                                                  ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
-                            {
-                                m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
-                                settingsChanged = true;
-                            }
-                        }
-
-                        if (ImGui::Button("Reset per-element colors"))
-                        {
-                            m_ElementColorOverrides.clear();
-                            settingsChanged = true;
-                        }
-                    }
-                }
-
-                if (ImGui::CollapsingHeader("Atom editing", defaultOpenFlags))
-                {
-                    const char *inputCoordinateModes[] = {"Direct", "Cartesian"};
-
-                    ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
-                    ImGui::SameLine();
-                    if (ImGui::Button("Periodic table"))
-                    {
-                        m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                        m_PeriodicTableOpenedFromContextMenu = false;
-                        m_PeriodicTableOpen = true;
-                    }
-                    ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
-                    ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, inputCoordinateModes, IM_ARRAYSIZE(inputCoordinateModes));
-
-                    if (ImGui::Button("Use camera target") && m_Camera)
-                    {
-                        m_AddAtomPosition = m_Camera->GetTarget();
-                        m_AddAtomCoordinateModeIndex = 1;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Use 3D cursor"))
-                    {
-                        m_AddAtomPosition = m_CursorPosition;
-                        m_AddAtomCoordinateModeIndex = 1;
-                    }
-                    ImGui::SameLine();
-                    const bool canAddAtom = m_HasStructureLoaded;
-                    if (!canAddAtom)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Add atom"))
-                    {
-                        m_ShowAddAtomDialog = true;
-                    }
-                    if (!canAddAtom)
-                    {
-                        ImGui::EndDisabled();
-                    }
-
-                    ImGui::SeparatorText("Change selected atom type");
-                    ImGui::InputText("New element", m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size());
-                    ImGui::SameLine();
-                    if (ImGui::Button("Apply type to selection"))
-                    {
-                        if (ApplyElementToSelectedAtoms(std::string(m_ChangeAtomElementBuffer.data())))
-                        {
-                            settingsChanged = true;
-                        }
-                    }
-
-                    const bool canDeleteSelectedAtoms = !m_SelectedAtomIndices.empty() && m_HasStructureLoaded;
-                    if (!canDeleteSelectedAtoms)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Remove selected atoms"))
-                    {
-                        deleteCurrentSelection();
-                    }
-                    if (!canDeleteSelectedAtoms)
-                    {
-                        ImGui::EndDisabled();
-                    }
-                }
-                ImGui::Unindent(nestedSectionIndent);
-            }
-
             if (ImGui::CollapsingHeader("Selection highlight", defaultOpenFlags))
             {
                 ensureFloatRange(m_SelectionOutlineMin, m_SelectionOutlineMax, 0.5f, 20.0f);
@@ -4172,13 +4021,13 @@ namespace ds
             ImGui::End();
         }
 
-        if (!m_ShowToolsPanel)
+        if (!m_ShowActionsPanel && !m_ShowAppearancePanel)
         {
             const ImVec2 workPos = viewport->WorkPos;
             const ImVec2 workSize = viewport->WorkSize;
             ImGui::SetNextWindowPos(ImVec2(workPos.x + workSize.x - 28.0f, workPos.y + 120.0f), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(24.0f, 120.0f), ImGuiCond_Always);
-            ImGui::Begin("##ToolsCollapsedStrip", nullptr,
+            ImGui::Begin("##SidePanelsCollapsedStrip", nullptr,
                          ImGuiWindowFlags_NoDecoration |
                              ImGuiWindowFlags_NoDocking |
                              ImGuiWindowFlags_NoMove |
@@ -4186,7 +4035,8 @@ namespace ds
             ImGui::Dummy(ImVec2(1.0f, 8.0f));
             if (ImGui::Button(">", ImVec2(20.0f, 36.0f)))
             {
-                m_ShowToolsPanel = true;
+                m_ShowActionsPanel = true;
+                m_ShowAppearancePanel = true;
                 settingsChanged = true;
             }
             ImGui::Spacing();
@@ -4194,102 +4044,100 @@ namespace ds
             ImGui::End();
         }
 
-        if (m_ShowToolsPanel)
+        if (m_ShowActionsPanel || m_ShowAppearancePanel)
         {
-            ImGui::SetNextWindowSize(ImVec2(460.0f, 780.0f), ImGuiCond_FirstUseEver);
-            ImGui::Begin("Tools", &m_ShowToolsPanel);
-
             const char *coordinateModes[] = {"Direct", "Cartesian"};
             const ImGuiTreeNodeFlags defaultOpenFlags = ImGuiTreeNodeFlags_DefaultOpen;
             const float nestedSectionIndent = ImGui::GetStyle().IndentSpacing * 0.65f;
 
-            ImGui::TextUnformatted("Workflow");
-
-            if (ImGui::CollapsingHeader("Structure I/O", defaultOpenFlags))
+            auto drawStructureIoSection = [&]()
             {
-                ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
-                ImGui::SameLine();
-                if (ImGui::Button("Browse##Import"))
+                if (ImGui::CollapsingHeader("Structure I/O", defaultOpenFlags))
                 {
-                    std::vector<std::string> selectedPaths;
-                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                    ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##Import"))
                     {
-                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
-                        for (const std::string &selectedPath : selectedPaths)
+                        std::vector<std::string> selectedPaths;
+                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
                         {
-                            AppendStructureFromPathAsCollection(selectedPath);
+                            std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
+                            for (const std::string &selectedPath : selectedPaths)
+                            {
+                                AppendStructureFromPathAsCollection(selectedPath);
+                            }
+                        }
+                    }
+
+                    if (ImGui::Button("Load multiple files"))
+                    {
+                        std::vector<std::string> selectedPaths;
+                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                        {
+                            std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
+                            for (const std::string &selectedPath : selectedPaths)
+                            {
+                                AppendStructureFromPathAsCollection(selectedPath);
+                            }
+                        }
+                    }
+
+                    if (ImGui::Button("Load POSCAR/CONTCAR"))
+                    {
+                        AppendStructureFromPathAsCollection(std::string(m_ImportPathBuffer.data()));
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Load sample"))
+                    {
+                        const char *samplePath = "assets/samples/POSCAR";
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
+                        AppendStructureFromPathAsCollection(samplePath);
+                    }
+
+                    ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##Export"))
+                    {
+                        std::string selectedPath;
+                        if (SaveNativeFileDialog(selectedPath))
+                        {
+                            std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+                        }
+                    }
+
+                    ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+                    ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
+
+                    if (ImGui::Button("Export POSCAR/CONTCAR"))
+                    {
+                        const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                              ? CoordinateMode::Direct
+                                                              : CoordinateMode::Cartesian;
+                        ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Restore original state"))
+                    {
+                        if (m_OriginalStructure.has_value())
+                        {
+                            m_WorkingStructure = *m_OriginalStructure;
+                            m_HasStructureLoaded = true;
+                            m_AutoBondsDirty = true;
+                            m_LastStructureOperationFailed = false;
+                            m_LastStructureMessage = "Original file state restored.";
+                            LogInfo(m_LastStructureMessage);
+                        }
+                        else
+                        {
+                            m_LastStructureOperationFailed = true;
+                            m_LastStructureMessage = "Restore failed: no original structure captured yet.";
+                            LogWarn(m_LastStructureMessage);
                         }
                     }
                 }
+            };
 
-                if (ImGui::Button("Load multiple files"))
-                {
-                    std::vector<std::string> selectedPaths;
-                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
-                    {
-                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
-                        for (const std::string &selectedPath : selectedPaths)
-                        {
-                            AppendStructureFromPathAsCollection(selectedPath);
-                        }
-                    }
-                }
-
-                if (ImGui::Button("Load POSCAR/CONTCAR"))
-                {
-                    AppendStructureFromPathAsCollection(std::string(m_ImportPathBuffer.data()));
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Load sample"))
-                {
-                    const char *samplePath = "assets/samples/POSCAR";
-                    std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
-                    AppendStructureFromPathAsCollection(samplePath);
-                }
-
-                ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
-                ImGui::SameLine();
-                if (ImGui::Button("Browse##Export"))
-                {
-                    std::string selectedPath;
-                    if (SaveNativeFileDialog(selectedPath))
-                    {
-                        std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
-                    }
-                }
-
-                ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-                ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
-
-                if (ImGui::Button("Export POSCAR/CONTCAR"))
-                {
-                    const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
-                                                          ? CoordinateMode::Direct
-                                                          : CoordinateMode::Cartesian;
-                    ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Restore original state"))
-                {
-                    if (m_OriginalStructure.has_value())
-                    {
-                        m_WorkingStructure = *m_OriginalStructure;
-                        m_HasStructureLoaded = true;
-                        m_AutoBondsDirty = true;
-                        m_LastStructureOperationFailed = false;
-                        m_LastStructureMessage = "Original file state restored.";
-                        LogInfo(m_LastStructureMessage);
-                    }
-                    else
-                    {
-                        m_LastStructureOperationFailed = true;
-                        m_LastStructureMessage = "Restore failed: no original structure captured yet.";
-                        LogWarn(m_LastStructureMessage);
-                    }
-                }
-            }
-
-            auto drawAtomsToolsSection = [&]()
+            auto drawAtomAppearanceSection = [&]()
             {
                 if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
                 {
@@ -4378,7 +4226,7 @@ namespace ds
                                     color = overrideIt->second;
                                 }
 
-                                std::string label = element + "##ToolsElementColor_" + element;
+                                std::string label = element + "##AppearanceElementColor_" + element;
                                 if (ImGui::ColorEdit3(label.c_str(), &color.x,
                                                       ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
                                 {
@@ -4394,6 +4242,15 @@ namespace ds
                             }
                         }
                     }
+                    ImGui::Unindent(nestedSectionIndent);
+                }
+            };
+
+            auto drawAtomActionsSection = [&]()
+            {
+                if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
+                {
+                    ImGui::Indent(nestedSectionIndent);
 
                     if (ImGui::CollapsingHeader("Atom editing", defaultOpenFlags))
                     {
@@ -4461,9 +4318,171 @@ namespace ds
                             ImGui::EndDisabled();
                         }
                     }
+
                     ImGui::Unindent(nestedSectionIndent);
                 }
             };
+
+            auto drawBondAppearanceSection = [&]()
+            {
+                if (ImGui::CollapsingHeader("Bonds & Labels", defaultOpenFlags))
+                {
+                    constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
+
+                    const char *bondRenderStyles[] = {"Unicolor line", "Bi-color line", "Color gradient"};
+                    int bondRenderStyleIndex = static_cast<int>(m_BondRenderStyle);
+                    if (ImGui::Combo("Bond render style", &bondRenderStyleIndex, bondRenderStyles, IM_ARRAYSIZE(bondRenderStyles)))
+                    {
+                        m_BondRenderStyle = static_cast<BondRenderStyle>(std::clamp(bondRenderStyleIndex, 0, 2));
+                        settingsChanged = true;
+                    }
+
+                    if (ImGui::Checkbox("Show bond length labels", &m_ShowBondLengthLabels))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::Checkbox("Show static angle labels", &m_ShowStaticAngleLabels))
+                    {
+                        settingsChanged = true;
+                    }
+
+                    if (ImGui::DragFloatRange2("Bond line width min/max", &m_BondLineWidthMin, &m_BondLineWidthMax, 0.05f, 0.2f, 20.0f, "min %.2f", "max %.2f"))
+                    {
+                        m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 50.0f);
+                        m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 100.0f);
+                        if (m_BondLineWidthMin > m_BondLineWidthMax)
+                        {
+                            std::swap(m_BondLineWidthMin, m_BondLineWidthMax);
+                        }
+                        m_BondLineWidth = glm::clamp(m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax);
+                        settingsChanged = true;
+                    }
+
+                    if (ImGui::SliderFloat("Bond line width", &m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax, "%.1f"))
+                    {
+                        settingsChanged = true;
+                    }
+
+                    auto drawColorPicker = [&](const char *label, glm::vec3 &color)
+                    {
+                        if (ImGui::ColorEdit3(label, &color.x, kPickerOnlyFlags))
+                        {
+                            settingsChanged = true;
+                        }
+                    };
+
+                    if (ImGui::BeginTable("AppearanceBondColorGrid", 2, ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Bond color", m_BondColor);
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Selected bond color", m_BondSelectedColor);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Label text color", m_BondLabelTextColor);
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Label background color", m_BondLabelBackgroundColor);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Label border color", m_BondLabelBorderColor);
+                        ImGui::TableNextColumn();
+                        ImGui::Dummy(ImVec2(1.0f, 1.0f));
+                        ImGui::EndTable();
+                    }
+
+                    if (ImGui::SliderInt("Label precision", &m_BondLabelPrecision, 0, 6))
+                    {
+                        settingsChanged = true;
+                    }
+
+                    if (ImGui::Checkbox("Label gizmo enabled", &m_BondLabelGizmoEnabled))
+                    {
+                        settingsChanged = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("Translate labels directly in viewport");
+
+                    if (ImGui::SliderFloat("Multi label scale", &m_BondLabelMultiScaleValue, 0.25f, 4.0f, "%.2f"))
+                    {
+                        if (!m_SelectedBondKeys.empty())
+                        {
+                            const float targetScale = glm::clamp(m_BondLabelMultiScaleValue, 0.25f, 4.0f);
+                            for (std::uint64_t key : m_SelectedBondKeys)
+                            {
+                                BondLabelState &state = m_BondLabelStates[key];
+                                state.scale = targetScale;
+                                state.hidden = false;
+                            }
+                        }
+                        settingsChanged = true;
+                    }
+
+                    auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
+                    const bool hasSelectedLabel =
+                        selectedLabelIt != m_BondLabelStates.end() &&
+                        !selectedLabelIt->second.deleted;
+
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("Bond label objects");
+                    if (!hasSelectedLabel)
+                    {
+                        ImGui::TextUnformatted("Select a bond label in viewport to edit it.");
+                    }
+                    else
+                    {
+                        BondLabelState &labelState = selectedLabelIt->second;
+                        ImGui::Text("Selected label: atom %zu <-> atom %zu", labelState.atomA, labelState.atomB);
+                        if (ImGui::Checkbox("Hidden", &labelState.hidden))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::DragFloat3("Label world offset", &labelState.worldOffset.x, 0.01f, -100.0f, 100.0f, "%.3f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::SliderFloat("Label scale", &labelState.scale, 0.25f, 4.0f, "%.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::Button("Reset label transform"))
+                        {
+                            labelState.worldOffset = glm::vec3(0.0f);
+                            labelState.scale = 1.0f;
+                            settingsChanged = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Delete label"))
+                        {
+                            labelState.deleted = true;
+                            labelState.hidden = true;
+                            m_SelectedBondKeys.erase(m_SelectedBondLabelKey);
+                            settingsChanged = true;
+                        }
+                    }
+
+                    if (ImGui::Button("Restore all deleted labels"))
+                    {
+                        for (auto &[key, state] : m_BondLabelStates)
+                        {
+                            (void)key;
+                            state.deleted = false;
+                            state.hidden = false;
+                        }
+                        settingsChanged = true;
+                    }
+                }
+            };
+
+            if (m_ShowActionsPanel)
+            {
+                ImGui::SetNextWindowSize(ImVec2(460.0f, 780.0f), ImGuiCond_FirstUseEver);
+                ImGui::Begin("Actions", &m_ShowActionsPanel);
+
+                ImGui::TextUnformatted("Workflow");
+                drawStructureIoSection();
 
             if (ImGui::CollapsingHeader("Selection & Transform", defaultOpenFlags))
             {
@@ -4665,11 +4684,10 @@ namespace ds
                 }
             }
 
-            drawAtomsToolsSection();
+            drawAtomActionsSection();
 
-            if (ImGui::CollapsingHeader("Bonds", defaultOpenFlags))
+            if (ImGui::CollapsingHeader("Bond Workflow", defaultOpenFlags))
             {
-                constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
                 if (ImGui::Checkbox("Auto-generate bonds", &m_AutoBondGenerationEnabled))
                 {
                     m_AutoBondsDirty = m_AutoBondGenerationEnabled;
@@ -4690,24 +4708,12 @@ namespace ds
                     settingsChanged = true;
                 }
 
-                const char *bondRenderStyles[] = {"Unicolor line", "Bi-color line", "Color gradient"};
-                int bondRenderStyleIndex = static_cast<int>(m_BondRenderStyle);
-                if (ImGui::Combo("Bond render style", &bondRenderStyleIndex, bondRenderStyles, IM_ARRAYSIZE(bondRenderStyles)))
-                {
-                    m_BondRenderStyle = static_cast<BondRenderStyle>(std::clamp(bondRenderStyleIndex, 0, 2));
-                    settingsChanged = true;
-                }
                 if (ImGui::Checkbox("Delete affects labels only", &m_BondLabelDeleteOnlyMode))
                 {
                     settingsChanged = true;
                 }
 
                 ImGui::TextDisabled("Select tools: B = box, C = circle (mouse wheel changes circle radius)");
-
-                if (ImGui::Checkbox("Show bond length labels", &m_ShowBondLengthLabels))
-                {
-                    settingsChanged = true;
-                }
 
                 if (ImGui::SliderFloat("Bond threshold scale", &m_BondThresholdScale, 0.80f, 1.80f, "%.2f"))
                 {
@@ -4773,52 +4779,6 @@ namespace ds
                 }
                 ImGui::SameLine();
                 ImGui::TextUnformatted(m_AutoBondsDirty ? "Status: pending rebuild" : "Status: cached");
-
-                if (ImGui::DragFloatRange2("Bond line width min/max", &m_BondLineWidthMin, &m_BondLineWidthMax, 0.05f, 0.2f, 20.0f, "min %.2f", "max %.2f"))
-                {
-                    m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 50.0f);
-                    m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 100.0f);
-                    if (m_BondLineWidthMin > m_BondLineWidthMax)
-                    {
-                        std::swap(m_BondLineWidthMin, m_BondLineWidthMax);
-                    }
-                    m_BondLineWidth = glm::clamp(m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax);
-                    settingsChanged = true;
-                }
-
-                if (ImGui::SliderFloat("Bond line width", &m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax, "%.1f"))
-                {
-                    settingsChanged = true;
-                }
-
-                auto drawColorPicker = [&](const char *label, glm::vec3 &color)
-                {
-                    if (ImGui::ColorEdit3(label, &color.x, kPickerOnlyFlags))
-                    {
-                        settingsChanged = true;
-                    }
-                };
-                if (ImGui::BeginTable("BondColorGrid", 2, ImGuiTableFlags_SizingStretchProp))
-                {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Bond color", m_BondColor);
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Selected bond color", m_BondSelectedColor);
-
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Label text color", m_BondLabelTextColor);
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Label background color", m_BondLabelBackgroundColor);
-
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Label border color", m_BondLabelBorderColor);
-                    ImGui::TableNextColumn();
-                    ImGui::Dummy(ImVec2(1.0f, 1.0f));
-                    ImGui::EndTable();
-                }
 
                 if (ImGui::Button("Restore deleted bonds"))
                 {
@@ -4938,11 +4898,6 @@ namespace ds
                 ImGui::SameLine();
                 ImGui::Text("Selected bonds: %zu", m_SelectedBondKeys.size());
 
-                if (ImGui::Checkbox("Show static angle labels", &m_ShowStaticAngleLabels))
-                {
-                    settingsChanged = true;
-                }
-                ImGui::SameLine();
                 ImGui::Text("Angle labels: %zu", m_AngleLabelStates.size());
                 const bool hasAngleLabels = !m_AngleLabelStates.empty();
                 if (!hasAngleLabels)
@@ -4957,86 +4912,6 @@ namespace ds
                 if (!hasAngleLabels)
                 {
                     ImGui::EndDisabled();
-                }
-                if (ImGui::SliderInt("Label precision", &m_BondLabelPrecision, 0, 6))
-                {
-                    settingsChanged = true;
-                }
-
-                if (ImGui::Checkbox("Label gizmo enabled", &m_BondLabelGizmoEnabled))
-                {
-                    settingsChanged = true;
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("Translate labels directly in viewport");
-
-                if (ImGui::SliderFloat("Multi label scale", &m_BondLabelMultiScaleValue, 0.25f, 4.0f, "%.2f"))
-                {
-                    if (!m_SelectedBondKeys.empty())
-                    {
-                        const float targetScale = glm::clamp(m_BondLabelMultiScaleValue, 0.25f, 4.0f);
-                        for (std::uint64_t key : m_SelectedBondKeys)
-                        {
-                            BondLabelState &state = m_BondLabelStates[key];
-                            state.scale = targetScale;
-                            state.hidden = false;
-                        }
-                    }
-                    settingsChanged = true;
-                }
-
-                auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
-                const bool hasSelectedLabel =
-                    selectedLabelIt != m_BondLabelStates.end() &&
-                    !selectedLabelIt->second.deleted;
-
-                ImGui::Separator();
-                ImGui::TextUnformatted("Bond label objects");
-                if (!hasSelectedLabel)
-                {
-                    ImGui::TextUnformatted("Select a bond label in viewport to edit it.");
-                }
-                else
-                {
-                    BondLabelState &labelState = selectedLabelIt->second;
-                    ImGui::Text("Selected label: atom %zu <-> atom %zu", labelState.atomA, labelState.atomB);
-                    if (ImGui::Checkbox("Hidden", &labelState.hidden))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::DragFloat3("Label world offset", &labelState.worldOffset.x, 0.01f, -100.0f, 100.0f, "%.3f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Label scale", &labelState.scale, 0.25f, 4.0f, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::Button("Reset label transform"))
-                    {
-                        labelState.worldOffset = glm::vec3(0.0f);
-                        labelState.scale = 1.0f;
-                        settingsChanged = true;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Delete label"))
-                    {
-                        labelState.deleted = true;
-                        labelState.hidden = true;
-                        m_SelectedBondKeys.erase(m_SelectedBondLabelKey);
-                        settingsChanged = true;
-                    }
-                }
-
-                if (ImGui::Button("Restore all deleted labels"))
-                {
-                    for (auto &[key, state] : m_BondLabelStates)
-                    {
-                        (void)key;
-                        state.deleted = false;
-                        state.hidden = false;
-                    }
-                    settingsChanged = true;
                 }
             }
 
@@ -5077,6 +4952,17 @@ namespace ds
             ImGui::Separator();
             ImGui::Text("Errors captured: %zu", errorCount);
             ImGui::End();
+            }
+
+            if (m_ShowAppearancePanel)
+            {
+                ImGui::SetNextWindowSize(ImVec2(420.0f, 720.0f), ImGuiCond_FirstUseEver);
+                ImGui::Begin("Appearance", &m_ShowAppearancePanel);
+                ImGui::TextUnformatted("Scene look");
+                drawAtomAppearanceSection();
+                drawBondAppearanceSection();
+                ImGui::End();
+            }
         }
 
         if (m_ShowSceneOutlinerPanel)
