@@ -342,8 +342,11 @@ namespace ds
     {
         DS_PROFILE_SCOPE_N("Application::~Application");
         LogInfo("Application shutdown");
+        m_LayerStack.Clear();
+        m_ImGuiLayer = nullptr;
         SaveWindowState(m_Window);
         CleanupWindowIcon();
+        glfwSetErrorCallback(nullptr);
         glfwDestroyWindow(m_Window);
         glfwTerminate();
     }

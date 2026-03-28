@@ -295,11 +295,26 @@ namespace ds
         RecalculateView();
     }
 
+    void OrbitCamera::SetClipPlanes(float nearClip, float farClip)
+    {
+        nearClip = glm::clamp(nearClip, 0.0005f, 100.0f);
+        farClip = std::max(farClip, nearClip + 0.05f);
+
+        if (std::abs(m_NearClip - nearClip) <= 1e-6f && std::abs(m_FarClip - farClip) <= 1e-4f)
+        {
+            return;
+        }
+
+        m_NearClip = nearClip;
+        m_FarClip = farClip;
+        RecalculateProjection();
+    }
+
     void OrbitCamera::RecalculateProjection()
     {
         const float aspect = m_ViewportWidth / m_ViewportHeight;
-        const float effectiveNear = std::clamp(m_Distance * 0.0015f, 0.0005f, 0.02f);
-        const float effectiveFar = std::max(m_FarClip, std::max(250.0f, m_Distance * 80.0f));
+        const float effectiveNear = glm::clamp(m_NearClip, 0.0005f, 100.0f);
+        const float effectiveFar = std::max(m_FarClip, effectiveNear + 0.05f);
         if (m_ProjectionMode == ProjectionMode::Orthographic)
         {
             const float halfHeight = m_OrthographicSize;

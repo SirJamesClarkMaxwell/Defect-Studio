@@ -2,6 +2,7 @@
 #include "Layers/EditorLayerPrivate.h"
 
 #include <imgui_internal.h>
+#include <GLFW/glfw3.h>
 
 namespace ds
 {
@@ -1427,7 +1428,57 @@ namespace ds
 
                 const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
                 const glm::vec2 mouseDelta = mousePos - m_TranslateLastMousePos;
-                m_TranslateLastMousePos = mousePos;
+
+                glm::vec2 nextMouseReference = mousePos;
+                const float viewportWidthPixels = m_ViewportRectMax.x - m_ViewportRectMin.x;
+                const float viewportHeightPixels = m_ViewportRectMax.y - m_ViewportRectMin.y;
+                if (viewportWidthPixels > 64.0f && viewportHeightPixels > 64.0f)
+                {
+                    constexpr float kWrapTriggerMargin = 12.0f;
+                    constexpr float kWrapInset = 20.0f;
+
+                    glm::vec2 wrappedMousePos = mousePos;
+                    bool shouldWrapCursor = false;
+
+                    if (mousePos.x <= m_ViewportRectMin.x + kWrapTriggerMargin)
+                    {
+                        wrappedMousePos.x = m_ViewportRectMax.x - kWrapInset;
+                        shouldWrapCursor = true;
+                    }
+                    else if (mousePos.x >= m_ViewportRectMax.x - kWrapTriggerMargin)
+                    {
+                        wrappedMousePos.x = m_ViewportRectMin.x + kWrapInset;
+                        shouldWrapCursor = true;
+                    }
+
+                    if (mousePos.y <= m_ViewportRectMin.y + kWrapTriggerMargin)
+                    {
+                        wrappedMousePos.y = m_ViewportRectMax.y - kWrapInset;
+                        shouldWrapCursor = true;
+                    }
+                    else if (mousePos.y >= m_ViewportRectMax.y - kWrapTriggerMargin)
+                    {
+                        wrappedMousePos.y = m_ViewportRectMin.y + kWrapInset;
+                        shouldWrapCursor = true;
+                    }
+
+                    if (shouldWrapCursor)
+                    {
+                        if (GLFWwindow *window = ApplicationContext::Get().GetWindow())
+                        {
+                            int windowX = 0;
+                            int windowY = 0;
+                            glfwGetWindowPos(window, &windowX, &windowY);
+                            glfwSetCursorPos(
+                                window,
+                                static_cast<double>(wrappedMousePos.x - static_cast<float>(windowX)),
+                                static_cast<double>(wrappedMousePos.y - static_cast<float>(windowY)));
+                            nextMouseReference = wrappedMousePos;
+                        }
+                    }
+                }
+
+                m_TranslateLastMousePos = nextMouseReference;
 
                 const glm::vec3 forward = glm::normalize(glm::vec3(
                     std::cos(m_Camera->GetPitch()) * std::sin(m_Camera->GetYaw()),
@@ -3669,6 +3720,7 @@ namespace ds
                         {
                             m_UseTemporaryLocalAxes = true;
                             m_TemporaryAxesSource = TemporaryAxesSource::ActiveEmpty;
+                            m_GizmoModeIndex = 0;
                             m_CursorPosition = m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].position;
                             settingsChanged = true;
                             AppendSelectionDebugLog("Context menu: Active Empty -> temporary transform");
@@ -3707,6 +3759,16 @@ namespace ds
                                 glm::vec3(0.0f, 0.0f, 1.0f)};
                             settingsChanged = true;
                             AppendSelectionDebugLog("Context menu: Align active empty axes -> world");
+                        }
+
+                        if (ImGui::MenuItem("Align active empty axes to camera view", nullptr, false, HasActiveTransformEmpty()))
+                        {
+                            PushUndoSnapshot("Align active empty axes to camera view");
+                            if (AlignEmptyAxesToCameraView(m_ActiveTransformEmptyIndex))
+                            {
+                                settingsChanged = true;
+                                AppendSelectionDebugLog("Context menu: Align active empty axes -> camera view");
+                            }
                         }
 
                         if (ImGui::MenuItem("Align active empty Z to selected atoms", nullptr, false, HasActiveTransformEmpty() && m_SelectedAtomIndices.size() >= 2))
@@ -4334,12 +4396,8 @@ namespace ds
                     }
                 }
 
-                if (ImGui::SliderFloat("Cursor focus distance", &m_CursorFocusDistanceFactor, 0.10f, 1.25f, "%.2fx"))
-                {
-                    m_CursorFocusDistanceFactor = glm::clamp(m_CursorFocusDistanceFactor, 0.10f, 1.25f);
-                    settingsChanged = true;
-                }
-                DrawInlineHelpMarker("Period focuses the camera on the 3D cursor. Shift+. stores a closer focus distance, Alt+. stores a farther one.");
+                ImGui::TextDisabled("Camera focus tuning lives in Settings > Input & Navigation.");
+                DrawInlineHelpMarker("Use Settings > Input & Navigation to control the . focus distance, minimum distance, selection padding and scene clip safety.");
             }
 
             if (ImGui::CollapsingHeader("Selection highlight", defaultOpenFlags))
@@ -5679,6 +5737,9 @@ namespace ds
                 collection.name = label;
                 m_Collections.push_back(collection);
                 m_ActiveCollectionIndex = static_cast<int>(m_Collections.size()) - 1;
+                m_SelectedCollectionIndices.clear();
+                m_SelectedCollectionIndices.insert(m_ActiveCollectionIndex);
+                m_OutlinerCollectionSelectionAnchor = static_cast<std::size_t>(m_ActiveCollectionIndex);
                 settingsChanged = true;
             }
 
@@ -5872,24 +5933,23 @@ namespace ds
                 }
             };
 
-            auto appendVisibleAtomsFromCollection = [&](std::size_t collectionIndex)
+            auto setSingleSelectedCollection = [&](std::size_t collectionIndex)
             {
-                for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+                m_SelectedCollectionIndices.clear();
+                m_SelectedCollectionIndices.insert(static_cast<int>(collectionIndex));
+            };
+
+            auto toggleSelectedCollection = [&](std::size_t collectionIndex)
+            {
+                const int collectionIndexInt = static_cast<int>(collectionIndex);
+                const auto selectedIt = m_SelectedCollectionIndices.find(collectionIndexInt);
+                if (selectedIt != m_SelectedCollectionIndices.end())
                 {
-                    if (ResolveAtomCollectionIndex(atomIndex) != static_cast<int>(collectionIndex))
-                    {
-                        continue;
-                    }
-
-                    if (IsAtomHidden(atomIndex) || !IsAtomCollectionVisible(atomIndex) || !IsAtomCollectionSelectable(atomIndex))
-                    {
-                        continue;
-                    }
-
-                    if (!IsAtomSelected(atomIndex))
-                    {
-                        m_SelectedAtomIndices.push_back(atomIndex);
-                    }
+                    m_SelectedCollectionIndices.erase(selectedIt);
+                }
+                else
+                {
+                    m_SelectedCollectionIndices.insert(collectionIndexInt);
                 }
             };
 
@@ -5900,16 +5960,12 @@ namespace ds
 
                 if (!additive)
                 {
-                    m_SelectedAtomIndices.clear();
-                    m_SelectedBondKeys.clear();
-                    m_SelectedBondLabelKey = 0;
-                    m_SelectedTransformEmptyIndex = -1;
-                    m_SelectedSpecialNode = SpecialNodeSelection::None;
+                    m_SelectedCollectionIndices.clear();
                 }
 
                 for (std::size_t currentCollectionIndex = rangeStart; currentCollectionIndex <= rangeEnd; ++currentCollectionIndex)
                 {
-                    appendVisibleAtomsFromCollection(currentCollectionIndex);
+                    m_SelectedCollectionIndices.insert(static_cast<int>(currentCollectionIndex));
                 }
             };
 
@@ -5928,6 +5984,22 @@ namespace ds
 
             static std::array<char, 128> s_EmptyRenameBuffer = {};
             static int s_EmptyRenameIndex = -1;
+            auto applyOutlinerTreeOpenState = [&](const std::string &key, bool defaultOpen)
+            {
+                const auto it = m_OutlinerTreeOpenStates.find(key);
+                if (it != m_OutlinerTreeOpenStates.end())
+                {
+                    ImGui::SetNextItemOpen(it->second, ImGuiCond_Always);
+                }
+                else
+                {
+                    ImGui::SetNextItemOpen(defaultOpen, ImGuiCond_Once);
+                }
+            };
+            auto rememberOutlinerTreeOpenState = [&](const std::string &key, bool isOpen)
+            {
+                m_OutlinerTreeOpenStates[key] = isOpen;
+            };
 
             for (std::size_t collectionIndex = 0; collectionIndex < m_Collections.size(); ++collectionIndex)
             {
@@ -5947,10 +6019,13 @@ namespace ds
                 drawOutlinerIcon(OutlinerIconKind::Collection, IM_COL32(255, 174, 43, 220));
                 ImGui::SameLine(0.0f, 6.0f);
 
-                const bool isActiveCollection = (static_cast<int>(collectionIndex) == m_ActiveCollectionIndex);
-                if (ImGui::Selectable(collection.name.c_str(), isActiveCollection))
+                const int collectionIndexInt = static_cast<int>(collectionIndex);
+                const bool isActiveCollection = (collectionIndexInt == m_ActiveCollectionIndex);
+                const bool isCollectionSelected = m_SelectedCollectionIndices.find(collectionIndexInt) != m_SelectedCollectionIndices.end();
+                const std::string collectionLabel = collection.name + "##collection_" + std::to_string(collection.id);
+                if (ImGui::Selectable(collectionLabel.c_str(), isCollectionSelected || isActiveCollection, ImGuiSelectableFlags_SpanAvailWidth))
                 {
-                    m_ActiveCollectionIndex = static_cast<int>(collectionIndex);
+                    m_ActiveCollectionIndex = collectionIndexInt;
                     const bool additiveCollectionSelection = io.KeyCtrl;
                     const bool rangeCollectionSelection = io.KeyShift && m_OutlinerCollectionSelectionAnchor.has_value();
                     if (rangeCollectionSelection)
@@ -5959,24 +6034,29 @@ namespace ds
                     }
                     else if (additiveCollectionSelection)
                     {
-                        m_SelectedBondKeys.clear();
-                        m_SelectedBondLabelKey = 0;
-                        m_SelectedTransformEmptyIndex = -1;
-                        m_SelectedSpecialNode = SpecialNodeSelection::None;
-                        appendVisibleAtomsFromCollection(collectionIndex);
+                        toggleSelectedCollection(collectionIndex);
+                    }
+                    else
+                    {
+                        setSingleSelectedCollection(collectionIndex);
                     }
                     m_OutlinerCollectionSelectionAnchor = collectionIndex;
                 }
-                if (ImGui::BeginPopupContextItem("CollectionContext"))
+                if (ImGui::BeginPopupContextItem("##CollectionContextMenu"))
                 {
-                    m_ActiveCollectionIndex = static_cast<int>(collectionIndex);
+                    m_ActiveCollectionIndex = collectionIndexInt;
+                    if (m_SelectedCollectionIndices.find(collectionIndexInt) == m_SelectedCollectionIndices.end())
+                    {
+                        setSingleSelectedCollection(collectionIndex);
+                        m_OutlinerCollectionSelectionAnchor = collectionIndex;
+                    }
                     if (ImGui::MenuItem("Rename", "F2"))
                     {
-                        BeginCollectionRename(static_cast<int>(collectionIndex));
+                        BeginCollectionRename(collectionIndexInt);
                     }
                     if (ImGui::MenuItem("Copy", "Ctrl+C"))
                     {
-                        CopyCollectionToClipboard(static_cast<int>(collectionIndex));
+                        CopyCollectionToClipboard(collectionIndexInt);
                     }
                     if (ImGui::MenuItem("Paste", "Ctrl+V", false, HasClipboardPayload()))
                     {
@@ -5995,14 +6075,19 @@ namespace ds
                     }
                     if (ImGui::MenuItem("Duplicate"))
                     {
-                        settingsChanged |= DuplicateCollection(static_cast<int>(collectionIndex));
+                        settingsChanged |= DuplicateCollection(collectionIndexInt);
                     }
-                    if (ImGui::MenuItem("Delete", nullptr, false, collectionIndex > 0))
+                    if (ImGui::MenuItem("Delete", nullptr, false, m_Collections.size() > 1))
                     {
                         PushUndoSnapshot("Delete collection");
-                        settingsChanged |= DeleteCollectionAtIndex(static_cast<int>(collectionIndex));
+                        settingsChanged |= DeleteCollectionAtIndex(collectionIndexInt);
                     }
                     ImGui::EndPopup();
+                }
+                if (isActiveCollection)
+                {
+                    ImGui::SameLine(0.0f, 6.0f);
+                    ImGui::TextDisabled("[active]");
                 }
 
                 if (ImGui::BeginDragDropTarget())
@@ -6023,7 +6108,11 @@ namespace ds
                     ImGui::EndDragDropTarget();
                 }
 
-                if (ImGui::TreeNode("Objects"))
+                const std::string objectsTreeKey = "collection_objects_" + std::to_string(collection.id);
+                applyOutlinerTreeOpenState(objectsTreeKey, false);
+                const bool objectsTreeOpen = ImGui::TreeNode("Objects##CollectionObjectsTree");
+                rememberOutlinerTreeOpenState(objectsTreeKey, objectsTreeOpen);
+                if (objectsTreeOpen)
                 {
                     std::function<void(SceneUUID)> drawEmptyHierarchy = [&](SceneUUID parentId)
                     {
@@ -6036,12 +6125,16 @@ namespace ds
                             }
 
                             const bool isSelected = (m_SelectedTransformEmptyIndex == static_cast<int>(emptyIndex));
-                            const std::string label = empty.name + "##empty_" + std::to_string(emptyIndex);
+                            const std::string label = empty.name + "##empty_" + std::to_string(empty.id);
+                            ImGui::PushID(static_cast<int>(emptyIndex));
                             drawOutlinerIcon(OutlinerIconKind::Empty, IM_COL32(172, 186, 205, 220));
                             ImGui::SameLine(0.0f, 6.0f);
+                            const std::string emptyTreeKey = "empty_" + std::to_string(empty.id);
+                            applyOutlinerTreeOpenState(emptyTreeKey, isSelected);
                             const bool open = ImGui::TreeNodeEx(
                                 label.c_str(),
                                 (isSelected ? ImGuiTreeNodeFlags_Selected : 0) | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth);
+                            rememberOutlinerTreeOpenState(emptyTreeKey, open);
 
                             if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
                             {
@@ -6050,7 +6143,7 @@ namespace ds
                                 m_SelectedAtomIndices.clear();
                                 m_OutlinerAtomSelectionAnchor.reset();
                             }
-                            if (ImGui::BeginPopupContextItem("EmptyContext"))
+                            if (ImGui::BeginPopupContextItem())
                             {
                                 m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
                                 m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
@@ -6134,6 +6227,8 @@ namespace ds
                                 drawEmptyHierarchy(empty.id);
                                 ImGui::TreePop();
                             }
+
+                            ImGui::PopID();
                         }
                     };
 
@@ -6149,10 +6244,49 @@ namespace ds
                             }
                         }
 
-                        const std::string atomsLabel = "Atoms (" + std::to_string(collectionAtomCount) + ")";
+                        const std::string atomsLabel = "Atoms (" + std::to_string(collectionAtomCount) + ")##CollectionAtomsTree";
                         drawOutlinerIcon(OutlinerIconKind::Atom, IM_COL32(212, 220, 228, 220));
                         ImGui::SameLine(0.0f, 6.0f);
-                        if (ImGui::TreeNode(atomsLabel.c_str()))
+                        const std::string atomsTreeKey = "collection_atoms_" + std::to_string(collection.id);
+                        applyOutlinerTreeOpenState(atomsTreeKey, false);
+                        const bool atomsTreeOpen = ImGui::TreeNode(atomsLabel.c_str());
+                        rememberOutlinerTreeOpenState(atomsTreeKey, atomsTreeOpen);
+                        if (ImGui::BeginPopupContextItem("##CollectionAtomsContextMenu"))
+                        {
+                            if (ImGui::MenuItem("Select all"))
+                            {
+                                m_SelectedAtomIndices.clear();
+                                for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+                                {
+                                    if (ResolveAtomCollectionIndex(atomIndex) != static_cast<int>(collectionIndex))
+                                    {
+                                        continue;
+                                    }
+                                    if (IsAtomHidden(atomIndex) || !IsAtomCollectionSelectable(atomIndex))
+                                    {
+                                        continue;
+                                    }
+
+                                    m_SelectedAtomIndices.push_back(atomIndex);
+                                }
+
+                                m_SelectedTransformEmptyIndex = -1;
+                                m_SelectedBondKeys.clear();
+                                m_SelectedBondLabelKey = 0;
+                                m_SelectedSpecialNode = SpecialNodeSelection::None;
+                                if (!m_SelectedAtomIndices.empty())
+                                {
+                                    m_OutlinerAtomSelectionAnchor = m_SelectedAtomIndices.back();
+                                }
+                                else
+                                {
+                                    m_OutlinerAtomSelectionAnchor.reset();
+                                }
+                                settingsChanged = true;
+                            }
+                            ImGui::EndPopup();
+                        }
+                        if (atomsTreeOpen)
                         {
                             for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
                             {
@@ -6175,6 +6309,7 @@ namespace ds
                                     ImGui::BeginDisabled();
                                 }
 
+                                ImGui::PushID(static_cast<int>(atomIndex));
                                 const glm::vec3 atomColor = ColorFromElement(m_WorkingStructure.atoms[atomIndex].element);
                                 drawOutlinerIcon(
                                     OutlinerIconKind::Atom,
@@ -6218,7 +6353,7 @@ namespace ds
                                         m_OutlinerAtomSelectionAnchor = atomIndex;
                                     }
                                 }
-                                if (ImGui::BeginPopupContextItem("AtomContext"))
+                                if (ImGui::BeginPopupContextItem())
                                 {
                                     if (!hidden)
                                     {
@@ -6268,6 +6403,8 @@ namespace ds
                                 {
                                     ImGui::EndDisabled();
                                 }
+
+                                ImGui::PopID();
                             }
                             ImGui::TreePop();
                         }
@@ -6277,7 +6414,11 @@ namespace ds
                     {
                         drawOutlinerIcon(OutlinerIconKind::Group, IM_COL32(255, 128, 0, 220));
                         ImGui::SameLine(0.0f, 6.0f);
-                        if (ImGui::TreeNode("Groups"))
+                        const std::string groupsTreeKey = "collection_groups_" + std::to_string(collection.id);
+                        applyOutlinerTreeOpenState(groupsTreeKey, false);
+                        const bool groupsTreeOpen = ImGui::TreeNode("Groups##CollectionGroupsTree");
+                        rememberOutlinerTreeOpenState(groupsTreeKey, groupsTreeOpen);
+                        if (groupsTreeOpen)
                         {
                             for (std::size_t groupIndex = 0; groupIndex < m_ObjectGroups.size(); ++groupIndex)
                             {
@@ -6285,6 +6426,7 @@ namespace ds
                                 const SceneGroup &group = m_ObjectGroups[groupIndex];
                                 const bool isActiveGroup = (static_cast<int>(groupIndex) == m_ActiveGroupIndex);
                                 const std::string groupLabel = group.name;
+                                ImGui::PushID(static_cast<int>(groupIndex));
                                 drawOutlinerIcon(OutlinerIconKind::Group, IM_COL32(255, 128, 0, 220));
                                 ImGui::SameLine(0.0f, 6.0f);
                                 if (ImGui::Selectable(groupLabel.c_str(), isActiveGroup))
@@ -6292,7 +6434,7 @@ namespace ds
                                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
                                     SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                                 }
-                                if (ImGui::BeginPopupContextItem("GroupContextTree"))
+                                if (ImGui::BeginPopupContextItem())
                                 {
                                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
                                     if (ImGui::MenuItem("Select"))
@@ -6322,6 +6464,7 @@ namespace ds
                                 {
                                     ImGui::SetTooltip("Atoms: %zu | Empties: %zu", group.atomIndices.size(), group.emptyIndices.size());
                                 }
+                                ImGui::PopID();
                             }
                             ImGui::TreePop();
                         }
@@ -6396,6 +6539,7 @@ namespace ds
                 SceneGroup &group = m_ObjectGroups[groupIndex];
                 SceneGroupingBackend::SanitizeGroup(*this, static_cast<int>(groupIndex));
                 const bool isActiveGroup = (static_cast<int>(groupIndex) == m_ActiveGroupIndex);
+                ImGui::PushID(static_cast<int>(groupIndex));
                 drawOutlinerIcon(OutlinerIconKind::Group, IM_COL32(255, 128, 0, 220));
                 ImGui::SameLine(0.0f, 6.0f);
                 if (ImGui::Selectable(group.name.c_str(), isActiveGroup))
@@ -6403,7 +6547,7 @@ namespace ds
                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
                     SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                 }
-                if (ImGui::BeginPopupContextItem("GroupContextList"))
+                if (ImGui::BeginPopupContextItem())
                 {
                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
                     if (ImGui::MenuItem("Select"))
@@ -6433,6 +6577,7 @@ namespace ds
                 {
                     ImGui::SetTooltip("Atoms: %zu | Empties: %zu", group.atomIndices.size(), group.emptyIndices.size());
                 }
+                ImGui::PopID();
             }
 
             ImGui::End();
@@ -6522,7 +6667,7 @@ namespace ds
                                                   {deleteShortcut.c_str(), "Delete current selection"},
                                                   {"Ctrl+C / Ctrl+V", "Copy and paste selection with internal editor clipboard"},
                                                   {"Ctrl+D", "Duplicate current selection"},
-                                                  {". / Shift+. / Alt+.", "Focus camera on 3D cursor; Shift stores a closer distance, Alt stores a farther one"},
+                                                  {". / Shift+. / Alt+.", "Focus camera on current selection, or the 3D cursor if nothing is selected; Shift stores a closer distance, Alt a farther one"},
                                                   {"F2", "Rename active collection in Scene Outliner"},
                                                   {"Mouse Wheel", "Zoom viewport / adjust circle radius while C-select"},
                                                   {"MMB / Shift+MMB", "Orbit / pan viewport"},

@@ -2,6 +2,7 @@
 
 #include "Layers/EditorLayer.h"
 #include "Layers/ImGuiLayer.h"
+#include "Renderer/OrbitCamera.h"
 
 #include <imgui.h>
 
@@ -339,7 +340,9 @@ namespace ds
                 }
                 if (ImGui::Button("Use active empty as tmp transform") && hasActiveEmpty)
                 {
+                    editor.m_UseTemporaryLocalAxes = true;
                     editor.m_TemporaryAxesSource = EditorLayer::TemporaryAxesSource::ActiveEmpty;
+                    editor.m_GizmoModeIndex = 0;
                     editor.m_CursorPosition = editor.m_TransformEmpties[static_cast<std::size_t>(editor.m_ActiveTransformEmptyIndex)].position;
                     settingsChanged = true;
                 }
@@ -379,6 +382,15 @@ namespace ds
                             glm::vec3(0.0f, 1.0f, 0.0f),
                             glm::vec3(0.0f, 0.0f, 1.0f)};
                         settingsChanged = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Align empty axes to camera view"))
+                    {
+                        editor.PushUndoSnapshot("Align empty axes to camera view");
+                        if (editor.AlignEmptyAxesToCameraView(editor.m_ActiveTransformEmptyIndex))
+                        {
+                            settingsChanged = true;
+                        }
                     }
 
                     if (ImGui::Button("Align empty axes from selection") && canAddFromSelection)
@@ -570,6 +582,52 @@ namespace ds
                 if (ImGui::SliderFloat("##CircleWheelStep", &editor.m_CircleSelectWheelStep, 1.0f, 32.0f, "%.0f px"))
                 {
                     settingsChanged = true;
+                }
+
+                beginSettingsRow("Offset duplicates after paste", "When enabled, Duplicate uses a small automatic offset so the copy is immediately visible. When disabled, duplicates stay in place.");
+                if (ImGui::Checkbox("##DuplicateAppliesOffset", &editor.m_DuplicateAppliesOffset))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Focus distance multiplier", "Base zoom multiplier used by . when focusing the current selection. Falls back to the 3D cursor when nothing is selected.");
+                if (ImGui::SliderFloat("##CursorFocusDistanceFactor", &editor.m_CursorFocusDistanceFactor, 0.25f, 2.50f, "%.2fx"))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Focus min distance", "Hard lower bound for . so single atoms or empties are not framed uncomfortably close.");
+                if (ImGui::SliderFloat("##CursorFocusMinDistance", &editor.m_CursorFocusMinDistance, 0.10f, 20.0f, "%.2f"))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Focus selection padding", "Extra breathing room kept around the selected object or group. Increase for looser framing, decrease for tighter zoom.");
+                if (ImGui::SliderFloat("##CursorFocusSelectionPadding", &editor.m_CursorFocusSelectionPadding, 1.0f, 8.0f, "%.2fx"))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Scene clip near padding", "Extra front-plane safety around visible atoms and empties. Increase this if geometry still clips after using . to focus.");
+                if (ImGui::SliderFloat("##CameraClipNearPadding", &editor.m_CameraClipNearPadding, 0.5f, 8.0f, "%.2fx"))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Scene clip far padding", "Extra far-plane safety added around the visible scene when the camera clip range is computed automatically.");
+                if (ImGui::SliderFloat("##CameraClipFarPadding", &editor.m_CameraClipFarPadding, 1.0f, 12.0f, "%.2fx"))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Current clip range", "Read-only camera clip range after the scene-aware clip calculation.");
+                if (editor.m_Camera)
+                {
+                    ImGui::Text("%.4f .. %.2f", editor.m_Camera->GetNearClip(), editor.m_Camera->GetFarClip());
+                }
+                else
+                {
+                    ImGui::TextUnformatted("n/a");
                 }
 
                 beginSettingsRow("Add object popup", "Used together with Shift. Default: Shift+A.");

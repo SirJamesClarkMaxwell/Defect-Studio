@@ -995,7 +995,7 @@ namespace ds
         return hasPayload;
     }
 
-    bool EditorLayer::PasteClipboard()
+    bool EditorLayer::PasteClipboard(bool applyPlacementOffset)
     {
         if (!HasClipboardPayload())
         {
@@ -1076,7 +1076,7 @@ namespace ds
             return 0;
         };
 
-        const glm::vec3 pasteOffset = computeSceneAwareOffset();
+        const glm::vec3 pasteOffset = applyPlacementOffset ? computeSceneAwareOffset() : glm::vec3(0.0f);
         std::vector<std::size_t> pastedAtomIndices;
         int pastedEmptyIndex = -1;
         std::unordered_map<SceneUUID, SceneUUID> emptyIdRemap;
@@ -1109,6 +1109,9 @@ namespace ds
             }
 
             m_ActiveCollectionIndex = destinationCollectionIndex;
+            m_SelectedCollectionIndices.clear();
+            m_SelectedCollectionIndices.insert(destinationCollectionIndex);
+            m_OutlinerCollectionSelectionAnchor = static_cast<std::size_t>(destinationCollectionIndex);
         }
 
         if (clipboardHasAtoms)
@@ -1204,7 +1207,7 @@ namespace ds
             return false;
         }
 
-        return PasteClipboard();
+        return PasteClipboard(m_DuplicateAppliesOffset);
     }
 
     bool EditorLayer::DuplicateCollection(int collectionIndex)
@@ -1214,7 +1217,7 @@ namespace ds
             return false;
         }
 
-        return PasteClipboard();
+        return PasteClipboard(m_DuplicateAppliesOffset);
     }
 
     bool EditorLayer::ExtractSelectionToNewCollection()
@@ -1240,6 +1243,9 @@ namespace ds
         m_Collections.push_back(collection);
         const int newCollectionIndex = static_cast<int>(m_Collections.size()) - 1;
         m_ActiveCollectionIndex = newCollectionIndex;
+        m_SelectedCollectionIndices.clear();
+        m_SelectedCollectionIndices.insert(newCollectionIndex);
+        m_OutlinerCollectionSelectionAnchor = static_cast<std::size_t>(newCollectionIndex);
 
         std::size_t movedAtomCount = 0;
         for (std::size_t atomIndex : m_SelectedAtomIndices)
@@ -1286,7 +1292,9 @@ namespace ds
 
     bool EditorLayer::DeleteCollectionAtIndex(int collectionIndex, std::string *outStatusMessage)
     {
-        if (collectionIndex <= 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        if (m_Collections.size() <= 1 ||
+            collectionIndex < 0 ||
+            collectionIndex >= static_cast<int>(m_Collections.size()))
         {
             return false;
         }
@@ -1433,6 +1441,25 @@ namespace ds
         }
 
         m_Collections.erase(m_Collections.begin() + collectionIndex);
+        std::unordered_set<int> remappedSelectedCollections;
+        remappedSelectedCollections.reserve(m_SelectedCollectionIndices.size());
+        for (int selectedCollectionIndex : m_SelectedCollectionIndices)
+        {
+            if (selectedCollectionIndex == collectionIndex)
+            {
+                continue;
+            }
+
+            if (selectedCollectionIndex > collectionIndex)
+            {
+                remappedSelectedCollections.insert(selectedCollectionIndex - 1);
+            }
+            else if (selectedCollectionIndex >= 0)
+            {
+                remappedSelectedCollections.insert(selectedCollectionIndex);
+            }
+        }
+        m_SelectedCollectionIndices = std::move(remappedSelectedCollections);
         for (int &assignedCollectionIndex : m_AtomCollectionIndices)
         {
             if (assignedCollectionIndex > collectionIndex)
@@ -1465,6 +1492,14 @@ namespace ds
         {
             m_ActiveCollectionIndex = 0;
         }
+        if (m_SelectedCollectionIndices.empty() && !m_Collections.empty())
+        {
+            m_SelectedCollectionIndices.insert(m_ActiveCollectionIndex);
+        }
+        m_OutlinerCollectionSelectionAnchor =
+            (!m_SelectedCollectionIndices.empty() && m_ActiveCollectionIndex >= 0)
+                ? std::optional<std::size_t>(static_cast<std::size_t>(m_ActiveCollectionIndex))
+                : std::nullopt;
 
         for (int groupIndex = 0; groupIndex < static_cast<int>(m_ObjectGroups.size()); ++groupIndex)
         {
@@ -1560,6 +1595,59 @@ namespace ds
                  << " newZ=(" << axisZ.x << "," << axisZ.y << "," << axisZ.z << ")"
                  << " deltaDeg=" << rotationDeltaDeg;
         AppendSelectionDebugLog(alignLog.str());
+        return true;
+    }
+
+    bool EditorLayer::AlignEmptyAxesToCameraView(int emptyIndex)
+    {
+        if (emptyIndex < 0 || emptyIndex >= static_cast<int>(m_TransformEmpties.size()))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty to camera failed: active empty index is invalid.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+        if (!m_Camera)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty to camera failed: camera is unavailable.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+
+        const glm::mat4 inverseView = glm::inverse(m_Camera->GetViewMatrix());
+        glm::vec3 axisX = glm::vec3(inverseView[0]);
+        glm::vec3 axisY = glm::vec3(inverseView[1]);
+        if (glm::length2(axisX) < 1e-8f || glm::length2(axisY) < 1e-8f)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty to camera failed: could not read camera basis.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+
+        axisX = glm::normalize(axisX);
+        axisY = glm::normalize(axisY);
+        glm::vec3 axisZ = glm::cross(axisX, axisY);
+        if (glm::length2(axisZ) < 1e-8f)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty to camera failed: camera basis is degenerate.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+
+        axisZ = glm::normalize(axisZ);
+        axisY = glm::normalize(glm::cross(axisZ, axisX));
+
+        TransformEmpty &empty = m_TransformEmpties[static_cast<std::size_t>(emptyIndex)];
+        empty.axes[0] = axisX;
+        empty.axes[1] = axisY;
+        empty.axes[2] = axisZ;
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Aligned Empty axes to camera view.";
+        AppendSelectionDebugLog(m_LastStructureMessage);
         return true;
     }
 
@@ -1878,37 +1966,141 @@ namespace ds
 
         if (persistAdjustment)
         {
-            m_CursorFocusDistanceFactor = glm::clamp(m_CursorFocusDistanceFactor * distanceFactorMultiplier, 0.10f, 1.25f);
+            m_CursorFocusDistanceFactor = glm::clamp(m_CursorFocusDistanceFactor * distanceFactorMultiplier, 0.25f, 2.50f);
         }
 
-        const float currentDistance = m_Camera->GetDistance();
-        float focusDistance = std::max(1.5f, currentDistance * m_CursorFocusDistanceFactor);
-        if (!m_SelectedAtomIndices.empty())
+        std::vector<glm::vec3> focusPoints;
+        focusPoints.reserve(
+            m_SelectedAtomIndices.size() +
+            m_SelectedBondKeys.size() * 2 +
+            (m_SelectedTransformEmptyIndex >= 0 ? 1u : 0u) +
+            (m_SelectedSpecialNode != SpecialNodeSelection::None ? 1u : 0u));
+
+        float minimumFocusRadius = 0.0f;
+
+        auto appendAtomPoint = [&](std::size_t atomIndex)
         {
-            float maxRadius = 0.0f;
-            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            if (atomIndex >= m_WorkingStructure.atoms.size())
             {
-                if (atomIndex >= m_WorkingStructure.atoms.size())
+                return;
+            }
+
+            const glm::vec3 atomPosition = GetAtomCartesianPosition(atomIndex);
+            focusPoints.push_back(atomPosition);
+
+            const std::string elementKey = NormalizeElementSymbol(m_WorkingStructure.atoms[atomIndex].element);
+            const float atomRadius =
+                m_SceneSettings.atomScale *
+                ElementRadiusScale(elementKey) *
+                ResolveElementVisualScale(elementKey);
+            minimumFocusRadius = std::max(minimumFocusRadius, atomRadius);
+        };
+
+        for (std::size_t atomIndex : m_SelectedAtomIndices)
+        {
+            appendAtomPoint(atomIndex);
+        }
+
+        if (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
+        {
+            focusPoints.push_back(m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position);
+            minimumFocusRadius = std::max(minimumFocusRadius, std::max(0.08f, m_TransformEmptyVisualScale * 0.75f));
+        }
+
+        if (m_SelectedSpecialNode == SpecialNodeSelection::Light)
+        {
+            focusPoints.push_back(m_LightPosition);
+            minimumFocusRadius = std::max(minimumFocusRadius, std::max(0.08f, m_CursorVisualScale * 0.85f));
+        }
+
+        auto appendBondPoint = [&](std::uint64_t bondKey)
+        {
+            for (const BondSegment &bond : m_GeneratedBonds)
+            {
+                if (MakeBondPairKey(bond.atomA, bond.atomB) != bondKey)
                 {
                     continue;
                 }
-                maxRadius = std::max(maxRadius, glm::length(GetAtomCartesianPosition(atomIndex) - m_CursorPosition));
+
+                focusPoints.push_back(bond.start);
+                focusPoints.push_back(bond.end);
+                minimumFocusRadius = std::max(minimumFocusRadius, glm::length(bond.end - bond.start) * 0.5f);
+                break;
             }
-            if (maxRadius > 0.0f)
+        };
+
+        for (std::uint64_t bondKey : m_SelectedBondKeys)
+        {
+            appendBondPoint(bondKey);
+        }
+
+        if (m_SelectedBondLabelKey != 0)
+        {
+            appendBondPoint(m_SelectedBondLabelKey);
+        }
+
+        const bool focusSelection = !focusPoints.empty();
+        glm::vec3 focusTarget = m_CursorPosition;
+        float selectionRadius = minimumFocusRadius;
+        glm::vec3 selectionExtents(0.0f);
+        if (focusSelection)
+        {
+            glm::vec3 boundsMin(std::numeric_limits<float>::max());
+            glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+            for (const glm::vec3 &point : focusPoints)
             {
-                focusDistance = std::max(focusDistance, maxRadius * 2.2f);
+                boundsMin = glm::min(boundsMin, point);
+                boundsMax = glm::max(boundsMax, point);
+            }
+            focusTarget = 0.5f * (boundsMin + boundsMax);
+            selectionExtents = 0.5f * (boundsMax - boundsMin);
+
+            for (const glm::vec3 &point : focusPoints)
+            {
+                selectionRadius = std::max(selectionRadius, glm::length(point - focusTarget));
             }
         }
 
+        const float currentDistance = m_Camera->GetDistance();
+        float focusDistance = std::max(m_CursorFocusMinDistance, currentDistance * m_CursorFocusDistanceFactor);
+        if (focusSelection)
+        {
+            const float paddedRadius = std::max(minimumFocusRadius, selectionRadius) * std::max(1.0f, m_CursorFocusSelectionPadding);
+            if (m_Camera->GetProjectionMode() == OrbitCamera::ProjectionMode::Perspective)
+            {
+                const float viewportWidth = std::max(1.0f, m_ViewportSize.x);
+                const float viewportHeight = std::max(1.0f, m_ViewportSize.y);
+                const float aspect = viewportWidth / viewportHeight;
+                const float halfFovY = glm::radians(m_Camera->GetPerspectiveFovDegrees()) * 0.5f;
+                const float halfFovX = std::atan(std::tan(halfFovY) * aspect);
+                const float limitingHalfFov = std::max(0.15f, std::min(halfFovX, halfFovY));
+
+                const float fitSphereDistance = paddedRadius / std::tan(limitingHalfFov);
+                const float fitHorizontalDistance = std::max(selectionExtents.x, selectionExtents.y) / std::max(0.15f, std::tan(halfFovX));
+                const float fitVerticalDistance = selectionExtents.z / std::max(0.15f, std::tan(halfFovY));
+                const float fitDistance = std::max({fitSphereDistance, fitHorizontalDistance, fitVerticalDistance, m_CursorFocusMinDistance});
+                focusDistance = fitDistance * m_CursorFocusDistanceFactor;
+            }
+            else
+            {
+                const float fitOrthoSize = std::max(m_CursorFocusMinDistance * 0.5f, paddedRadius * m_CursorFocusDistanceFactor);
+                m_Camera->SetOrthographicSize(glm::clamp(fitOrthoSize, 0.05f, 500.0f));
+                focusDistance = currentDistance;
+            }
+        }
+        focusDistance = glm::clamp(focusDistance, 0.10f, 250.0f);
+
         StartCameraOrbitTransition(
-            m_CursorPosition,
+            focusTarget,
             focusDistance,
             m_Camera->GetYaw(),
             m_Camera->GetPitch(),
             m_Camera->GetRoll());
         m_LastStructureOperationFailed = false;
         std::ostringstream focusMessage;
-        focusMessage << "Camera focused on 3D cursor (distance factor " << std::fixed << std::setprecision(2) << m_CursorFocusDistanceFactor << ").";
+        focusMessage << "Camera focused on "
+                     << (focusSelection ? "selection" : "3D cursor")
+                     << " (distance factor " << std::fixed << std::setprecision(2) << m_CursorFocusDistanceFactor << ").";
         m_LastStructureMessage = focusMessage.str();
         LogInfo(m_LastStructureMessage);
         return true;

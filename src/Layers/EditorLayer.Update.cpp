@@ -110,6 +110,71 @@ namespace ds
                 }
             }
 
+            const glm::mat4 cameraView = m_Camera->GetViewMatrix();
+            float nearestSceneDepth = std::numeric_limits<float>::max();
+            float farthestSceneDepth = 0.0f;
+            bool hasSceneDepth = false;
+
+            for (std::size_t atomIndex = 0; atomIndex < atomCartesianPositions.size(); ++atomIndex)
+            {
+                if (IsAtomHidden(atomIndex) || !IsAtomCollectionVisible(atomIndex))
+                {
+                    continue;
+                }
+
+                const glm::vec4 viewPosition = cameraView * glm::vec4(atomCartesianPositions[atomIndex], 1.0f);
+                const float sceneDepth = -viewPosition.z;
+                if (sceneDepth <= 1e-4f)
+                {
+                    continue;
+                }
+
+                const std::string elementKey = NormalizeElementSymbol(m_WorkingStructure.atoms[atomIndex].element);
+                const float atomRadius =
+                    m_SceneSettings.atomScale *
+                    ElementRadiusScale(elementKey) *
+                    ResolveElementVisualScale(elementKey);
+
+                nearestSceneDepth = std::min(nearestSceneDepth, sceneDepth - atomRadius * m_CameraClipNearPadding);
+                farthestSceneDepth = std::max(farthestSceneDepth, sceneDepth + atomRadius * m_CameraClipFarPadding);
+                hasSceneDepth = true;
+            }
+
+            for (const TransformEmpty &empty : m_TransformEmpties)
+            {
+                if (!empty.visible || !IsCollectionVisible(empty.collectionIndex))
+                {
+                    continue;
+                }
+
+                const glm::vec4 viewPosition = cameraView * glm::vec4(empty.position, 1.0f);
+                const float sceneDepth = -viewPosition.z;
+                if (sceneDepth <= 1e-4f)
+                {
+                    continue;
+                }
+
+                const float emptyRadius = std::max(0.08f, m_TransformEmptyVisualScale * 0.75f);
+                nearestSceneDepth = std::min(nearestSceneDepth, sceneDepth - emptyRadius * m_CameraClipNearPadding);
+                farthestSceneDepth = std::max(farthestSceneDepth, sceneDepth + emptyRadius * m_CameraClipFarPadding);
+                hasSceneDepth = true;
+            }
+
+            if (hasSceneDepth)
+            {
+                const float focusAwareNearLimit = std::min(10.0f, std::max(0.01f, m_Camera->GetDistance() * 0.08f));
+                const float clampedNear = glm::clamp(nearestSceneDepth, 0.0025f, focusAwareNearLimit);
+                const float paddedFar = std::max(farthestSceneDepth, clampedNear + 4.0f);
+                const float clipSpan = std::max(paddedFar - clampedNear, 4.0f);
+                m_Camera->SetClipPlanes(clampedNear, clampedNear + clipSpan);
+            }
+            else
+            {
+                const float fallbackNear = glm::clamp(m_Camera->GetDistance() * 0.02f, 0.01f, 1.0f);
+                const float fallbackFar = std::max(fallbackNear + 50.0f, m_Camera->GetDistance() * 20.0f);
+                m_Camera->SetClipPlanes(fallbackNear, fallbackFar);
+            }
+
             if (m_AutoBondGenerationEnabled)
             {
                 if (m_AutoBondsDirty && m_AutoRecalculateBondsOnEdit)
@@ -255,6 +320,9 @@ namespace ds
         }
         else
         {
+            const float fallbackNear = glm::clamp(m_Camera->GetDistance() * 0.02f, 0.01f, 1.0f);
+            const float fallbackFar = std::max(fallbackNear + 50.0f, m_Camera->GetDistance() * 20.0f);
+            m_Camera->SetClipPlanes(fallbackNear, fallbackFar);
             m_GeneratedBonds.clear();
             m_AutoBondsDirty = true;
             m_RenderBackend->RenderDemoScene(m_Camera->GetViewProjectionMatrix(), m_SceneSettings);

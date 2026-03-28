@@ -385,6 +385,7 @@ namespace ds
         void EnsureSceneDefaults();
         void DeleteTransformEmptyAtIndex(int emptyIndex);
         bool AlignEmptyZAxisFromSelectedAtoms(int emptyIndex);
+        bool AlignEmptyAxesToCameraView(int emptyIndex);
         std::array<glm::vec3, 3> ResolveTransformAxes(const glm::vec3 &pivot) const;
         bool BuildAxesFromPoints(const std::vector<glm::vec3> &points, const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const;
         bool ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const;
@@ -406,7 +407,7 @@ namespace ds
         bool HasClipboardPayload() const;
         bool CopyCurrentSelectionToClipboard();
         bool CopyCollectionToClipboard(int collectionIndex);
-        bool PasteClipboard();
+        bool PasteClipboard(bool applyPlacementOffset = true);
         bool DuplicateCurrentSelection();
         bool DuplicateCollection(int collectionIndex);
         bool ExtractSelectionToNewCollection();
@@ -572,6 +573,8 @@ namespace ds
         std::vector<SceneUUID> m_AtomNodeIds;
         std::vector<int> m_AtomCollectionIndices;
         std::vector<std::size_t> m_SelectedAtomIndices;
+        std::unordered_set<int> m_SelectedCollectionIndices;
+        std::unordered_map<std::string, bool> m_OutlinerTreeOpenStates;
         std::optional<std::size_t> m_OutlinerAtomSelectionAnchor;
         std::optional<std::size_t> m_OutlinerCollectionSelectionAnchor;
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
@@ -675,12 +678,15 @@ namespace ds
         glm::vec3 m_CursorPosition = glm::vec3(0.0f, 0.0f, 0.0f);
         glm::vec3 m_CursorColor = glm::vec3(0.22f, 0.95f, 0.95f);
         float m_CursorVisualScale = 0.20f;
-        float m_CursorFocusDistanceFactor = 0.35f;
+        float m_CursorFocusDistanceFactor = 1.00f;
+        float m_CursorFocusMinDistance = 1.5f;
+        float m_CursorFocusSelectionPadding = 2.2f;
         bool m_CursorSnapToGrid = true;
         bool m_TouchpadNavigationEnabled = true;
         bool m_InvertViewportZoom = false;
         bool m_InvertCircleSelectWheel = false;
         float m_CircleSelectWheelStep = 4.0f;
+        bool m_DuplicateAppliesOffset = false;
         bool m_AppendImportToNewCollection = true;
 
         bool m_HasPersistedCameraState = false;
@@ -740,6 +746,8 @@ namespace ds
         float m_SelectionOutlineMax = 8.0f;
         float m_ViewportRenderScale = 1.0f;
         float m_UiSpacingScale = 1.0f;
+        float m_CameraClipNearPadding = 2.4f;
+        float m_CameraClipFarPadding = 5.0f;
         int m_ProjectionModeIndex = 0;
         bool m_ViewportSettingsOpen = true;
         std::string m_LastProjectDialogPath;

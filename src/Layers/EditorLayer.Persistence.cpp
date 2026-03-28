@@ -330,6 +330,7 @@ namespace ds
         m_SelectedBondLabelKey = 0;
         m_OutlinerAtomSelectionAnchor.reset();
         m_OutlinerCollectionSelectionAnchor.reset();
+        m_SelectedCollectionIndices.clear();
         m_AtomNodeIds.clear();
         m_AtomCollectionIndices.clear();
         m_AtomColorOverrides.clear();
@@ -455,6 +456,7 @@ namespace ds
         m_SelectedAtomIndices.clear();
         m_OutlinerAtomSelectionAnchor.reset();
         m_OutlinerCollectionSelectionAnchor.reset();
+        m_SelectedCollectionIndices.clear();
         m_SelectedBondKeys.clear();
         m_DeletedBondKeys.clear();
         m_HiddenBondKeys.clear();
@@ -573,6 +575,7 @@ namespace ds
         m_SelectedAtomIndices.clear();
         m_OutlinerAtomSelectionAnchor.reset();
         m_OutlinerCollectionSelectionAnchor.reset();
+        m_SelectedCollectionIndices.clear();
         m_SelectedBondKeys.clear();
         m_SelectedBondLabelKey = 0;
         EnsureAtomCollectionAssignments();
@@ -3458,10 +3461,26 @@ namespace ds
             m_CursorVisualScale = 0.05f;
         if (m_CursorVisualScale > 2.0f)
             m_CursorVisualScale = 2.0f;
-        if (m_CursorFocusDistanceFactor < 0.10f)
-            m_CursorFocusDistanceFactor = 0.10f;
-        if (m_CursorFocusDistanceFactor > 1.25f)
-            m_CursorFocusDistanceFactor = 1.25f;
+        if (m_CursorFocusDistanceFactor < 0.25f)
+            m_CursorFocusDistanceFactor = 0.25f;
+        if (m_CursorFocusDistanceFactor > 2.50f)
+            m_CursorFocusDistanceFactor = 2.50f;
+        if (m_CursorFocusMinDistance < 0.10f)
+            m_CursorFocusMinDistance = 0.10f;
+        if (m_CursorFocusMinDistance > 20.0f)
+            m_CursorFocusMinDistance = 20.0f;
+        if (m_CursorFocusSelectionPadding < 1.0f)
+            m_CursorFocusSelectionPadding = 1.0f;
+        if (m_CursorFocusSelectionPadding > 8.0f)
+            m_CursorFocusSelectionPadding = 8.0f;
+        if (m_CameraClipNearPadding < 0.5f)
+            m_CameraClipNearPadding = 0.5f;
+        if (m_CameraClipNearPadding > 8.0f)
+            m_CameraClipNearPadding = 8.0f;
+        if (m_CameraClipFarPadding < 1.0f)
+            m_CameraClipFarPadding = 1.0f;
+        if (m_CameraClipFarPadding > 12.0f)
+            m_CameraClipFarPadding = 12.0f;
         if (m_ViewportRenderScale < 0.25f)
             m_ViewportRenderScale = 0.25f;
         if (m_ViewportRenderScale > 1.0f)
@@ -3646,6 +3665,10 @@ namespace ds
                 TryLoadYamlScalar(camera, "panSensitivity", m_CameraPanSensitivity);
                 TryLoadYamlScalar(camera, "zoomSensitivity", m_CameraZoomSensitivity);
                 TryLoadYamlScalar(camera, "cursorFocusDistanceFactor", m_CursorFocusDistanceFactor);
+                TryLoadYamlScalar(camera, "cursorFocusMinDistance", m_CursorFocusMinDistance);
+                TryLoadYamlScalar(camera, "cursorFocusSelectionPadding", m_CursorFocusSelectionPadding);
+                TryLoadYamlScalar(camera, "clipNearPadding", m_CameraClipNearPadding);
+                TryLoadYamlScalar(camera, "clipFarPadding", m_CameraClipFarPadding);
                 TryLoadYamlVec3(camera["target"], m_CameraTargetPersisted);
                 TryLoadYamlScalar(camera, "distance", m_CameraDistancePersisted);
                 TryLoadYamlScalar(camera, "yaw", m_CameraYawPersisted);
@@ -3732,6 +3755,7 @@ namespace ds
                 TryLoadYamlScalar(input, "invertViewportZoom", m_InvertViewportZoom);
                 TryLoadYamlScalar(input, "invertCircleSelectWheel", m_InvertCircleSelectWheel);
                 TryLoadYamlScalar(input, "circleSelectWheelStep", m_CircleSelectWheelStep);
+                TryLoadYamlScalar(input, "duplicateAppliesOffset", m_DuplicateAppliesOffset);
 
                 const YAML::Node cursor = viewport["cursor"];
                 TryLoadYamlScalar(cursor, "show", m_Show3DCursor);
@@ -3913,6 +3937,10 @@ namespace ds
         root["camera"]["panSensitivity"] = m_CameraPanSensitivity;
         root["camera"]["zoomSensitivity"] = m_CameraZoomSensitivity;
         root["camera"]["cursorFocusDistanceFactor"] = m_CursorFocusDistanceFactor;
+        root["camera"]["cursorFocusMinDistance"] = m_CursorFocusMinDistance;
+        root["camera"]["cursorFocusSelectionPadding"] = m_CursorFocusSelectionPadding;
+        root["camera"]["clipNearPadding"] = m_CameraClipNearPadding;
+        root["camera"]["clipFarPadding"] = m_CameraClipFarPadding;
         root["camera"]["target"] = MakeVec3Node(cameraTarget);
         root["camera"]["distance"] = m_Camera ? m_Camera->GetDistance() : m_CameraDistancePersisted;
         root["camera"]["yaw"] = m_Camera ? m_Camera->GetYaw() : m_CameraYawPersisted;
@@ -3976,6 +4004,7 @@ namespace ds
         root["viewport"]["input"]["invertViewportZoom"] = m_InvertViewportZoom;
         root["viewport"]["input"]["invertCircleSelectWheel"] = m_InvertCircleSelectWheel;
         root["viewport"]["input"]["circleSelectWheelStep"] = m_CircleSelectWheelStep;
+        root["viewport"]["input"]["duplicateAppliesOffset"] = m_DuplicateAppliesOffset;
 
         root["viewport"]["cursor"]["show"] = m_Show3DCursor;
         root["viewport"]["cursor"]["position"] = MakeVec3Node(m_CursorPosition);
