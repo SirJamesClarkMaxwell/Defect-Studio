@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,6 +24,9 @@ namespace ds
     {
         LogLevel level;
         std::string timestamp;
+        std::string file;
+        std::string function;
+        std::uint_least32_t line = 0;
         std::string message;
     };
 
@@ -30,7 +35,9 @@ namespace ds
     public:
         static Logger &Get();
 
-        void Log(LogLevel level, std::string_view message);
+        void Log(LogLevel level,
+                 std::string_view message,
+                 const std::source_location &location = std::source_location::current());
         void Clear();
 
         std::vector<LogEntry> GetEntriesSnapshot() const;
@@ -44,10 +51,10 @@ namespace ds
         std::size_t m_ErrorCount = 0;
     };
 
-    void LogInfo(std::string_view message);
-    void LogTrace(std::string_view message);
-    void LogWarn(std::string_view message);
-    void LogError(std::string_view message);
-    void LogFatal(std::string_view message);
+    void LogInfo(std::string_view message, const std::source_location &location = std::source_location::current());
+    void LogTrace(std::string_view message, const std::source_location &location = std::source_location::current());
+    void LogWarn(std::string_view message, const std::source_location &location = std::source_location::current());
+    void LogError(std::string_view message, const std::source_location &location = std::source_location::current());
+    void LogFatal(std::string_view message, const std::source_location &location = std::source_location::current());
 
 } // namespace ds

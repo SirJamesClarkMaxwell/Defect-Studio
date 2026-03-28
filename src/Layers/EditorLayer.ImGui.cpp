@@ -5446,6 +5446,14 @@ namespace ds
         {
             ImGui::Begin("Log / Errors", &m_ShowLogPanel);
 
+            const auto entries = Logger::Get().GetEntriesSnapshot();
+            std::size_t levelCounts[5] = {};
+            for (const auto &entry : entries)
+            {
+                const int levelIndex = std::clamp(static_cast<int>(entry.level), 0, 4);
+                ++levelCounts[levelIndex];
+            }
+
             const char *filterItems[] = {
                 "All",
                 "Trace only",
@@ -5454,9 +5462,160 @@ namespace ds
                 "Errors + Fatal",
                 "Fatal only"};
 
-            if (ImGui::Combo("Filter", &m_LogFilter, filterItems, IM_ARRAYSIZE(filterItems)))
+            struct LogVisual
             {
-                settingsChanged = true;
+                const char *label;
+                ImVec4 color;
+            };
+
+            auto getLogVisual = [](LogLevel level) -> LogVisual
+            {
+                switch (level)
+                {
+                case LogLevel::Info:
+                    return {"INFO", ImVec4(0.42f, 0.78f, 0.98f, 1.0f)};
+                case LogLevel::Warn:
+                    return {"WARN", ImVec4(0.96f, 0.76f, 0.35f, 1.0f)};
+                case LogLevel::Error:
+                    return {"ERROR", ImVec4(0.95f, 0.35f, 0.35f, 1.0f)};
+                case LogLevel::Fatal:
+                    return {"FATAL", ImVec4(1.0f, 0.08f, 0.08f, 1.0f)};
+                case LogLevel::Trace:
+                default:
+                    return {"TRACE", ImVec4(0.60f, 0.60f, 0.60f, 1.0f)};
+                }
+            };
+
+            auto drawLogLevelIcon = [&](LogLevel level, const ImVec2 &screenPos, float size)
+            {
+                ImDrawList *drawList = ImGui::GetWindowDrawList();
+                const LogVisual visual = getLogVisual(level);
+                const ImU32 color = ImGui::ColorConvertFloat4ToU32(visual.color);
+                const ImVec2 center(screenPos.x + size * 0.5f, screenPos.y + size * 0.5f);
+                const float radius = size * 0.34f;
+
+                switch (level)
+                {
+                case LogLevel::Info:
+                    drawList->AddCircleFilled(center, radius, color, 18);
+                    drawList->AddCircleFilled(center, size * 0.10f, IM_COL32(255, 255, 255, 255), 12);
+                    break;
+                case LogLevel::Warn:
+                    drawList->PathClear();
+                    drawList->PathLineTo(ImVec2(center.x, screenPos.y + size * 0.12f));
+                    drawList->PathLineTo(ImVec2(screenPos.x + size * 0.18f, screenPos.y + size * 0.82f));
+                    drawList->PathLineTo(ImVec2(screenPos.x + size * 0.82f, screenPos.y + size * 0.82f));
+                    drawList->PathFillConvex(color);
+                    break;
+                case LogLevel::Error:
+                    drawList->AddRectFilled(ImVec2(screenPos.x + size * 0.18f, screenPos.y + size * 0.18f),
+                                            ImVec2(screenPos.x + size * 0.82f, screenPos.y + size * 0.82f),
+                                            color, 2.0f);
+                    break;
+                case LogLevel::Fatal:
+                    drawList->AddNgonFilled(center, radius, color, 8);
+                    break;
+                case LogLevel::Trace:
+                default:
+                    drawList->AddCircle(center, radius, color, 18, 1.6f);
+                    break;
+                }
+            };
+
+            auto passesLogFilter = [&](LogLevel level) -> bool
+            {
+                if (m_LogFilter == 1)
+                {
+                    return level == LogLevel::Trace;
+                }
+                if (m_LogFilter == 2)
+                {
+                    return level != LogLevel::Trace;
+                }
+                if (m_LogFilter == 3)
+                {
+                    return level != LogLevel::Trace && level != LogLevel::Info;
+                }
+                if (m_LogFilter == 4)
+                {
+                    return level == LogLevel::Error || level == LogLevel::Fatal;
+                }
+                if (m_LogFilter == 5)
+                {
+                    return level == LogLevel::Fatal;
+                }
+                return true;
+            };
+
+            auto drawFilterButton = [&](const char *label,
+                                        int filterValue,
+                                        const ImVec4 &accentColor,
+                                        std::optional<LogLevel> iconLevel = std::nullopt)
+            {
+                const bool isSelected = (m_LogFilter == filterValue);
+                if (isSelected)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Button, accentColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.95f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.85f));
+                }
+
+                std::string buttonLabel = label;
+                if (iconLevel.has_value())
+                {
+                    buttonLabel = "   " + buttonLabel;
+                }
+
+                if (ImGui::Button(buttonLabel.c_str()))
+                {
+                    m_LogFilter = filterValue;
+                    settingsChanged = true;
+                }
+
+                if (iconLevel.has_value())
+                {
+                    const ImVec2 rectMin = ImGui::GetItemRectMin();
+                    const ImVec2 rectSize = ImGui::GetItemRectSize();
+                    const float iconSize = std::min(13.0f, rectSize.y - 6.0f);
+                    drawLogLevelIcon(*iconLevel,
+                                     ImVec2(rectMin.x + 6.0f, rectMin.y + (rectSize.y - iconSize) * 0.5f),
+                                     iconSize);
+                }
+
+                if (isSelected)
+                {
+                    ImGui::PopStyleColor(3);
+                }
+            };
+
+            if (ImGui::BeginTable("LogSummary", 3, ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Entries: %zu", entries.size());
+                ImGui::TableNextColumn();
+                ImGui::Text("Warnings: %zu", levelCounts[static_cast<int>(LogLevel::Warn)]);
+                ImGui::TableNextColumn();
+                ImGui::Text("Errors/Fatal: %zu", levelCounts[static_cast<int>(LogLevel::Error)] + levelCounts[static_cast<int>(LogLevel::Fatal)]);
+                ImGui::EndTable();
+            }
+
+            if (ImGui::BeginCombo("Filter", filterItems[m_LogFilter]))
+            {
+                for (int filterIndex = 0; filterIndex < static_cast<int>(IM_ARRAYSIZE(filterItems)); ++filterIndex)
+                {
+                    const bool selected = (m_LogFilter == filterIndex);
+                    if (ImGui::Selectable(filterItems[filterIndex], selected))
+                    {
+                        m_LogFilter = filterIndex;
+                        settingsChanged = true;
+                    }
+                    if (selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
             }
 
             if (ImGui::Checkbox("Auto-scroll", &m_LogAutoScroll))
@@ -5470,67 +5629,88 @@ namespace ds
                 Logger::Get().Clear();
             }
 
+            ImGui::SeparatorText("Quick Filters");
+            drawFilterButton("All", 0, ImVec4(0.35f, 0.35f, 0.35f, 0.75f));
+            ImGui::SameLine();
+            drawFilterButton("Trace", 1, getLogVisual(LogLevel::Trace).color, LogLevel::Trace);
+            ImGui::SameLine();
+            drawFilterButton("Info+", 2, getLogVisual(LogLevel::Info).color, LogLevel::Info);
+            ImGui::SameLine();
+            drawFilterButton("Warn+", 3, getLogVisual(LogLevel::Warn).color, LogLevel::Warn);
+            ImGui::SameLine();
+            drawFilterButton("Error+", 4, getLogVisual(LogLevel::Error).color, LogLevel::Error);
+            ImGui::SameLine();
+            drawFilterButton("Fatal", 5, getLogVisual(LogLevel::Fatal).color, LogLevel::Fatal);
+
             ImGui::Separator();
 
             ImGui::BeginChild("LogEntries", ImVec2(0.0f, 0.0f), true);
-            const auto entries = Logger::Get().GetEntriesSnapshot();
-            for (const auto &entry : entries)
+            const bool shouldStickToBottom = m_LogAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f;
+            const ImGuiTableFlags tableFlags =
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_BordersInnerV |
+                ImGuiTableFlags_SizingStretchProp |
+                ImGuiTableFlags_Resizable |
+                ImGuiTableFlags_ScrollY;
+
+            if (ImGui::BeginTable("LogEntriesTable", 4, tableFlags, ImVec2(0.0f, 0.0f)))
             {
-                if (m_LogFilter == 1 && entry.level != LogLevel::Trace)
+                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+                ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+                ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 220.0f);
+                ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                for (const auto &entry : entries)
                 {
-                    continue;
-                }
-                if (m_LogFilter == 2 && entry.level == LogLevel::Trace)
-                {
-                    continue;
-                }
-                if (m_LogFilter == 3 && (entry.level == LogLevel::Trace || entry.level == LogLevel::Info))
-                {
-                    continue;
-                }
-                if (m_LogFilter == 4 && !(entry.level == LogLevel::Error || entry.level == LogLevel::Fatal))
-                {
-                    continue;
-                }
-                if (m_LogFilter == 5 && entry.level != LogLevel::Fatal)
-                {
-                    continue;
+                    if (!passesLogFilter(entry.level))
+                    {
+                        continue;
+                    }
+
+                    const LogVisual visual = getLogVisual(entry.level);
+                    ImGui::TableNextRow();
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                           ImGui::ColorConvertFloat4ToU32(ImVec4(visual.color.x, visual.color.y, visual.color.z, 0.08f)));
+
+                    ImGui::TableNextColumn();
+                    {
+                        const ImVec2 iconPos = ImGui::GetCursorScreenPos();
+                        drawLogLevelIcon(entry.level, iconPos, 12.0f);
+                        ImGui::Dummy(ImVec2(14.0f, 12.0f));
+                        ImGui::SameLine(0.0f, 6.0f);
+                        ImGui::PushStyleColor(ImGuiCol_Text, visual.color);
+                        ImGui::TextUnformatted(visual.label);
+                        ImGui::PopStyleColor();
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(entry.timestamp.c_str());
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s:%u", entry.file.c_str(), static_cast<unsigned int>(entry.line));
+                    if (!entry.function.empty())
+                    {
+                        ImGui::TextDisabled("%s", entry.function.c_str());
+                    }
+                    if (ImGui::IsItemHovered() && !entry.function.empty())
+                    {
+                        ImGui::SetTooltip("%s\n%s:%u",
+                                          entry.function.c_str(),
+                                          entry.file.c_str(),
+                                          static_cast<unsigned int>(entry.line));
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::TextWrapped("%s", entry.message.c_str());
                 }
 
-                ImVec4 color = ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
-                const char *levelText = "TRACE";
-
-                if (entry.level == LogLevel::Info)
+                if (shouldStickToBottom)
                 {
-                    color = ImVec4(0.42f, 0.78f, 0.98f, 1.0f);
-                    levelText = "INFO";
-                }
-                else if (entry.level == LogLevel::Warn)
-                {
-                    color = ImVec4(0.96f, 0.76f, 0.35f, 1.0f);
-                    levelText = "WARN";
-                }
-                else if (entry.level == LogLevel::Error)
-                {
-                    color = ImVec4(0.95f, 0.35f, 0.35f, 1.0f);
-                    levelText = "ERROR";
-                }
-                else if (entry.level == LogLevel::Fatal)
-                {
-                    color = ImVec4(1.0f, 0.08f, 0.08f, 1.0f);
-                    levelText = "FATAL";
+                    ImGui::SetScrollHereY(1.0f);
                 }
 
-                ImGui::PushStyleColor(ImGuiCol_Text, color);
-                ImGui::TextUnformatted(levelText);
-                ImGui::PopStyleColor();
-                ImGui::SameLine();
-                ImGui::Text("[%s] %s", entry.timestamp.c_str(), entry.message.c_str());
-            }
-
-            if (m_LogAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f)
-            {
-                ImGui::SetScrollHereY(1.0f);
+                ImGui::EndTable();
             }
 
             ImGui::EndChild();
