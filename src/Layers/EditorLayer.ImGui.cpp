@@ -1,14 +1,70 @@
 #define IMVIEWGUIZMO_IMPLEMENTATION
 #include "Layers/EditorLayerPrivate.h"
 
+#include <imgui_internal.h>
+
 namespace ds
 {
+    void EditorLayer::ApplyDefaultDockLayout(unsigned int dockspaceId)
+    {
+        ImGuiViewport *mainViewport = ImGui::GetMainViewport();
+        if (mainViewport == nullptr)
+        {
+            return;
+        }
+
+        ImGui::DockBuilderRemoveNode(dockspaceId);
+        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport->WorkSize);
+
+        ImGuiID centerDockId = dockspaceId;
+        const ImGuiID leftDockId = ImGui::DockBuilderSplitNode(centerDockId, ImGuiDir_Left, 0.20f, nullptr, &centerDockId);
+        ImGuiID rightDockId = ImGui::DockBuilderSplitNode(centerDockId, ImGuiDir_Right, 0.27f, nullptr, &centerDockId);
+        const ImGuiID bottomDockId = ImGui::DockBuilderSplitNode(centerDockId, ImGuiDir_Down, 0.24f, nullptr, &centerDockId);
+        const ImGuiID rightUtilityDockId = ImGui::DockBuilderSplitNode(rightDockId, ImGuiDir_Down, 0.42f, nullptr, &rightDockId);
+
+        ImGui::DockBuilderDockWindow("Scene Outliner", leftDockId);
+        ImGui::DockBuilderDockWindow("Viewport", centerDockId);
+        ImGui::DockBuilderDockWindow("Properties", rightDockId);
+        ImGui::DockBuilderDockWindow("Appearance", rightDockId);
+        ImGui::DockBuilderDockWindow("Actions", rightDockId);
+        ImGui::DockBuilderDockWindow("Element Catalog", rightDockId);
+        ImGui::DockBuilderDockWindow("Periodic Table", rightDockId);
+        ImGui::DockBuilderDockWindow("Viewport Settings", rightUtilityDockId);
+        ImGui::DockBuilderDockWindow("Render Preview", rightUtilityDockId);
+        ImGui::DockBuilderDockWindow("Settings", rightUtilityDockId);
+        ImGui::DockBuilderDockWindow("Log / Errors", bottomDockId);
+        ImGui::DockBuilderDockWindow("Stats", bottomDockId);
+        ImGui::DockBuilderDockWindow("Viewport Info", bottomDockId);
+        ImGui::DockBuilderDockWindow("Shortcuts", bottomDockId);
+        ImGui::DockBuilderFinish(dockspaceId);
+    }
+
     void EditorLayer::OnImGuiRender()
     {
         DS_PROFILE_SCOPE_N("EditorLayer::OnImGuiRender");
         EnsureSceneDefaults();
         bool settingsChanged = false;
         const ImGuiIO &io = ImGui::GetIO();
+        const auto isConfiguredKeyPressed = [](std::uint32_t key) -> bool
+        {
+            return key != 0u && ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false);
+        };
+        const auto keyDisplayName = [](std::uint32_t key) -> std::string
+        {
+            if (key == 0u)
+            {
+                return std::string("(unbound)");
+            }
+
+            const char *name = ImGui::GetKeyName(static_cast<ImGuiKey>(key));
+            if (name == nullptr || name[0] == '\0')
+            {
+                return "Key " + std::to_string(key);
+            }
+
+            return std::string(name);
+        };
 
         {
             ImGuiStyle &style = ImGui::GetStyle();
@@ -69,6 +125,12 @@ namespace ds
 
         ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
         ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+        if (m_ApplyDefaultDockLayoutOnNextFrame || m_RequestDockLayoutReset)
+        {
+            ApplyDefaultDockLayout(dockspaceId);
+            m_ApplyDefaultDockLayoutOnNextFrame = false;
+            m_RequestDockLayoutReset = false;
+        }
 
         if (ImGui::BeginMenuBar())
         {
@@ -108,13 +170,72 @@ namespace ds
                 ImGui::EndMenu();
             }
 
-            if (ImGui::BeginMenu("View"))
+            if (ImGui::BeginMenu("Edit"))
+            {
+                const bool canUndoSceneEdit = !m_UndoStack.empty();
+                const bool canRedoSceneEdit = !m_RedoStack.empty();
+                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndoSceneEdit))
+                {
+                    settingsChanged |= UndoSceneEdit();
+                }
+                if (ImGui::MenuItem("Redo", "Ctrl+Y / Ctrl+Shift+Z", false, canRedoSceneEdit))
+                {
+                    settingsChanged |= RedoSceneEdit();
+                }
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("Window"))
             {
                 if (ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowDemoWindow))
                 {
                     settingsChanged = true;
                 }
                 if (ImGui::MenuItem("Log / Errors", nullptr, &m_ShowLogPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Stats", nullptr, &m_ShowStatsPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Viewport Info", nullptr, &m_ShowViewportInfoPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Shortcuts", nullptr, &m_ShowShortcutReferencePanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Element Catalog", nullptr, &m_ShowElementCatalogPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Periodic Table", nullptr, &m_ShowPeriodicTablePanel))
+                {
+                    if (m_ShowPeriodicTablePanel)
+                    {
+                        m_RequestPeriodicTableFocus = true;
+                    }
+                    else
+                    {
+                        m_PeriodicTableOpen = false;
+                    }
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Scene Outliner", nullptr, &m_ShowSceneOutlinerPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Properties", nullptr, &m_ShowObjectPropertiesPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Actions", nullptr, &m_ShowActionsPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Appearance", nullptr, &m_ShowAppearancePanel))
                 {
                     settingsChanged = true;
                 }
@@ -128,6 +249,29 @@ namespace ds
                 }
                 if (ImGui::MenuItem("Settings", nullptr, &m_ShowSettingsPanel))
                 {
+                    settingsChanged = true;
+                }
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("View"))
+            {
+                if (ImGui::MenuItem("Reset Dock Layout"))
+                {
+                    m_ShowLogPanel = true;
+                    m_ShowStatsPanel = true;
+                    m_ShowViewportInfoPanel = true;
+                    m_ShowShortcutReferencePanel = false;
+                    m_ShowSceneOutlinerPanel = true;
+                    m_ShowObjectPropertiesPanel = true;
+                    m_ShowActionsPanel = true;
+                    m_ShowAppearancePanel = true;
+                    m_ShowPeriodicTablePanel = false;
+                    m_PeriodicTableOpen = false;
+                    m_ViewportSettingsOpen = true;
+                    m_ShowRenderPreviewWindow = true;
+                    m_ShowSettingsPanel = true;
+                    m_RequestDockLayoutReset = true;
                     settingsChanged = true;
                 }
                 ImGui::EndMenu();
@@ -364,6 +508,16 @@ namespace ds
 
         auto deleteCurrentSelection = [&]()
         {
+            const bool hasDeletableSelection =
+                !m_SelectedBondKeys.empty() ||
+                (!m_SelectedAtomIndices.empty() && m_HasStructureLoaded) ||
+                (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size())) ||
+                m_ActiveGroupIndex >= 0;
+            if (hasDeletableSelection)
+            {
+                PushUndoSnapshot("Delete selection");
+            }
+
             if (!m_SelectedBondKeys.empty())
             {
                 const bool hasAtomLikeSelection =
@@ -585,6 +739,15 @@ namespace ds
 
         auto hideCurrentSelection = [&]()
         {
+            const bool hasHideableSelection =
+                !m_SelectedAtomIndices.empty() ||
+                !m_SelectedBondKeys.empty() ||
+                m_SelectedBondLabelKey != 0;
+            if (hasHideableSelection)
+            {
+                PushUndoSnapshot("Hide selection");
+            }
+
             std::size_t hiddenAtoms = 0;
             std::size_t hiddenBonds = 0;
             std::size_t hiddenLabels = 0;
@@ -648,6 +811,26 @@ namespace ds
 
         auto unhideAllSceneElements = [&]()
         {
+            const bool hasHiddenSceneElements = !m_HiddenAtomIndices.empty() || !m_HiddenBondKeys.empty();
+            bool hasHiddenLabels = false;
+            if (!hasHiddenSceneElements)
+            {
+                for (const auto &[key, state] : m_BondLabelStates)
+                {
+                    (void)key;
+                    if (!state.deleted && state.hidden)
+                    {
+                        hasHiddenLabels = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasHiddenSceneElements || hasHiddenLabels)
+            {
+                PushUndoSnapshot("Unhide all");
+            }
+
             m_HiddenAtomIndices.clear();
             m_HiddenBondKeys.clear();
             for (auto &[key, state] : m_BondLabelStates)
@@ -798,14 +981,32 @@ namespace ds
             }
         }
 
-        if (m_ViewportFocused && !io.WantTextInput && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_A, false))
+        if (m_ViewportFocused && !io.WantTextInput && io.KeyShift && isConfiguredKeyPressed(m_HotkeyAddMenu))
         {
             m_AddMenuPopupPos = glm::vec2(io.MousePos.x, io.MousePos.y);
             ImGui::OpenPopup("AddSceneObjectPopup");
             m_BlockSelectionThisFrame = true;
         }
 
-        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+        if (!io.WantTextInput && io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+        {
+            if (io.KeyShift)
+            {
+                settingsChanged |= RedoSceneEdit();
+            }
+            else
+            {
+                settingsChanged |= UndoSceneEdit();
+            }
+            m_BlockSelectionThisFrame = settingsChanged;
+        }
+        else if (!io.WantTextInput && io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_Y, false))
+        {
+            settingsChanged |= RedoSceneEdit();
+            m_BlockSelectionThisFrame = settingsChanged;
+        }
+
+        if (m_ViewportFocused && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyDeleteSelection))
         {
             const auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
             const bool hasAtomLikeSelection =
@@ -822,7 +1023,7 @@ namespace ds
             m_BlockSelectionThisFrame = true;
         }
 
-        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_H, false))
+        if (m_ViewportFocused && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyHideSelection))
         {
             if (io.KeyAlt)
             {
@@ -837,21 +1038,23 @@ namespace ds
             m_BlockSelectionThisFrame = true;
         }
 
-        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_N, false))
+        if (m_ViewportFocused && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyToggleSidePanels))
         {
-            m_ShowToolsPanel = !m_ShowToolsPanel;
+            const bool anySidePanelVisible = m_ShowActionsPanel || m_ShowAppearancePanel;
+            m_ShowActionsPanel = !anySidePanelVisible;
+            m_ShowAppearancePanel = !anySidePanelVisible;
             settingsChanged = true;
         }
 
-        if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F12, false))
+        if (!io.WantTextInput && isConfiguredKeyPressed(m_HotkeyOpenRender))
         {
             SyncRenderAppearanceFromViewport();
             m_ShowRenderImageDialog = true;
             m_ShowRenderPreviewWindow = true;
         }
 
-        const bool translateModalHotkey = ImGui::IsKeyPressed(ImGuiKey_G, false);
-        const bool translateGizmoHotkey = (m_InteractionMode != InteractionMode::ViewSet && ImGui::IsKeyPressed(ImGuiKey_T, false));
+        const bool translateModalHotkey = isConfiguredKeyPressed(m_HotkeyTranslateModal);
+        const bool translateGizmoHotkey = (m_InteractionMode != InteractionMode::ViewSet && isConfiguredKeyPressed(m_HotkeyTranslateGizmo));
 
         if (m_ViewportFocused && !io.WantTextInput && translateModalHotkey)
         {
@@ -882,7 +1085,7 @@ namespace ds
             AppendSelectionDebugLog("Hotkey: T -> gizmo Translate");
         }
 
-        if (m_ViewportFocused && !io.WantTextInput && m_InteractionMode != InteractionMode::ViewSet && ImGui::IsKeyPressed(ImGuiKey_R, false))
+        if (m_ViewportFocused && !io.WantTextInput && m_InteractionMode != InteractionMode::ViewSet && isConfiguredKeyPressed(m_HotkeyRotateGizmo))
         {
             cancelTranslateMode();
             cancelRotateMode();
@@ -898,7 +1101,7 @@ namespace ds
             AppendSelectionDebugLog("Hotkey: R -> gizmo Rotate");
         }
 
-        if (m_ViewportFocused && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false))
+        if (m_ViewportFocused && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyScaleGizmo))
         {
             cancelTranslateMode();
             cancelRotateMode();
@@ -1276,7 +1479,7 @@ namespace ds
             }
         }
 
-        if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_B, false))
+        if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyBoxSelect))
         {
             m_BoxSelectArmed = true;
             m_BoxSelecting = false;
@@ -1285,7 +1488,7 @@ namespace ds
             AppendSelectionDebugLog("Box select armed (press LMB and drag)");
         }
 
-        if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_C, false))
+        if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyCircleSelect))
         {
             m_CircleSelectArmed = true;
             m_CircleSelecting = false;
@@ -2928,9 +3131,7 @@ namespace ds
                         ImGui::SameLine();
                         if (ImGui::SmallButton("Table"))
                         {
-                            m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
-                            m_PeriodicTableOpenedFromContextMenu = true;
-                            m_PeriodicTableOpen = true;
+                            OpenPeriodicTable(PeriodicTableTarget::ChangeSelectedAtoms, true);
                         }
                         ImGui::SameLine();
                         if (ImGui::SmallButton("Apply"))
@@ -3074,6 +3275,7 @@ namespace ds
                     {
                         if (ImGui::MenuItem("Add at 3D cursor", nullptr, false, m_HasStructureLoaded))
                         {
+                            PushUndoSnapshot("Add empty at 3D cursor");
                             TransformEmpty empty;
                             empty.id = GenerateSceneUUID();
                             empty.position = m_CursorPosition;
@@ -3090,6 +3292,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Add at selection center", nullptr, false, m_HasStructureLoaded && !m_SelectedAtomIndices.empty()))
                         {
+                            PushUndoSnapshot("Add empty at selection center");
                             TransformEmpty empty;
                             empty.id = GenerateSceneUUID();
                             empty.position = ComputeSelectionCenter();
@@ -3123,6 +3326,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Move active empty to 3D cursor", nullptr, false, HasActiveTransformEmpty()))
                         {
+                            PushUndoSnapshot("Move active empty to 3D cursor");
                             m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].position = m_CursorPosition;
                             settingsChanged = true;
                             AppendSelectionDebugLog("Context menu: Move active empty -> 3D cursor");
@@ -3130,6 +3334,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Move active empty to selection center", nullptr, false, HasActiveTransformEmpty() && !m_SelectedAtomIndices.empty()))
                         {
+                            PushUndoSnapshot("Move active empty to selection center");
                             m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].position = ComputeSelectionCenter();
                             settingsChanged = true;
                             AppendSelectionDebugLog("Context menu: Move active empty -> selection center");
@@ -3137,6 +3342,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Align active empty axes to world", nullptr, false, HasActiveTransformEmpty()))
                         {
+                            PushUndoSnapshot("Align active empty axes to world");
                             TransformEmpty &activeEmpty = m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)];
                             activeEmpty.axes = {
                                 glm::vec3(1.0f, 0.0f, 0.0f),
@@ -3148,6 +3354,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Align active empty Z to selected atoms", nullptr, false, HasActiveTransformEmpty() && m_SelectedAtomIndices.size() >= 2))
                         {
+                            PushUndoSnapshot("Align active empty Z from selected atoms");
                             if (AlignEmptyZAxisFromSelectedAtoms(m_ActiveTransformEmptyIndex))
                             {
                                 settingsChanged = true;
@@ -3157,6 +3364,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Delete active empty", nullptr, false, HasActiveTransformEmpty()))
                         {
+                            PushUndoSnapshot("Delete active empty");
                             DeleteTransformEmptyAtIndex(m_ActiveTransformEmptyIndex);
                             AppendSelectionDebugLog("Context menu: Delete active empty");
                         }
@@ -3169,17 +3377,20 @@ namespace ds
                         const bool hasSelection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
                         if (ImGui::MenuItem("Create group from selection", nullptr, false, hasSelection))
                         {
+                            PushUndoSnapshot("Create group from selection");
                             settingsChanged |= SceneGroupingBackend::CreateGroupFromCurrentSelection(*this);
                         }
 
                         if (ImGui::MenuItem("Add selection to active group", nullptr, false, hasSelection && m_ActiveGroupIndex >= 0))
                         {
+                            PushUndoSnapshot("Add selection to group");
                             SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
                             settingsChanged = true;
                         }
 
                         if (ImGui::MenuItem("Remove selection from active group", nullptr, false, hasSelection && m_ActiveGroupIndex >= 0))
                         {
+                            PushUndoSnapshot("Remove selection from group");
                             SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
                             settingsChanged = true;
                         }
@@ -3191,6 +3402,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Delete active group", nullptr, false, m_ActiveGroupIndex >= 0))
                         {
+                            PushUndoSnapshot("Delete group");
                             settingsChanged |= SceneGroupingBackend::DeleteGroup(*this, m_ActiveGroupIndex);
                         }
 
@@ -3208,9 +3420,7 @@ namespace ds
 
                             if (ImGui::MenuItem("Periodic table..."))
                             {
-                                m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
-                                m_PeriodicTableOpenedFromContextMenu = true;
-                                m_PeriodicTableOpen = true;
+                                OpenPeriodicTable(PeriodicTableTarget::ChangeSelectedAtoms, true);
                             }
 
                             if (ImGui::MenuItem("Apply"))
@@ -3347,7 +3557,8 @@ namespace ds
 
                     if (m_CircleSelectArmed && insideViewport && std::abs(io.MouseWheel) > 0.0f)
                     {
-                        m_CircleSelectRadius = glm::clamp(m_CircleSelectRadius + io.MouseWheel * 4.0f, 8.0f, 260.0f);
+                        const float wheelDelta = m_InvertCircleSelectWheel ? -io.MouseWheel : io.MouseWheel;
+                        m_CircleSelectRadius = glm::clamp(m_CircleSelectRadius + wheelDelta * m_CircleSelectWheelStep, 8.0f, 260.0f);
                     }
 
                     if (m_BoxSelectArmed && !m_BoxSelecting && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && insideViewport)
@@ -3517,25 +3728,28 @@ namespace ds
 
         ImGui::End();
 
-        ImGui::Begin("Viewport Info");
-        ImGui::Text("Size: %.0f x %.0f", size.x, size.y);
-        ImGui::Text("Render: %u x %u (%.0f%%)",
-                    static_cast<unsigned int>(std::max(1.0f, m_ViewportSize.x * m_ViewportRenderScale)),
-                    static_cast<unsigned int>(std::max(1.0f, m_ViewportSize.y * m_ViewportRenderScale)),
-                    m_ViewportRenderScale * 100.0f);
-        ImGui::Text("Focused: %s | Hovered: %s", m_ViewportFocused ? "yes" : "no", m_ViewportHovered ? "yes" : "no");
-        ImGui::Text("ImGui capture: mouse=%s keyboard=%s", io.WantCaptureMouse ? "yes" : "no", io.WantCaptureKeyboard ? "yes" : "no");
-        ImGui::Text("3D Cursor: (%.3f, %.3f, %.3f)", m_CursorPosition.x, m_CursorPosition.y, m_CursorPosition.z);
-        ImGui::Separator();
-        ImGui::TextUnformatted("Navigation:");
-        ImGui::BulletText("MMB orbit");
-        ImGui::BulletText("Shift + MMB pan");
-        ImGui::BulletText("Mouse Wheel zoom");
-        ImGui::BulletText("Touchpad mode: Alt+LMB orbit, Alt+Shift+LMB pan, Alt+RMB zoom");
-        ImGui::BulletText("RMB on viewport: selection/cursor context menu");
-        ImGui::BulletText("Top-right axis gizmo: rotate view");
-        ImGui::BulletText("ViewSet mode keys: T top, B bottom, L left, R right, P front, K back");
-        ImGui::End();
+        if (m_ShowViewportInfoPanel)
+        {
+            ImGui::Begin("Viewport Info", &m_ShowViewportInfoPanel);
+            ImGui::Text("Size: %.0f x %.0f", size.x, size.y);
+            ImGui::Text("Render: %u x %u (%.0f%%)",
+                        static_cast<unsigned int>(std::max(1.0f, m_ViewportSize.x * m_ViewportRenderScale)),
+                        static_cast<unsigned int>(std::max(1.0f, m_ViewportSize.y * m_ViewportRenderScale)),
+                        m_ViewportRenderScale * 100.0f);
+            ImGui::Text("Focused: %s | Hovered: %s", m_ViewportFocused ? "yes" : "no", m_ViewportHovered ? "yes" : "no");
+            ImGui::Text("ImGui capture: mouse=%s keyboard=%s", io.WantCaptureMouse ? "yes" : "no", io.WantCaptureKeyboard ? "yes" : "no");
+            ImGui::Text("3D Cursor: (%.3f, %.3f, %.3f)", m_CursorPosition.x, m_CursorPosition.y, m_CursorPosition.z);
+            ImGui::Separator();
+            ImGui::TextUnformatted("Navigation:");
+            ImGui::BulletText("MMB orbit");
+            ImGui::BulletText("Shift + MMB pan");
+            ImGui::BulletText("Mouse Wheel zoom");
+            ImGui::BulletText("Touchpad mode: Alt+LMB orbit, Alt+Shift+LMB pan, Alt+RMB zoom");
+            ImGui::BulletText("RMB on viewport: selection/cursor context menu");
+            ImGui::BulletText("Top-right axis gizmo: rotate view");
+            ImGui::BulletText("ViewSet mode keys: T top, B bottom, L left, R right, P front, K back");
+            ImGui::End();
+        }
 
         if (m_ViewportSettingsOpen)
         {
@@ -3684,13 +3898,45 @@ namespace ds
             if (ImGui::CollapsingHeader("Projection", defaultOpenFlags))
             {
                 ensureFloatRange(m_RenderScaleMin, m_RenderScaleMax, 0.1f, 2.0f);
-                if (ImGui::DragFloatRange2("Render scale min/max", &m_RenderScaleMin, &m_RenderScaleMax, 0.01f, 0.1f, 2.0f, "min %.2f", "max %.2f"))
+                ImGui::TextWrapped("Internal viewport scale lowers the render target resolution to reduce GPU cost on slower hardware.");
+                const std::uint32_t scaledWidth = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.x * m_ViewportRenderScale));
+                const std::uint32_t scaledHeight = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.y * m_ViewportRenderScale));
+                ImGui::Text("Internal target: %u x %u", scaledWidth, scaledHeight);
+
+                auto setViewportRenderScale = [&](float scale)
                 {
-                    ensureFloatRange(m_RenderScaleMin, m_RenderScaleMax, 0.1f, 2.0f);
+                    m_ViewportRenderScale = glm::clamp(scale, m_RenderScaleMin, m_RenderScaleMax);
+                    settingsChanged = true;
+                };
+
+                if (ImGui::Button("25%"))
+                {
+                    setViewportRenderScale(0.25f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("50%"))
+                {
+                    setViewportRenderScale(0.50f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("75%"))
+                {
+                    setViewportRenderScale(0.75f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("100%"))
+                {
+                    setViewportRenderScale(1.0f);
+                }
+
+                if (ImGui::SliderFloat("Internal render scale", &m_ViewportRenderScale, m_RenderScaleMin, m_RenderScaleMax, "%.2fx"))
+                {
                     settingsChanged = true;
                 }
-                if (ImGui::SliderFloat("Render scale", &m_ViewportRenderScale, m_RenderScaleMin, m_RenderScaleMax, "%.2fx"))
+                if (ImGui::DragFloatRange2("Allowed scale range", &m_RenderScaleMin, &m_RenderScaleMax, 0.01f, 0.1f, 2.0f, "min %.2f", "max %.2f"))
                 {
+                    ensureFloatRange(m_RenderScaleMin, m_RenderScaleMax, 0.1f, 2.0f);
+                    m_ViewportRenderScale = glm::clamp(m_ViewportRenderScale, m_RenderScaleMin, m_RenderScaleMax);
                     settingsChanged = true;
                 }
 
@@ -3721,167 +3967,6 @@ namespace ds
                         m_Camera->SetOrthographicSize(orthoSize);
                     }
                 }
-            }
-
-            if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
-            {
-                ImGui::Indent(nestedSectionIndent);
-                if (ImGui::CollapsingHeader("Rendering", defaultOpenFlags))
-                {
-                    ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
-                    ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
-                    ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
-
-                    if (ImGui::DragFloatRange2("Atom size min/max", &m_AtomSizeMin, &m_AtomSizeMax, 0.01f, 0.01f, 4.0f, "min %.2f", "max %.2f"))
-                    {
-                        ensureFloatRange(m_AtomSizeMin, m_AtomSizeMax, 0.01f, 4.0f);
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Atom size", &m_SceneSettings.atomScale, m_AtomSizeMin, m_AtomSizeMax, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::DragFloatRange2("Atom brightness min/max", &m_AtomBrightnessMin, &m_AtomBrightnessMax, 0.01f, 0.05f, 6.0f, "min %.2f", "max %.2f"))
-                    {
-                        ensureFloatRange(m_AtomBrightnessMin, m_AtomBrightnessMax, 0.05f, 6.0f);
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Atom brightness", &m_SceneSettings.atomBrightness, m_AtomBrightnessMin, m_AtomBrightnessMax, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::DragFloatRange2("Atom glow min/max", &m_AtomGlowMin, &m_AtomGlowMax, 0.005f, 0.0f, 2.0f, "min %.2f", "max %.2f"))
-                    {
-                        ensureFloatRange(m_AtomGlowMin, m_AtomGlowMax, 0.0f, 2.0f);
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Atom glow", &m_SceneSettings.atomGlowStrength, m_AtomGlowMin, m_AtomGlowMax, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::Checkbox("Override atom color", &m_SceneSettings.overrideAtomColor))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (m_SceneSettings.overrideAtomColor &&
-                        ImGui::ColorEdit3("Atom color", &m_SceneSettings.atomOverrideColor.x,
-                                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
-                    {
-                        settingsChanged = true;
-                    }
-                }
-
-                if (ImGui::CollapsingHeader("Per-element colors", defaultOpenFlags))
-                {
-                    if (!m_HasStructureLoaded || m_WorkingStructure.species.empty())
-                    {
-                        ImGui::TextDisabled("Load structure to edit per-element colors.");
-                    }
-                    else
-                    {
-                        std::vector<std::string> species = m_WorkingStructure.species;
-                        std::sort(species.begin(), species.end());
-                        species.erase(std::unique(species.begin(), species.end()), species.end());
-
-                        for (const std::string &rawElement : species)
-                        {
-                            const std::string element = NormalizeElementSymbol(rawElement);
-                            if (element.empty())
-                            {
-                                continue;
-                            }
-
-                            glm::vec3 color = ColorFromElement(element);
-                            const auto overrideIt = m_ElementColorOverrides.find(element);
-                            if (overrideIt != m_ElementColorOverrides.end())
-                            {
-                                color = overrideIt->second;
-                            }
-
-                            std::string label = element + "##ElementColor_" + element;
-                            if (ImGui::ColorEdit3(label.c_str(), &color.x,
-                                                  ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
-                            {
-                                m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
-                                settingsChanged = true;
-                            }
-                        }
-
-                        if (ImGui::Button("Reset per-element colors"))
-                        {
-                            m_ElementColorOverrides.clear();
-                            settingsChanged = true;
-                        }
-                    }
-                }
-
-                if (ImGui::CollapsingHeader("Atom editing", defaultOpenFlags))
-                {
-                    const char *inputCoordinateModes[] = {"Direct", "Cartesian"};
-
-                    ImGui::InputText("Element", m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size());
-                    ImGui::SameLine();
-                    if (ImGui::Button("Periodic table"))
-                    {
-                        m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                        m_PeriodicTableOpenedFromContextMenu = false;
-                        m_PeriodicTableOpen = true;
-                    }
-                    ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
-                    ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, inputCoordinateModes, IM_ARRAYSIZE(inputCoordinateModes));
-
-                    if (ImGui::Button("Use camera target") && m_Camera)
-                    {
-                        m_AddAtomPosition = m_Camera->GetTarget();
-                        m_AddAtomCoordinateModeIndex = 1;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Use 3D cursor"))
-                    {
-                        m_AddAtomPosition = m_CursorPosition;
-                        m_AddAtomCoordinateModeIndex = 1;
-                    }
-                    ImGui::SameLine();
-                    const bool canAddAtom = m_HasStructureLoaded;
-                    if (!canAddAtom)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Add atom"))
-                    {
-                        m_ShowAddAtomDialog = true;
-                    }
-                    if (!canAddAtom)
-                    {
-                        ImGui::EndDisabled();
-                    }
-
-                    ImGui::SeparatorText("Change selected atom type");
-                    ImGui::InputText("New element", m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size());
-                    ImGui::SameLine();
-                    if (ImGui::Button("Apply type to selection"))
-                    {
-                        if (ApplyElementToSelectedAtoms(std::string(m_ChangeAtomElementBuffer.data())))
-                        {
-                            settingsChanged = true;
-                        }
-                    }
-
-                    const bool canDeleteSelectedAtoms = !m_SelectedAtomIndices.empty() && m_HasStructureLoaded;
-                    if (!canDeleteSelectedAtoms)
-                    {
-                        ImGui::BeginDisabled();
-                    }
-                    if (ImGui::Button("Remove selected atoms"))
-                    {
-                        deleteCurrentSelection();
-                    }
-                    if (!canDeleteSelectedAtoms)
-                    {
-                        ImGui::EndDisabled();
-                    }
-                }
-                ImGui::Unindent(nestedSectionIndent);
             }
 
             if (ImGui::CollapsingHeader("Selection highlight", defaultOpenFlags))
@@ -3971,7 +4056,7 @@ namespace ds
             {
                 int currentTheme = static_cast<int>(m_CurrentTheme);
                 const char *items[] = {
-                    "Dark",
+                    "Hazel Dark",
                     "Light",
                     "Classic",
                     "PhotoshopStyle",
@@ -4015,10 +4100,7 @@ namespace ds
                     settingsChanged = true;
                 }
 
-                if (ImGui::Checkbox("Touchpad-friendly navigation", &m_TouchpadNavigationEnabled))
-                {
-                    settingsChanged = true;
-                }
+                ImGui::TextDisabled("Input + mouse behaviour live in Settings > Input & Navigation.");
 
                 ImGui::SeparatorText("Camera presets");
 
@@ -4172,13 +4254,13 @@ namespace ds
             ImGui::End();
         }
 
-        if (!m_ShowToolsPanel)
+        if (!m_ShowActionsPanel && !m_ShowAppearancePanel)
         {
             const ImVec2 workPos = viewport->WorkPos;
             const ImVec2 workSize = viewport->WorkSize;
             ImGui::SetNextWindowPos(ImVec2(workPos.x + workSize.x - 28.0f, workPos.y + 120.0f), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(24.0f, 120.0f), ImGuiCond_Always);
-            ImGui::Begin("##ToolsCollapsedStrip", nullptr,
+            ImGui::Begin("##SidePanelsCollapsedStrip", nullptr,
                          ImGuiWindowFlags_NoDecoration |
                              ImGuiWindowFlags_NoDocking |
                              ImGuiWindowFlags_NoMove |
@@ -4186,7 +4268,8 @@ namespace ds
             ImGui::Dummy(ImVec2(1.0f, 8.0f));
             if (ImGui::Button(">", ImVec2(20.0f, 36.0f)))
             {
-                m_ShowToolsPanel = true;
+                m_ShowActionsPanel = true;
+                m_ShowAppearancePanel = true;
                 settingsChanged = true;
             }
             ImGui::Spacing();
@@ -4194,102 +4277,100 @@ namespace ds
             ImGui::End();
         }
 
-        if (m_ShowToolsPanel)
+        if (m_ShowActionsPanel || m_ShowAppearancePanel)
         {
-            ImGui::SetNextWindowSize(ImVec2(460.0f, 780.0f), ImGuiCond_FirstUseEver);
-            ImGui::Begin("Tools", &m_ShowToolsPanel);
-
             const char *coordinateModes[] = {"Direct", "Cartesian"};
             const ImGuiTreeNodeFlags defaultOpenFlags = ImGuiTreeNodeFlags_DefaultOpen;
             const float nestedSectionIndent = ImGui::GetStyle().IndentSpacing * 0.65f;
 
-            ImGui::TextUnformatted("Workflow");
-
-            if (ImGui::CollapsingHeader("Structure I/O", defaultOpenFlags))
+            auto drawStructureIoSection = [&]()
             {
-                ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
-                ImGui::SameLine();
-                if (ImGui::Button("Browse##Import"))
+                if (ImGui::CollapsingHeader("Structure I/O", defaultOpenFlags))
                 {
-                    std::vector<std::string> selectedPaths;
-                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                    ImGui::InputText("Import path", m_ImportPathBuffer.data(), m_ImportPathBuffer.size());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##Import"))
                     {
-                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
-                        for (const std::string &selectedPath : selectedPaths)
+                        std::vector<std::string> selectedPaths;
+                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
                         {
-                            AppendStructureFromPathAsCollection(selectedPath);
+                            std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
+                            for (const std::string &selectedPath : selectedPaths)
+                            {
+                                AppendStructureFromPathAsCollection(selectedPath);
+                            }
+                        }
+                    }
+
+                    if (ImGui::Button("Load multiple files"))
+                    {
+                        std::vector<std::string> selectedPaths;
+                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                        {
+                            std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
+                            for (const std::string &selectedPath : selectedPaths)
+                            {
+                                AppendStructureFromPathAsCollection(selectedPath);
+                            }
+                        }
+                    }
+
+                    if (ImGui::Button("Load POSCAR/CONTCAR"))
+                    {
+                        AppendStructureFromPathAsCollection(std::string(m_ImportPathBuffer.data()));
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Load sample"))
+                    {
+                        const char *samplePath = EditorLayer::kFallbackStartupImportPath;
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
+                        AppendStructureFromPathAsCollection(samplePath);
+                    }
+
+                    ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##Export"))
+                    {
+                        std::string selectedPath;
+                        if (SaveNativeFileDialog(selectedPath))
+                        {
+                            std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
+                        }
+                    }
+
+                    ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
+                    ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
+
+                    if (ImGui::Button("Export POSCAR/CONTCAR"))
+                    {
+                        const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
+                                                              ? CoordinateMode::Direct
+                                                              : CoordinateMode::Cartesian;
+                        ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Restore original state"))
+                    {
+                        if (m_OriginalStructure.has_value())
+                        {
+                            m_WorkingStructure = *m_OriginalStructure;
+                            m_HasStructureLoaded = true;
+                            m_AutoBondsDirty = true;
+                            m_LastStructureOperationFailed = false;
+                            m_LastStructureMessage = "Original file state restored.";
+                            LogInfo(m_LastStructureMessage);
+                        }
+                        else
+                        {
+                            m_LastStructureOperationFailed = true;
+                            m_LastStructureMessage = "Restore failed: no original structure captured yet.";
+                            LogWarn(m_LastStructureMessage);
                         }
                     }
                 }
+            };
 
-                if (ImGui::Button("Load multiple files"))
-                {
-                    std::vector<std::string> selectedPaths;
-                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
-                    {
-                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
-                        for (const std::string &selectedPath : selectedPaths)
-                        {
-                            AppendStructureFromPathAsCollection(selectedPath);
-                        }
-                    }
-                }
-
-                if (ImGui::Button("Load POSCAR/CONTCAR"))
-                {
-                    AppendStructureFromPathAsCollection(std::string(m_ImportPathBuffer.data()));
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Load sample"))
-                {
-                    const char *samplePath = "assets/samples/POSCAR";
-                    std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
-                    AppendStructureFromPathAsCollection(samplePath);
-                }
-
-                ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());
-                ImGui::SameLine();
-                if (ImGui::Button("Browse##Export"))
-                {
-                    std::string selectedPath;
-                    if (SaveNativeFileDialog(selectedPath))
-                    {
-                        std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
-                    }
-                }
-
-                ImGui::Combo("Export coordinates", &m_ExportCoordinateModeIndex, coordinateModes, IM_ARRAYSIZE(coordinateModes));
-                ImGui::SliderInt("Export precision", &m_ExportPrecision, 1, 16);
-
-                if (ImGui::Button("Export POSCAR/CONTCAR"))
-                {
-                    const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
-                                                          ? CoordinateMode::Direct
-                                                          : CoordinateMode::Cartesian;
-                    ExportStructureToPath(std::string(m_ExportPathBuffer.data()), exportMode, m_ExportPrecision);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Restore original state"))
-                {
-                    if (m_OriginalStructure.has_value())
-                    {
-                        m_WorkingStructure = *m_OriginalStructure;
-                        m_HasStructureLoaded = true;
-                        m_AutoBondsDirty = true;
-                        m_LastStructureOperationFailed = false;
-                        m_LastStructureMessage = "Original file state restored.";
-                        LogInfo(m_LastStructureMessage);
-                    }
-                    else
-                    {
-                        m_LastStructureOperationFailed = true;
-                        m_LastStructureMessage = "Restore failed: no original structure captured yet.";
-                        LogWarn(m_LastStructureMessage);
-                    }
-                }
-            }
-
-            auto drawAtomsToolsSection = [&]()
+            auto drawAtomAppearanceSection = [&]()
             {
                 if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
                 {
@@ -4351,11 +4432,18 @@ namespace ds
                         }
                     }
 
-                    if (ImGui::CollapsingHeader("Per-element colors", defaultOpenFlags))
+                    if (ImGui::CollapsingHeader("Per-element project overrides", defaultOpenFlags))
                     {
+                        if (ImGui::Button("Open Element Catalog"))
+                        {
+                            EnsureElementAppearanceSelection();
+                            m_ShowElementCatalogPanel = true;
+                            settingsChanged = true;
+                        }
+
                         if (!m_HasStructureLoaded || m_WorkingStructure.species.empty())
                         {
-                            ImGui::TextDisabled("Load structure to edit per-element colors.");
+                            ImGui::TextDisabled("Load structure to edit project overrides for element colors and sizes.");
                         }
                         else
                         {
@@ -4371,29 +4459,76 @@ namespace ds
                                     continue;
                                 }
 
-                                glm::vec3 color = ColorFromElement(element);
-                                const auto overrideIt = m_ElementColorOverrides.find(element);
-                                if (overrideIt != m_ElementColorOverrides.end())
+                                ImGui::PushID(element.c_str());
+
+                                bool hasColorOverride = (m_ElementColorOverrides.find(element) != m_ElementColorOverrides.end());
+                                glm::vec3 color = ResolveElementColor(element);
+                                if (ImGui::Checkbox("##OverrideColor", &hasColorOverride))
                                 {
-                                    color = overrideIt->second;
+                                    if (hasColorOverride)
+                                    {
+                                        m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                                    }
+                                    else
+                                    {
+                                        m_ElementColorOverrides.erase(element);
+                                    }
+                                    settingsChanged = true;
                                 }
 
-                                std::string label = element + "##ToolsElementColor_" + element;
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(element.c_str());
+                                ImGui::SameLine(0.0f, 12.0f);
+                                std::string label = "Color##AppearanceElementColor_" + element;
                                 if (ImGui::ColorEdit3(label.c_str(), &color.x,
                                                       ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
                                 {
                                     m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
                                     settingsChanged = true;
                                 }
+
+                                ImGui::SameLine();
+                                bool hasScaleOverride = (m_ElementScaleOverrides.find(element) != m_ElementScaleOverrides.end());
+                                if (ImGui::Checkbox("Project size##OverrideScale", &hasScaleOverride))
+                                {
+                                    if (hasScaleOverride)
+                                    {
+                                        m_ElementScaleOverrides[element] = ResolveElementVisualScale(element);
+                                    }
+                                    else
+                                    {
+                                        m_ElementScaleOverrides.erase(element);
+                                    }
+                                    settingsChanged = true;
+                                }
+
+                                float scale = ResolveElementVisualScale(element);
+                                if (ImGui::SliderFloat(("Scale##AppearanceElementScale_" + element).c_str(), &scale, 0.1f, 4.0f, "%.2fx"))
+                                {
+                                    m_ElementScaleOverrides[element] = std::clamp(scale, 0.1f, 4.0f);
+                                    settingsChanged = true;
+                                }
+
+                                ImGui::PopID();
                             }
 
-                            if (ImGui::Button("Reset per-element colors"))
+                            if (ImGui::Button("Clear project element overrides"))
                             {
                                 m_ElementColorOverrides.clear();
+                                m_ElementScaleOverrides.clear();
                                 settingsChanged = true;
                             }
                         }
                     }
+                    ImGui::Unindent(nestedSectionIndent);
+                }
+            };
+
+            auto drawAtomActionsSection = [&]()
+            {
+                if (ImGui::CollapsingHeader("Atoms", defaultOpenFlags))
+                {
+                    ImGui::Indent(nestedSectionIndent);
 
                     if (ImGui::CollapsingHeader("Atom editing", defaultOpenFlags))
                     {
@@ -4403,9 +4538,7 @@ namespace ds
                         ImGui::SameLine();
                         if (ImGui::Button("Periodic table"))
                         {
-                            m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                            m_PeriodicTableOpenedFromContextMenu = false;
-                            m_PeriodicTableOpen = true;
+                            OpenPeriodicTable(PeriodicTableTarget::AddAtomEntry);
                         }
                         ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
                         ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, inputCoordinateModes, IM_ARRAYSIZE(inputCoordinateModes));
@@ -4461,9 +4594,177 @@ namespace ds
                             ImGui::EndDisabled();
                         }
                     }
+
                     ImGui::Unindent(nestedSectionIndent);
                 }
             };
+
+            auto drawBondAppearanceSection = [&]()
+            {
+                if (ImGui::CollapsingHeader("Bonds & Labels", defaultOpenFlags))
+                {
+                    constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
+
+                    const char *bondRenderStyles[] = {"Unicolor line", "Bi-color line", "Color gradient"};
+                    int bondRenderStyleIndex = static_cast<int>(m_BondRenderStyle);
+                    if (ImGui::Combo("Bond render style", &bondRenderStyleIndex, bondRenderStyles, IM_ARRAYSIZE(bondRenderStyles)))
+                    {
+                        m_BondRenderStyle = static_cast<BondRenderStyle>(std::clamp(bondRenderStyleIndex, 0, 2));
+                        settingsChanged = true;
+                    }
+                    ImGui::SameLine();
+                    DrawInlineHelpMarker("Unicolor uses one bond color. Bi-color splits the bond by atom colors. Color gradient interpolates colors across the full bond.");
+
+                    if (ImGui::Checkbox("Show bond length labels", &m_ShowBondLengthLabels))
+                    {
+                        settingsChanged = true;
+                    }
+                    if (ImGui::Checkbox("Show static angle labels", &m_ShowStaticAngleLabels))
+                    {
+                        settingsChanged = true;
+                    }
+
+                    if (ImGui::DragFloatRange2("Bond line width min/max", &m_BondLineWidthMin, &m_BondLineWidthMax, 0.05f, 0.2f, 20.0f, "min %.2f", "max %.2f"))
+                    {
+                        m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 50.0f);
+                        m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 100.0f);
+                        if (m_BondLineWidthMin > m_BondLineWidthMax)
+                        {
+                            std::swap(m_BondLineWidthMin, m_BondLineWidthMax);
+                        }
+                        m_BondLineWidth = glm::clamp(m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax);
+                        settingsChanged = true;
+                    }
+
+                    if (ImGui::SliderFloat("Bond line width", &m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax, "%.1f"))
+                    {
+                        settingsChanged = true;
+                    }
+
+                    auto drawColorPicker = [&](const char *label, glm::vec3 &color)
+                    {
+                        if (ImGui::ColorEdit3(label, &color.x, kPickerOnlyFlags))
+                        {
+                            settingsChanged = true;
+                        }
+                    };
+
+                    if (ImGui::BeginTable("AppearanceBondColorGrid", 2, ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Bond color", m_BondColor);
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Selected bond color", m_BondSelectedColor);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Label text color", m_BondLabelTextColor);
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Label background color", m_BondLabelBackgroundColor);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        drawColorPicker("Label border color", m_BondLabelBorderColor);
+                        ImGui::TableNextColumn();
+                        ImGui::Dummy(ImVec2(1.0f, 1.0f));
+                        ImGui::EndTable();
+                    }
+
+                    if (ImGui::SliderInt("Label precision", &m_BondLabelPrecision, 0, 6))
+                    {
+                        settingsChanged = true;
+                    }
+
+                    if (ImGui::Checkbox("Label gizmo enabled", &m_BondLabelGizmoEnabled))
+                    {
+                        settingsChanged = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("Translate labels directly in viewport");
+                    ImGui::SameLine();
+                    DrawInlineHelpMarker("Enable this to drag selected bond labels in the viewport. Scale still lives in the panel because labels are screen-facing.");
+
+                    if (ImGui::SliderFloat("Multi label scale", &m_BondLabelMultiScaleValue, 0.25f, 4.0f, "%.2f"))
+                    {
+                        if (!m_SelectedBondKeys.empty())
+                        {
+                            const float targetScale = glm::clamp(m_BondLabelMultiScaleValue, 0.25f, 4.0f);
+                            for (std::uint64_t key : m_SelectedBondKeys)
+                            {
+                                BondLabelState &state = m_BondLabelStates[key];
+                                state.scale = targetScale;
+                                state.hidden = false;
+                            }
+                        }
+                        settingsChanged = true;
+                    }
+
+                    auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
+                    const bool hasSelectedLabel =
+                        selectedLabelIt != m_BondLabelStates.end() &&
+                        !selectedLabelIt->second.deleted;
+
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("Bond label objects");
+                    if (!hasSelectedLabel)
+                    {
+                        ImGui::TextUnformatted("Select a bond label in viewport to edit it.");
+                    }
+                    else
+                    {
+                        BondLabelState &labelState = selectedLabelIt->second;
+                        ImGui::Text("Selected label: atom %zu <-> atom %zu", labelState.atomA, labelState.atomB);
+                        if (ImGui::Checkbox("Hidden", &labelState.hidden))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::DragFloat3("Label world offset", &labelState.worldOffset.x, 0.01f, -100.0f, 100.0f, "%.3f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::SliderFloat("Label scale", &labelState.scale, 0.25f, 4.0f, "%.2f"))
+                        {
+                            settingsChanged = true;
+                        }
+                        if (ImGui::Button("Reset label transform"))
+                        {
+                            labelState.worldOffset = glm::vec3(0.0f);
+                            labelState.scale = 1.0f;
+                            settingsChanged = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Delete label"))
+                        {
+                            PushUndoSnapshot("Delete bond label");
+                            labelState.deleted = true;
+                            labelState.hidden = true;
+                            m_SelectedBondKeys.erase(m_SelectedBondLabelKey);
+                            settingsChanged = true;
+                        }
+                    }
+
+                    if (ImGui::Button("Restore all deleted labels"))
+                    {
+                        PushUndoSnapshot("Restore deleted bond labels");
+                        for (auto &[key, state] : m_BondLabelStates)
+                        {
+                            (void)key;
+                            state.deleted = false;
+                            state.hidden = false;
+                        }
+                        settingsChanged = true;
+                    }
+                }
+            };
+
+            if (m_ShowActionsPanel)
+            {
+                ImGui::SetNextWindowSize(ImVec2(460.0f, 780.0f), ImGuiCond_FirstUseEver);
+                ImGui::Begin("Actions", &m_ShowActionsPanel);
+
+                ImGui::TextUnformatted("Workflow");
+                drawStructureIoSection();
 
             if (ImGui::CollapsingHeader("Selection & Transform", defaultOpenFlags))
             {
@@ -4499,51 +4800,44 @@ namespace ds
                 ImGui::SameLine();
                 DrawInlineHelpMarker("Transform shortcuts in viewport: G translate, R rotate, S scale.\nIn ViewSet, R works as Right View.");
 
+                const bool canUndoSceneEdit = !m_UndoStack.empty();
+                const bool canRedoSceneEdit = !m_RedoStack.empty();
+                if (!canUndoSceneEdit)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Undo (Ctrl+Z)") && canUndoSceneEdit)
+                {
+                    settingsChanged |= UndoSceneEdit();
+                }
+                if (!canUndoSceneEdit)
+                {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                if (!canRedoSceneEdit)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Redo (Ctrl+Y)") && canRedoSceneEdit)
+                {
+                    settingsChanged |= RedoSceneEdit();
+                }
+                if (!canRedoSceneEdit)
+                {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("History: %zu / %zu", m_UndoStack.size(), m_RedoStack.size());
+
                 if (ImGui::Button("Hide selected (H)"))
                 {
-                    if (!m_SelectedAtomIndices.empty())
-                    {
-                        for (std::size_t atomIndex : m_SelectedAtomIndices)
-                        {
-                            m_HiddenAtomIndices.insert(atomIndex);
-                        }
-                        m_SelectedAtomIndices.clear();
-                    }
-                    for (std::uint64_t key : m_SelectedBondKeys)
-                    {
-                        m_HiddenBondKeys.insert(key);
-                        auto labelIt = m_BondLabelStates.find(key);
-                        if (labelIt != m_BondLabelStates.end())
-                        {
-                            labelIt->second.hidden = true;
-                        }
-                    }
-                    m_SelectedBondKeys.clear();
-                    if (m_SelectedBondLabelKey != 0)
-                    {
-                        auto labelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
-                        if (labelIt != m_BondLabelStates.end())
-                        {
-                            labelIt->second.hidden = true;
-                        }
-                        m_SelectedBondLabelKey = 0;
-                    }
-                    settingsChanged = true;
+                    hideCurrentSelection();
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Unhide all (Alt+H)"))
                 {
-                    m_HiddenAtomIndices.clear();
-                    m_HiddenBondKeys.clear();
-                    for (auto &[key, state] : m_BondLabelStates)
-                    {
-                        (void)key;
-                        if (!state.deleted)
-                        {
-                            state.hidden = false;
-                        }
-                    }
-                    settingsChanged = true;
+                    unhideAllSceneElements();
                 }
 
                 const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
@@ -4555,6 +4849,7 @@ namespace ds
                 }
                 if (ImGui::Button("Move selected objects to 3D cursor") && canMoveSelectionToCursor)
                 {
+                    PushUndoSnapshot("Move selection to 3D cursor");
                     if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
                     {
                         m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
@@ -4586,6 +4881,7 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Move selected to Origin") && canMoveSelectionToCursor)
                 {
+                    PushUndoSnapshot("Move selection to origin");
                     if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
                     {
                         m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_SceneOriginPosition;
@@ -4665,11 +4961,10 @@ namespace ds
                 }
             }
 
-            drawAtomsToolsSection();
+            drawAtomActionsSection();
 
-            if (ImGui::CollapsingHeader("Bonds", defaultOpenFlags))
+            if (ImGui::CollapsingHeader("Bond Workflow", defaultOpenFlags))
             {
-                constexpr ImGuiColorEditFlags kPickerOnlyFlags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel;
                 if (ImGui::Checkbox("Auto-generate bonds", &m_AutoBondGenerationEnabled))
                 {
                     m_AutoBondsDirty = m_AutoBondGenerationEnabled;
@@ -4689,25 +4984,17 @@ namespace ds
                     m_SelectionFilter = static_cast<SelectionFilter>(std::clamp(selectionFilterIndex, 0, 3));
                     settingsChanged = true;
                 }
+                ImGui::SameLine();
+                DrawInlineHelpMarker("Choose whether clicks and marquee tools target atoms, bonds, or only bond labels.");
 
-                const char *bondRenderStyles[] = {"Unicolor line", "Bi-color line", "Color gradient"};
-                int bondRenderStyleIndex = static_cast<int>(m_BondRenderStyle);
-                if (ImGui::Combo("Bond render style", &bondRenderStyleIndex, bondRenderStyles, IM_ARRAYSIZE(bondRenderStyles)))
-                {
-                    m_BondRenderStyle = static_cast<BondRenderStyle>(std::clamp(bondRenderStyleIndex, 0, 2));
-                    settingsChanged = true;
-                }
                 if (ImGui::Checkbox("Delete affects labels only", &m_BondLabelDeleteOnlyMode))
                 {
                     settingsChanged = true;
                 }
+                ImGui::SameLine();
+                DrawInlineHelpMarker("When enabled, Delete removes only the measurement label object, not the underlying bond.");
 
                 ImGui::TextDisabled("Select tools: B = box, C = circle (mouse wheel changes circle radius)");
-
-                if (ImGui::Checkbox("Show bond length labels", &m_ShowBondLengthLabels))
-                {
-                    settingsChanged = true;
-                }
 
                 if (ImGui::SliderFloat("Bond threshold scale", &m_BondThresholdScale, 0.80f, 1.80f, "%.2f"))
                 {
@@ -4720,6 +5007,8 @@ namespace ds
                     m_AutoBondsDirty = true;
                     settingsChanged = true;
                 }
+                ImGui::SameLine();
+                DrawInlineHelpMarker("Overrides let you tune bond detection per element pair after the global threshold scale is applied.");
 
                 if (m_BondUsePairThresholdOverrides && m_HasStructureLoaded && !m_WorkingStructure.species.empty())
                 {
@@ -4763,10 +5052,15 @@ namespace ds
                 }
                 if (ImGui::Button("Regenerate bonds"))
                 {
+                    PushUndoSnapshot("Regenerate bonds");
                     m_AutoBondsDirty = true;
+                    m_DeletedBondKeys.clear();
                     m_LastStructureOperationFailed = false;
                     m_LastStructureMessage = "Bond regeneration scheduled.";
+                    settingsChanged = true;
                 }
+                ImGui::SameLine();
+                DrawInlineHelpMarker("Rebuild bond connectivity from the current atom positions and cutoff settings. Useful after manual cleanup or threshold edits.");
                 if (!canRegenerateBonds)
                 {
                     ImGui::EndDisabled();
@@ -4774,54 +5068,9 @@ namespace ds
                 ImGui::SameLine();
                 ImGui::TextUnformatted(m_AutoBondsDirty ? "Status: pending rebuild" : "Status: cached");
 
-                if (ImGui::DragFloatRange2("Bond line width min/max", &m_BondLineWidthMin, &m_BondLineWidthMax, 0.05f, 0.2f, 20.0f, "min %.2f", "max %.2f"))
-                {
-                    m_BondLineWidthMin = glm::clamp(m_BondLineWidthMin, 0.2f, 50.0f);
-                    m_BondLineWidthMax = glm::clamp(m_BondLineWidthMax, 0.2f, 100.0f);
-                    if (m_BondLineWidthMin > m_BondLineWidthMax)
-                    {
-                        std::swap(m_BondLineWidthMin, m_BondLineWidthMax);
-                    }
-                    m_BondLineWidth = glm::clamp(m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax);
-                    settingsChanged = true;
-                }
-
-                if (ImGui::SliderFloat("Bond line width", &m_BondLineWidth, m_BondLineWidthMin, m_BondLineWidthMax, "%.1f"))
-                {
-                    settingsChanged = true;
-                }
-
-                auto drawColorPicker = [&](const char *label, glm::vec3 &color)
-                {
-                    if (ImGui::ColorEdit3(label, &color.x, kPickerOnlyFlags))
-                    {
-                        settingsChanged = true;
-                    }
-                };
-                if (ImGui::BeginTable("BondColorGrid", 2, ImGuiTableFlags_SizingStretchProp))
-                {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Bond color", m_BondColor);
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Selected bond color", m_BondSelectedColor);
-
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Label text color", m_BondLabelTextColor);
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Label background color", m_BondLabelBackgroundColor);
-
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    drawColorPicker("Label border color", m_BondLabelBorderColor);
-                    ImGui::TableNextColumn();
-                    ImGui::Dummy(ImVec2(1.0f, 1.0f));
-                    ImGui::EndTable();
-                }
-
                 if (ImGui::Button("Restore deleted bonds"))
                 {
+                    PushUndoSnapshot("Restore deleted bonds");
                     m_DeletedBondKeys.clear();
                     settingsChanged = true;
                 }
@@ -4837,6 +5086,7 @@ namespace ds
                 }
                 if (ImGui::Button("Create bond from selected atoms") && canCreateManualBond)
                 {
+                    PushUndoSnapshot("Create manual bond");
                     const std::size_t atomA = m_SelectedAtomIndices[0];
                     const std::size_t atomB = m_SelectedAtomIndices[1];
                     const std::uint64_t bondKey = MakeBondPairKey(atomA, atomB);
@@ -4878,6 +5128,7 @@ namespace ds
                 }
                 if (ImGui::Button("Create angle label (last 3 selected)") && canCreateAngleLabel)
                 {
+                    PushUndoSnapshot("Create angle label");
                     const std::size_t atomA = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 3];
                     const std::size_t atomB = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2];
                     const std::size_t atomC = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1];
@@ -4902,6 +5153,7 @@ namespace ds
                 ImGui::TextDisabled("Angle order: last 3 selected atoms = A-B-C (B is the vertex).");
                 if (ImGui::Button("Hide selected bonds/labels"))
                 {
+                    PushUndoSnapshot("Hide selected bonds and labels");
                     for (std::uint64_t key : m_SelectedBondKeys)
                     {
                         m_HiddenBondKeys.insert(key);
@@ -4924,6 +5176,7 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Restore hidden bonds"))
                 {
+                    PushUndoSnapshot("Restore hidden bonds");
                     m_HiddenBondKeys.clear();
                     for (auto &[key, state] : m_BondLabelStates)
                     {
@@ -4938,11 +5191,6 @@ namespace ds
                 ImGui::SameLine();
                 ImGui::Text("Selected bonds: %zu", m_SelectedBondKeys.size());
 
-                if (ImGui::Checkbox("Show static angle labels", &m_ShowStaticAngleLabels))
-                {
-                    settingsChanged = true;
-                }
-                ImGui::SameLine();
                 ImGui::Text("Angle labels: %zu", m_AngleLabelStates.size());
                 const bool hasAngleLabels = !m_AngleLabelStates.empty();
                 if (!hasAngleLabels)
@@ -4951,92 +5199,13 @@ namespace ds
                 }
                 if (ImGui::Button("Clear all angle labels") && hasAngleLabels)
                 {
+                    PushUndoSnapshot("Clear angle labels");
                     m_AngleLabelStates.clear();
                     settingsChanged = true;
                 }
                 if (!hasAngleLabels)
                 {
                     ImGui::EndDisabled();
-                }
-                if (ImGui::SliderInt("Label precision", &m_BondLabelPrecision, 0, 6))
-                {
-                    settingsChanged = true;
-                }
-
-                if (ImGui::Checkbox("Label gizmo enabled", &m_BondLabelGizmoEnabled))
-                {
-                    settingsChanged = true;
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("Translate labels directly in viewport");
-
-                if (ImGui::SliderFloat("Multi label scale", &m_BondLabelMultiScaleValue, 0.25f, 4.0f, "%.2f"))
-                {
-                    if (!m_SelectedBondKeys.empty())
-                    {
-                        const float targetScale = glm::clamp(m_BondLabelMultiScaleValue, 0.25f, 4.0f);
-                        for (std::uint64_t key : m_SelectedBondKeys)
-                        {
-                            BondLabelState &state = m_BondLabelStates[key];
-                            state.scale = targetScale;
-                            state.hidden = false;
-                        }
-                    }
-                    settingsChanged = true;
-                }
-
-                auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
-                const bool hasSelectedLabel =
-                    selectedLabelIt != m_BondLabelStates.end() &&
-                    !selectedLabelIt->second.deleted;
-
-                ImGui::Separator();
-                ImGui::TextUnformatted("Bond label objects");
-                if (!hasSelectedLabel)
-                {
-                    ImGui::TextUnformatted("Select a bond label in viewport to edit it.");
-                }
-                else
-                {
-                    BondLabelState &labelState = selectedLabelIt->second;
-                    ImGui::Text("Selected label: atom %zu <-> atom %zu", labelState.atomA, labelState.atomB);
-                    if (ImGui::Checkbox("Hidden", &labelState.hidden))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::DragFloat3("Label world offset", &labelState.worldOffset.x, 0.01f, -100.0f, 100.0f, "%.3f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::SliderFloat("Label scale", &labelState.scale, 0.25f, 4.0f, "%.2f"))
-                    {
-                        settingsChanged = true;
-                    }
-                    if (ImGui::Button("Reset label transform"))
-                    {
-                        labelState.worldOffset = glm::vec3(0.0f);
-                        labelState.scale = 1.0f;
-                        settingsChanged = true;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Delete label"))
-                    {
-                        labelState.deleted = true;
-                        labelState.hidden = true;
-                        m_SelectedBondKeys.erase(m_SelectedBondLabelKey);
-                        settingsChanged = true;
-                    }
-                }
-
-                if (ImGui::Button("Restore all deleted labels"))
-                {
-                    for (auto &[key, state] : m_BondLabelStates)
-                    {
-                        (void)key;
-                        state.deleted = false;
-                        state.hidden = false;
-                    }
-                    settingsChanged = true;
                 }
             }
 
@@ -5077,14 +5246,41 @@ namespace ds
             ImGui::Separator();
             ImGui::Text("Errors captured: %zu", errorCount);
             ImGui::End();
+            }
+
+            if (m_ShowAppearancePanel)
+            {
+                ImGui::SetNextWindowSize(ImVec2(420.0f, 720.0f), ImGuiCond_FirstUseEver);
+                ImGui::Begin("Appearance", &m_ShowAppearancePanel);
+                ImGui::TextUnformatted("Scene look");
+                drawAtomAppearanceSection();
+                drawBondAppearanceSection();
+                ImGui::End();
+            }
         }
 
         if (m_ShowSceneOutlinerPanel)
         {
             ImGui::Begin("Scene Outliner", &m_ShowSceneOutlinerPanel);
 
+            enum class OutlinerIconKind
+            {
+                Collection,
+                Empty,
+                Atom,
+                Group
+            };
+
+            auto drawOutlinerIcon = [&](OutlinerIconKind kind, ImU32 color)
+            {
+                (void)kind;
+                (void)color;
+                ImGui::Dummy(ImVec2(0.0f, ImGui::GetTextLineHeight()));
+            };
+
             if (ImGui::Button("Add collection"))
             {
+                PushUndoSnapshot("Add collection");
                 SceneCollection collection;
                 collection.id = GenerateSceneUUID();
                 char label[48] = {};
@@ -5106,6 +5302,7 @@ namespace ds
             }
             if (ImGui::Button("Delete active collection") && canDeleteCollection)
             {
+                PushUndoSnapshot("Delete collection");
                 const int deletedCollectionIndex = m_ActiveCollectionIndex;
                 std::vector<std::size_t> atomIndicesToDelete;
                 atomIndicesToDelete.reserve(m_AtomCollectionIndices.size());
@@ -5135,7 +5332,9 @@ namespace ds
                     m_SelectedSpecialNode = SpecialNodeSelection::None;
                     m_SelectedBondKeys.clear();
                     m_SelectedBondLabelKey = 0;
+                    m_SuspendUndoCapture = true;
                     deleteCurrentSelection();
+                    m_SuspendUndoCapture = false;
                 }
 
                 const std::size_t removedEmptyCount = emptyIndicesToDelete.size();
@@ -5202,6 +5401,7 @@ namespace ds
             }
             if (ImGui::Button("Assign selected atoms -> active collection") && canAssignAtomsToCollection)
             {
+                PushUndoSnapshot("Assign atoms to collection");
                 for (std::size_t atomIndex : m_SelectedAtomIndices)
                 {
                     if (atomIndex < m_AtomCollectionIndices.size())
@@ -5224,6 +5424,7 @@ namespace ds
             }
             if (ImGui::Button("Create group from selection") && canCreateGroup)
             {
+                PushUndoSnapshot("Create group from selection");
                 settingsChanged |= SceneGroupingBackend::CreateGroupFromCurrentSelection(*this);
             }
             if (!canCreateGroup)
@@ -5231,7 +5432,82 @@ namespace ds
                 ImGui::EndDisabled();
             }
 
+            const bool canRenameCollection =
+                m_ActiveCollectionIndex >= 0 &&
+                m_ActiveCollectionIndex < static_cast<int>(m_Collections.size());
+            if (canRenameCollection &&
+                ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                ImGui::IsKeyPressed(ImGuiKey_F2, false) &&
+                !ImGui::IsAnyItemActive())
+            {
+                const std::string &activeName = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].name;
+                std::snprintf(m_RenameCollectionBuffer.data(), m_RenameCollectionBuffer.size(), "%s", activeName.c_str());
+                m_RenameCollectionDialogOpen = true;
+            }
+
+            if (m_RenameCollectionDialogOpen)
+            {
+                ImGui::OpenPopup("Rename Collection");
+                m_RenameCollectionDialogOpen = false;
+            }
+
+            if (ImGui::BeginPopupModal("Rename Collection", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                if (ImGui::IsWindowAppearing())
+                {
+                    ImGui::SetKeyboardFocusHere();
+                }
+
+                bool confirmRename = ImGui::InputText(
+                    "Name",
+                    m_RenameCollectionBuffer.data(),
+                    m_RenameCollectionBuffer.size(),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+                auto trimCollectionName = [](std::string value) -> std::string
+                {
+                    const std::string whitespace = " \t\r\n";
+                    const std::size_t first = value.find_first_not_of(whitespace);
+                    if (first == std::string::npos)
+                    {
+                        return std::string();
+                    }
+
+                    const std::size_t last = value.find_last_not_of(whitespace);
+                    return value.substr(first, last - first + 1);
+                };
+
+                if (ImGui::Button("Rename"))
+                {
+                    confirmRename = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel"))
+                {
+                    ImGui::CloseCurrentPopup();
+                }
+
+                if (confirmRename && canRenameCollection)
+                {
+                    const std::string trimmedName = trimCollectionName(std::string(m_RenameCollectionBuffer.data()));
+                    if (!trimmedName.empty())
+                    {
+                        SceneCollection &collection = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)];
+                        if (trimmedName != collection.name)
+                        {
+                            PushUndoSnapshot("Rename collection");
+                            collection.name = trimmedName;
+                            settingsChanged = true;
+                        }
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+
+                ImGui::EndPopup();
+            }
+
             ImGui::SeparatorText("Collections");
+            ImGui::TextDisabled("Tip: press F2 to rename the active collection.");
 
             auto selectAtomRangeInCollection = [&](std::size_t collectionIndex, std::size_t anchorIndex, std::size_t clickedIndex, bool additive)
             {
@@ -5272,10 +5548,18 @@ namespace ds
                 SceneCollection &collection = m_Collections[collectionIndex];
                 ImGui::PushID(static_cast<int>(collectionIndex));
 
-                ImGui::Checkbox("##visible", &collection.visible);
+                if (ImGui::Checkbox("##visible", &collection.visible))
+                {
+                    settingsChanged = true;
+                }
                 ImGui::SameLine();
-                ImGui::Checkbox("##selectable", &collection.selectable);
+                if (ImGui::Checkbox("##selectable", &collection.selectable))
+                {
+                    settingsChanged = true;
+                }
                 ImGui::SameLine();
+                drawOutlinerIcon(OutlinerIconKind::Collection, IM_COL32(255, 174, 43, 220));
+                ImGui::SameLine(0.0f, 6.0f);
 
                 const bool isActiveCollection = (static_cast<int>(collectionIndex) == m_ActiveCollectionIndex);
                 if (ImGui::Selectable(collection.name.c_str(), isActiveCollection))
@@ -5314,7 +5598,9 @@ namespace ds
                             }
 
                             const bool isSelected = (m_SelectedTransformEmptyIndex == static_cast<int>(emptyIndex));
-                            const std::string label = "Empty: " + empty.name + "##empty_" + std::to_string(emptyIndex);
+                            const std::string label = empty.name + "##empty_" + std::to_string(emptyIndex);
+                            drawOutlinerIcon(OutlinerIconKind::Empty, IM_COL32(172, 186, 205, 220));
+                            ImGui::SameLine(0.0f, 6.0f);
                             const bool open = ImGui::TreeNodeEx(
                                 label.c_str(),
                                 (isSelected ? ImGuiTreeNodeFlags_Selected : 0) | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth);
@@ -5375,6 +5661,8 @@ namespace ds
                         }
 
                         const std::string atomsLabel = "Atoms (" + std::to_string(collectionAtomCount) + ")";
+                        drawOutlinerIcon(OutlinerIconKind::Atom, IM_COL32(212, 220, 228, 220));
+                        ImGui::SameLine(0.0f, 6.0f);
                         if (ImGui::TreeNode(atomsLabel.c_str()))
                         {
                             for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
@@ -5398,6 +5686,15 @@ namespace ds
                                     ImGui::BeginDisabled();
                                 }
 
+                                const glm::vec3 atomColor = ColorFromElement(m_WorkingStructure.atoms[atomIndex].element);
+                                drawOutlinerIcon(
+                                    OutlinerIconKind::Atom,
+                                    IM_COL32(
+                                        static_cast<int>(glm::clamp(atomColor.r, 0.0f, 1.0f) * 255.0f),
+                                        static_cast<int>(glm::clamp(atomColor.g, 0.0f, 1.0f) * 255.0f),
+                                        static_cast<int>(glm::clamp(atomColor.b, 0.0f, 1.0f) * 255.0f),
+                                        220));
+                                ImGui::SameLine(0.0f, 6.0f);
                                 if (ImGui::Selectable(atomLabel.c_str(), isSelected))
                                 {
                                     const bool shiftSelection = io.KeyShift && m_OutlinerAtomSelectionAnchor.has_value();
@@ -5444,6 +5741,8 @@ namespace ds
 
                     if (collectionIndex == 0)
                     {
+                        drawOutlinerIcon(OutlinerIconKind::Group, IM_COL32(255, 128, 0, 220));
+                        ImGui::SameLine(0.0f, 6.0f);
                         if (ImGui::TreeNode("Groups"))
                         {
                             for (std::size_t groupIndex = 0; groupIndex < m_ObjectGroups.size(); ++groupIndex)
@@ -5451,7 +5750,9 @@ namespace ds
                                 SceneGroupingBackend::SanitizeGroup(*this, static_cast<int>(groupIndex));
                                 const SceneGroup &group = m_ObjectGroups[groupIndex];
                                 const bool isActiveGroup = (static_cast<int>(groupIndex) == m_ActiveGroupIndex);
-                                const std::string groupLabel = "Group: " + group.name;
+                                const std::string groupLabel = group.name;
+                                drawOutlinerIcon(OutlinerIconKind::Group, IM_COL32(255, 128, 0, 220));
+                                ImGui::SameLine(0.0f, 6.0f);
                                 if (ImGui::Selectable(groupLabel.c_str(), isActiveGroup))
                                 {
                                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
@@ -5502,6 +5803,7 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Delete active group"))
                 {
+                    PushUndoSnapshot("Delete group");
                     settingsChanged |= SceneGroupingBackend::DeleteGroup(*this, m_ActiveGroupIndex);
                 }
                 ImGui::SameLine();
@@ -5512,12 +5814,14 @@ namespace ds
                 }
                 if (ImGui::Button("Add selection to active"))
                 {
+                    PushUndoSnapshot("Add selection to group");
                     SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
                     settingsChanged = true;
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Remove selection from active"))
                 {
+                    PushUndoSnapshot("Remove selection from group");
                     SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
                     settingsChanged = true;
                 }
@@ -5532,6 +5836,8 @@ namespace ds
                 SceneGroup &group = m_ObjectGroups[groupIndex];
                 SceneGroupingBackend::SanitizeGroup(*this, static_cast<int>(groupIndex));
                 const bool isActiveGroup = (static_cast<int>(groupIndex) == m_ActiveGroupIndex);
+                drawOutlinerIcon(OutlinerIconKind::Group, IM_COL32(255, 128, 0, 220));
+                ImGui::SameLine(0.0f, 6.0f);
                 if (ImGui::Selectable(group.name.c_str(), isActiveGroup))
                 {
                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
@@ -5543,6 +5849,144 @@ namespace ds
                 }
             }
 
+            ImGui::End();
+        }
+
+        if (m_ShowShortcutReferencePanel)
+        {
+            ImGui::SetNextWindowSize(ImVec2(560.0f, 460.0f), ImGuiCond_FirstUseEver);
+            ImGui::Begin("Shortcuts", &m_ShowShortcutReferencePanel);
+
+            struct ShortcutRow
+            {
+                const char *keys;
+                const char *action;
+            };
+
+            auto drawShortcutSection = [&](const char *title, const std::initializer_list<ShortcutRow> &rows)
+            {
+                ImGui::SeparatorText(title);
+                if (ImGui::BeginTable(title, 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
+                {
+                    ImGui::TableSetupColumn("Keys", ImGuiTableColumnFlags_WidthFixed, 136.0f);
+                    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch);
+                    for (const ShortcutRow &row : rows)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        if (ImGuiLayer::GetMonospaceFont() != nullptr)
+                        {
+                            ImGui::PushFont(ImGuiLayer::GetMonospaceFont());
+                        }
+                        ImGui::TextDisabled("%s", row.keys);
+                        if (ImGuiLayer::GetMonospaceFont() != nullptr)
+                        {
+                            ImGui::PopFont();
+                        }
+                        ImGui::TableNextColumn();
+                        ImGui::TextWrapped("%s", row.action);
+                    }
+                    ImGui::EndTable();
+                }
+            };
+
+            const std::string renderShortcut = keyDisplayName(m_HotkeyOpenRender);
+            const std::string panelsShortcut = keyDisplayName(m_HotkeyToggleSidePanels);
+            const std::string boxShortcut = keyDisplayName(m_HotkeyBoxSelect);
+            const std::string circleShortcut = keyDisplayName(m_HotkeyCircleSelect);
+            const std::string hideShortcut = keyDisplayName(m_HotkeyHideSelection) + " / Alt+" + keyDisplayName(m_HotkeyHideSelection);
+            const std::string translateModalShortcut = keyDisplayName(m_HotkeyTranslateModal);
+            const std::string translateGizmoShortcut = keyDisplayName(m_HotkeyTranslateGizmo);
+            const std::string rotateGizmoShortcut = keyDisplayName(m_HotkeyRotateGizmo);
+            const std::string scaleGizmoShortcut = keyDisplayName(m_HotkeyScaleGizmo);
+            const std::string addMenuShortcut = "Shift+" + keyDisplayName(m_HotkeyAddMenu);
+            const std::string deleteShortcut = keyDisplayName(m_HotkeyDeleteSelection);
+
+            drawShortcutSection("File & Layout", {
+                                                  {"Ctrl+O", "Open POSCAR / CONTCAR"},
+                                                  {"Ctrl+S", "Export POSCAR / CONTCAR"},
+                                                  {renderShortcut.c_str(), "Open Render Image and Render Preview"},
+                                                  {panelsShortcut.c_str(), "Toggle side panels"},
+                                                  {"Ctrl+Z", "Undo last core scene edit"},
+                                                  {"Ctrl+Y", "Redo last core scene edit"},
+                                                  {"Ctrl+Shift+Z", "Redo last core scene edit"}});
+
+            drawShortcutSection("Selection & View", {
+                                                       {"LMB", "Select atom, bond or helper"},
+                                                       {"Ctrl+LMB", "Add or remove from selection"},
+                                                       {boxShortcut.c_str(), "Arm box selection"},
+                                                       {circleShortcut.c_str(), "Arm circle selection"},
+                                                       {"Tab", "Hold radial mode pie menu"},
+                                                       {"T / B / L / R / P / K", "Snap camera in ViewSet mode"},
+                                                       {hideShortcut.c_str(), "Hide selection / unhide all"}});
+
+            drawShortcutSection("Transform", {
+                                                 {translateModalShortcut.c_str(), "Modal translate"},
+                                                 {translateGizmoShortcut.c_str(), "Translate gizmo"},
+                                                 {rotateGizmoShortcut.c_str(), "Rotate gizmo"},
+                                                 {scaleGizmoShortcut.c_str(), "Scale gizmo"},
+                                                 {"X / Y / Z", "Constrain active modal transform"},
+                                                 {"Enter / LMB", "Apply modal transform"},
+                                                 {"Esc / RMB", "Cancel modal transform"}});
+
+            drawShortcutSection("Scene Tools", {
+                                                  {addMenuShortcut.c_str(), "Open Add Scene Object popup"},
+                                                  {deleteShortcut.c_str(), "Delete current selection"},
+                                                  {"F2", "Rename active collection in Scene Outliner"},
+                                                  {"Mouse Wheel", "Zoom viewport / adjust circle radius while C-select"},
+                                                  {"MMB / Shift+MMB", "Orbit / pan viewport"},
+                                                  {"Alt+LMB / Alt+Shift+LMB", "Touchpad orbit / pan mode"}});
+
+            ImGui::End();
+        }
+
+        if (m_ShowStatsPanel)
+        {
+            ImGui::SetNextWindowSize(ImVec2(360.0f, 260.0f), ImGuiCond_FirstUseEver);
+            ImGui::Begin("Stats", &m_ShowStatsPanel);
+
+            const float frameTimeMs = (io.Framerate > 0.0f) ? (1000.0f / io.Framerate) : 0.0f;
+            const std::uint32_t renderWidth = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.x * m_ViewportRenderScale));
+            const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.y * m_ViewportRenderScale));
+            std::size_t visibleAtomCount = 0;
+            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+            {
+                if (!IsAtomHidden(atomIndex) && IsAtomCollectionVisible(atomIndex))
+                {
+                    ++visibleAtomCount;
+                }
+            }
+
+            std::size_t visibleBondCount = 0;
+            for (const BondSegment &bond : m_GeneratedBonds)
+            {
+                const std::uint64_t bondKey = MakeBondPairKey(bond.atomA, bond.atomB);
+                if (m_DeletedBondKeys.find(bondKey) == m_DeletedBondKeys.end() &&
+                    m_HiddenBondKeys.find(bondKey) == m_HiddenBondKeys.end() &&
+                    !IsAtomHidden(bond.atomA) &&
+                    !IsAtomHidden(bond.atomB) &&
+                    IsAtomCollectionVisible(bond.atomA) &&
+                    IsAtomCollectionVisible(bond.atomB))
+                {
+                    ++visibleBondCount;
+                }
+            }
+
+            ImGui::Text("Frame: %.2f ms", frameTimeMs);
+            ImGui::Text("FPS: %.1f", io.Framerate);
+            ImGui::Text("Viewport: %.0f x %.0f", m_ViewportSize.x, m_ViewportSize.y);
+            ImGui::Text("Render target: %u x %u (%.0f%%)", renderWidth, renderHeight, m_ViewportRenderScale * 100.0f);
+            ImGui::Text("Atoms: %zu visible / %zu total", visibleAtomCount, m_WorkingStructure.atoms.size());
+            ImGui::Text("Bonds: %zu visible / %zu generated", visibleBondCount, m_GeneratedBonds.size());
+            ImGui::Text("Selection: %zu atoms | %zu bonds", m_SelectedAtomIndices.size(), m_SelectedBondKeys.size());
+            ImGui::Text("Undo / Redo: %zu / %zu", m_UndoStack.size(), m_RedoStack.size());
+            ImGui::Separator();
+#ifdef TRACY_ENABLE
+            ImGui::TextUnformatted("Profiler: Tracy CPU/GPU instrumentation enabled");
+#else
+            ImGui::TextUnformatted("Profiler: Tracy disabled in this build");
+#endif
+            ImGui::TextDisabled("Use render scale and input defaults in Settings to tune weaker GPUs.");
             ImGui::End();
         }
 
@@ -5560,6 +6004,14 @@ namespace ds
         {
             ImGui::Begin("Log / Errors", &m_ShowLogPanel);
 
+            const auto entries = Logger::Get().GetEntriesSnapshot();
+            std::size_t levelCounts[5] = {};
+            for (const auto &entry : entries)
+            {
+                const int levelIndex = std::clamp(static_cast<int>(entry.level), 0, 4);
+                ++levelCounts[levelIndex];
+            }
+
             const char *filterItems[] = {
                 "All",
                 "Trace only",
@@ -5568,9 +6020,160 @@ namespace ds
                 "Errors + Fatal",
                 "Fatal only"};
 
-            if (ImGui::Combo("Filter", &m_LogFilter, filterItems, IM_ARRAYSIZE(filterItems)))
+            struct LogVisual
             {
-                settingsChanged = true;
+                const char *label;
+                ImVec4 color;
+            };
+
+            auto getLogVisual = [](LogLevel level) -> LogVisual
+            {
+                switch (level)
+                {
+                case LogLevel::Info:
+                    return {"INFO", ImVec4(0.42f, 0.78f, 0.98f, 1.0f)};
+                case LogLevel::Warn:
+                    return {"WARN", ImVec4(0.96f, 0.76f, 0.35f, 1.0f)};
+                case LogLevel::Error:
+                    return {"ERROR", ImVec4(0.95f, 0.35f, 0.35f, 1.0f)};
+                case LogLevel::Fatal:
+                    return {"FATAL", ImVec4(1.0f, 0.08f, 0.08f, 1.0f)};
+                case LogLevel::Trace:
+                default:
+                    return {"TRACE", ImVec4(0.60f, 0.60f, 0.60f, 1.0f)};
+                }
+            };
+
+            auto drawLogLevelIcon = [&](LogLevel level, const ImVec2 &screenPos, float size)
+            {
+                ImDrawList *drawList = ImGui::GetWindowDrawList();
+                const LogVisual visual = getLogVisual(level);
+                const ImU32 color = ImGui::ColorConvertFloat4ToU32(visual.color);
+                const ImVec2 center(screenPos.x + size * 0.5f, screenPos.y + size * 0.5f);
+                const float radius = size * 0.34f;
+
+                switch (level)
+                {
+                case LogLevel::Info:
+                    drawList->AddCircleFilled(center, radius, color, 18);
+                    drawList->AddCircleFilled(center, size * 0.10f, IM_COL32(255, 255, 255, 255), 12);
+                    break;
+                case LogLevel::Warn:
+                    drawList->PathClear();
+                    drawList->PathLineTo(ImVec2(center.x, screenPos.y + size * 0.12f));
+                    drawList->PathLineTo(ImVec2(screenPos.x + size * 0.18f, screenPos.y + size * 0.82f));
+                    drawList->PathLineTo(ImVec2(screenPos.x + size * 0.82f, screenPos.y + size * 0.82f));
+                    drawList->PathFillConvex(color);
+                    break;
+                case LogLevel::Error:
+                    drawList->AddRectFilled(ImVec2(screenPos.x + size * 0.18f, screenPos.y + size * 0.18f),
+                                            ImVec2(screenPos.x + size * 0.82f, screenPos.y + size * 0.82f),
+                                            color, 2.0f);
+                    break;
+                case LogLevel::Fatal:
+                    drawList->AddNgonFilled(center, radius, color, 8);
+                    break;
+                case LogLevel::Trace:
+                default:
+                    drawList->AddCircle(center, radius, color, 18, 1.6f);
+                    break;
+                }
+            };
+
+            auto passesLogFilter = [&](LogLevel level) -> bool
+            {
+                if (m_LogFilter == 1)
+                {
+                    return level == LogLevel::Trace;
+                }
+                if (m_LogFilter == 2)
+                {
+                    return level != LogLevel::Trace;
+                }
+                if (m_LogFilter == 3)
+                {
+                    return level != LogLevel::Trace && level != LogLevel::Info;
+                }
+                if (m_LogFilter == 4)
+                {
+                    return level == LogLevel::Error || level == LogLevel::Fatal;
+                }
+                if (m_LogFilter == 5)
+                {
+                    return level == LogLevel::Fatal;
+                }
+                return true;
+            };
+
+            auto drawFilterButton = [&](const char *label,
+                                        int filterValue,
+                                        const ImVec4 &accentColor,
+                                        std::optional<LogLevel> iconLevel = std::nullopt)
+            {
+                const bool isSelected = (m_LogFilter == filterValue);
+                if (isSelected)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Button, accentColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.95f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(accentColor.x, accentColor.y, accentColor.z, 0.85f));
+                }
+
+                std::string buttonLabel = label;
+                if (iconLevel.has_value())
+                {
+                    buttonLabel = "   " + buttonLabel;
+                }
+
+                if (ImGui::Button(buttonLabel.c_str()))
+                {
+                    m_LogFilter = filterValue;
+                    settingsChanged = true;
+                }
+
+                if (iconLevel.has_value())
+                {
+                    const ImVec2 rectMin = ImGui::GetItemRectMin();
+                    const ImVec2 rectSize = ImGui::GetItemRectSize();
+                    const float iconSize = std::min(13.0f, rectSize.y - 6.0f);
+                    drawLogLevelIcon(*iconLevel,
+                                     ImVec2(rectMin.x + 6.0f, rectMin.y + (rectSize.y - iconSize) * 0.5f),
+                                     iconSize);
+                }
+
+                if (isSelected)
+                {
+                    ImGui::PopStyleColor(3);
+                }
+            };
+
+            if (ImGui::BeginTable("LogSummary", 3, ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Entries: %zu", entries.size());
+                ImGui::TableNextColumn();
+                ImGui::Text("Warnings: %zu", levelCounts[static_cast<int>(LogLevel::Warn)]);
+                ImGui::TableNextColumn();
+                ImGui::Text("Errors/Fatal: %zu", levelCounts[static_cast<int>(LogLevel::Error)] + levelCounts[static_cast<int>(LogLevel::Fatal)]);
+                ImGui::EndTable();
+            }
+
+            if (ImGui::BeginCombo("Filter", filterItems[m_LogFilter]))
+            {
+                for (int filterIndex = 0; filterIndex < static_cast<int>(IM_ARRAYSIZE(filterItems)); ++filterIndex)
+                {
+                    const bool selected = (m_LogFilter == filterIndex);
+                    if (ImGui::Selectable(filterItems[filterIndex], selected))
+                    {
+                        m_LogFilter = filterIndex;
+                        settingsChanged = true;
+                    }
+                    if (selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
             }
 
             if (ImGui::Checkbox("Auto-scroll", &m_LogAutoScroll))
@@ -5584,67 +6187,99 @@ namespace ds
                 Logger::Get().Clear();
             }
 
+            ImGui::SeparatorText("Quick Filters");
+            drawFilterButton("All", 0, ImVec4(0.35f, 0.35f, 0.35f, 0.75f));
+            ImGui::SameLine();
+            drawFilterButton("Trace", 1, getLogVisual(LogLevel::Trace).color, LogLevel::Trace);
+            ImGui::SameLine();
+            drawFilterButton("Info+", 2, getLogVisual(LogLevel::Info).color, LogLevel::Info);
+            ImGui::SameLine();
+            drawFilterButton("Warn+", 3, getLogVisual(LogLevel::Warn).color, LogLevel::Warn);
+            ImGui::SameLine();
+            drawFilterButton("Error+", 4, getLogVisual(LogLevel::Error).color, LogLevel::Error);
+            ImGui::SameLine();
+            drawFilterButton("Fatal", 5, getLogVisual(LogLevel::Fatal).color, LogLevel::Fatal);
+
             ImGui::Separator();
 
             ImGui::BeginChild("LogEntries", ImVec2(0.0f, 0.0f), true);
-            const auto entries = Logger::Get().GetEntriesSnapshot();
-            for (const auto &entry : entries)
+            const bool shouldStickToBottom = m_LogAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f;
+            const ImGuiTableFlags tableFlags =
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_BordersInnerV |
+                ImGuiTableFlags_SizingStretchProp |
+                ImGuiTableFlags_Resizable |
+                ImGuiTableFlags_ScrollY;
+
+            ImFont *monoFont = ImGuiLayer::GetMonospaceFont();
+            if (monoFont != nullptr)
             {
-                if (m_LogFilter == 1 && entry.level != LogLevel::Trace)
-                {
-                    continue;
-                }
-                if (m_LogFilter == 2 && entry.level == LogLevel::Trace)
-                {
-                    continue;
-                }
-                if (m_LogFilter == 3 && (entry.level == LogLevel::Trace || entry.level == LogLevel::Info))
-                {
-                    continue;
-                }
-                if (m_LogFilter == 4 && !(entry.level == LogLevel::Error || entry.level == LogLevel::Fatal))
-                {
-                    continue;
-                }
-                if (m_LogFilter == 5 && entry.level != LogLevel::Fatal)
-                {
-                    continue;
-                }
-
-                ImVec4 color = ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
-                const char *levelText = "TRACE";
-
-                if (entry.level == LogLevel::Info)
-                {
-                    color = ImVec4(0.42f, 0.78f, 0.98f, 1.0f);
-                    levelText = "INFO";
-                }
-                else if (entry.level == LogLevel::Warn)
-                {
-                    color = ImVec4(0.96f, 0.76f, 0.35f, 1.0f);
-                    levelText = "WARN";
-                }
-                else if (entry.level == LogLevel::Error)
-                {
-                    color = ImVec4(0.95f, 0.35f, 0.35f, 1.0f);
-                    levelText = "ERROR";
-                }
-                else if (entry.level == LogLevel::Fatal)
-                {
-                    color = ImVec4(1.0f, 0.08f, 0.08f, 1.0f);
-                    levelText = "FATAL";
-                }
-
-                ImGui::PushStyleColor(ImGuiCol_Text, color);
-                ImGui::TextUnformatted(levelText);
-                ImGui::PopStyleColor();
-                ImGui::SameLine();
-                ImGui::Text("[%s] %s", entry.timestamp.c_str(), entry.message.c_str());
+                ImGui::PushFont(monoFont);
             }
 
-            if (m_LogAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f)
+            if (ImGui::BeginTable("LogEntriesTable", 4, tableFlags, ImVec2(0.0f, 0.0f)))
             {
-                ImGui::SetScrollHereY(1.0f);
+                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+                ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+                ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 220.0f);
+                ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                for (const auto &entry : entries)
+                {
+                    if (!passesLogFilter(entry.level))
+                    {
+                        continue;
+                    }
+
+                    const LogVisual visual = getLogVisual(entry.level);
+                    ImGui::TableNextRow();
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                           ImGui::ColorConvertFloat4ToU32(ImVec4(visual.color.x, visual.color.y, visual.color.z, 0.08f)));
+
+                    ImGui::TableNextColumn();
+                    {
+                        const ImVec2 iconPos = ImGui::GetCursorScreenPos();
+                        drawLogLevelIcon(entry.level, iconPos, 12.0f);
+                        ImGui::Dummy(ImVec2(14.0f, 12.0f));
+                        ImGui::SameLine(0.0f, 6.0f);
+                        ImGui::PushStyleColor(ImGuiCol_Text, visual.color);
+                        ImGui::TextUnformatted(visual.label);
+                        ImGui::PopStyleColor();
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(entry.timestamp.c_str());
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s:%u", entry.file.c_str(), static_cast<unsigned int>(entry.line));
+                    if (!entry.function.empty())
+                    {
+                        ImGui::TextDisabled("%s", entry.function.c_str());
+                    }
+                    if (ImGui::IsItemHovered() && !entry.function.empty())
+                    {
+                        ImGui::SetTooltip("%s\n%s:%u",
+                                          entry.function.c_str(),
+                                          entry.file.c_str(),
+                                          static_cast<unsigned int>(entry.line));
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::TextWrapped("%s", entry.message.c_str());
+                }
+
+                if (shouldStickToBottom)
+                {
+                    ImGui::SetScrollHereY(1.0f);
+                }
+
+                ImGui::EndTable();
+            }
+
+            if (monoFont != nullptr)
+            {
+                ImGui::PopFont();
             }
 
             ImGui::EndChild();
@@ -5662,6 +6297,7 @@ namespace ds
         DrawChangeAtomTypeConfirmDialog();
         DrawRenderImageDialog(settingsChanged);
         DrawRenderPreviewWindow(settingsChanged);
+        DrawElementAppearanceWindow(settingsChanged);
 
         if (m_ShowAddAtomDialog)
         {
@@ -5675,9 +6311,7 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Periodic table"))
                 {
-                    m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                    m_PeriodicTableOpenedFromContextMenu = false;
-                    m_PeriodicTableOpen = true;
+                    OpenPeriodicTable(PeriodicTableTarget::AddAtomEntry);
                 }
 
                 DrawColoredVec3Control("Position", m_AddAtomPosition, 0.01f, -1000.0f, 1000.0f, "%.5f");
@@ -5740,6 +6374,292 @@ namespace ds
         {
             SaveSettings();
         }
+    }
+
+    void EditorLayer::DrawElementAppearanceWindow(bool &settingsChanged)
+    {
+        if (!m_ShowElementCatalogPanel)
+        {
+            return;
+        }
+
+        EnsureElementAppearanceSelection();
+
+        std::unordered_set<std::string> symbolSet;
+        auto addSymbol = [&](const std::string &rawSymbol)
+        {
+            const std::string normalized = NormalizeElementSymbol(rawSymbol);
+            if (!normalized.empty())
+            {
+                symbolSet.insert(normalized);
+            }
+        };
+
+        for (const auto &[element, color] : m_AtomDefaults.elementColors)
+        {
+            (void)color;
+            addSymbol(element);
+        }
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            (void)scale;
+            addSymbol(element);
+        }
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            addSymbol(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            addSymbol(element);
+        }
+        addSymbol(m_ElementCatalogSelectedSymbol);
+        if (m_HasStructureLoaded)
+        {
+            for (const std::string &element : m_WorkingStructure.species)
+            {
+                addSymbol(element);
+            }
+            for (const Atom &atom : m_WorkingStructure.atoms)
+            {
+                addSymbol(atom.element);
+            }
+        }
+
+        std::vector<std::string> symbols(symbolSet.begin(), symbolSet.end());
+        std::sort(symbols.begin(), symbols.end());
+        if (symbols.empty())
+        {
+            symbols.push_back("C");
+        }
+
+        if (std::find(symbols.begin(), symbols.end(), m_ElementCatalogSelectedSymbol) == symbols.end())
+        {
+            m_ElementCatalogSelectedSymbol = symbols.front();
+        }
+
+        std::string selectedAtomElement;
+        if (m_HasStructureLoaded && !m_SelectedAtomIndices.empty())
+        {
+            const std::size_t atomIndex = m_SelectedAtomIndices.back();
+            if (atomIndex < m_WorkingStructure.atoms.size())
+            {
+                selectedAtomElement = NormalizeElementSymbol(m_WorkingStructure.atoms[atomIndex].element);
+            }
+        }
+
+        if (m_ElementCatalogFollowViewportSelection && !selectedAtomElement.empty())
+        {
+            m_ElementCatalogSelectedSymbol = selectedAtomElement;
+        }
+
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 640.0f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Element Catalog", &m_ShowElementCatalogPanel))
+        {
+            ImGui::End();
+            return;
+        }
+
+        ImGui::TextWrapped("Global element defaults come from atom_settings.yaml. Project-specific color and size overrides are stored with the current scene state.");
+
+        ImGui::SeparatorText("Selection source");
+        if (ImGui::RadioButton("Periodic table", !m_ElementCatalogFollowViewportSelection))
+        {
+            m_ElementCatalogFollowViewportSelection = false;
+            settingsChanged = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Viewport selection", m_ElementCatalogFollowViewportSelection))
+        {
+            m_ElementCatalogFollowViewportSelection = true;
+            if (!selectedAtomElement.empty())
+            {
+                m_ElementCatalogSelectedSymbol = selectedAtomElement;
+            }
+            if (!m_ShowPeriodicTablePanel)
+            {
+                m_PeriodicTableOpen = false;
+            }
+            settingsChanged = true;
+        }
+
+        if (m_ElementCatalogFollowViewportSelection)
+        {
+            if (!selectedAtomElement.empty())
+            {
+                ImGui::TextDisabled("Following selected viewport atom: %s", selectedAtomElement.c_str());
+            }
+            else
+            {
+                ImGui::TextDisabled("Select an atom in the viewport to drive the catalog selection.");
+            }
+        }
+
+        if (m_ElementCatalogFollowViewportSelection)
+        {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::BeginCombo("Element", m_ElementCatalogSelectedSymbol.c_str()))
+        {
+            for (const std::string &symbol : symbols)
+            {
+                const bool isSelected = (symbol == m_ElementCatalogSelectedSymbol);
+                if (ImGui::Selectable(symbol.c_str(), isSelected))
+                {
+                    m_ElementCatalogSelectedSymbol = symbol;
+                }
+                if (isSelected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (m_ElementCatalogFollowViewportSelection)
+        {
+            ImGui::EndDisabled();
+        }
+
+        if (!m_ElementCatalogFollowViewportSelection && !selectedAtomElement.empty())
+        {
+            if (ImGui::Button("Use selected atom element"))
+            {
+                m_ElementCatalogSelectedSymbol = selectedAtomElement;
+            }
+        }
+
+        if (!m_ElementCatalogFollowViewportSelection)
+        {
+            ImGui::SeparatorText("Periodic table");
+            ImGui::BeginChild("ElementCatalogPeriodicTable", ImVec2(0.0f, 320.0f), true);
+            DrawPeriodicTableSelector("ElementCatalogInline", PeriodicTableTarget::ElementAppearanceEditor, false);
+            ImGui::EndChild();
+        }
+
+        const std::string element = m_ElementCatalogSelectedSymbol;
+        const glm::vec3 proceduralColor = glm::clamp(ColorFromElement(element), glm::vec3(0.0f), glm::vec3(1.0f));
+        glm::vec3 catalogColor = proceduralColor;
+        if (const auto it = m_AtomDefaults.elementColors.find(element); it != m_AtomDefaults.elementColors.end())
+        {
+            catalogColor = glm::clamp(it->second, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        float catalogScale = 1.0f;
+        if (const auto it = m_AtomDefaults.elementScales.find(element); it != m_AtomDefaults.elementScales.end())
+        {
+            catalogScale = std::clamp(it->second, 0.1f, 4.0f);
+        }
+
+        glm::vec3 resolvedColor = ResolveElementColor(element);
+        float resolvedScale = ResolveElementVisualScale(element);
+        int usageCount = 0;
+        if (m_HasStructureLoaded)
+        {
+            for (const Atom &atom : m_WorkingStructure.atoms)
+            {
+                if (NormalizeElementSymbol(atom.element) == element)
+                {
+                    ++usageCount;
+                }
+            }
+        }
+
+        ImGui::SeparatorText("Resolved appearance");
+        ImGui::ColorButton(
+            "##ResolvedElementColor",
+            ImVec4(resolvedColor.x, resolvedColor.y, resolvedColor.z, 1.0f),
+            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+            ImVec2(28.0f, 28.0f));
+        ImGui::SameLine();
+        ImGui::Text("%s", element.c_str());
+        ImGui::TextDisabled("Effective size multiplier: %.2fx", resolvedScale);
+        if (usageCount > 0)
+        {
+            ImGui::TextDisabled("Atoms in current structure: %d", usageCount);
+        }
+        else
+        {
+            ImGui::TextDisabled("This element is not used in the currently loaded structure.");
+        }
+
+        ImGui::SeparatorText("Catalog defaults (global app)");
+        if (ImGui::ColorEdit3("Default color", &catalogColor.x,
+                              ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+        {
+            m_AtomDefaults.elementColors[element] = glm::clamp(catalogColor, glm::vec3(0.0f), glm::vec3(1.0f));
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("Default size", &catalogScale, 0.1f, 4.0f, "%.2fx"))
+        {
+            m_AtomDefaults.elementScales[element] = std::clamp(catalogScale, 0.1f, 4.0f);
+            settingsChanged = true;
+        }
+        if (ImGui::Button("Reset catalog defaults for element"))
+        {
+            m_AtomDefaults.elementColors.erase(element);
+            m_AtomDefaults.elementScales.erase(element);
+            settingsChanged = true;
+        }
+        ImGui::TextDisabled("Fallback after reset: procedural palette + 1.00x size.");
+
+        ImGui::SeparatorText("Project overrides");
+        bool hasProjectColorOverride = (m_ElementColorOverrides.find(element) != m_ElementColorOverrides.end());
+        if (ImGui::Checkbox("Override color in current project", &hasProjectColorOverride))
+        {
+            if (hasProjectColorOverride)
+            {
+                m_ElementColorOverrides[element] = resolvedColor;
+            }
+            else
+            {
+                m_ElementColorOverrides.erase(element);
+            }
+            settingsChanged = true;
+        }
+        if (hasProjectColorOverride)
+        {
+            glm::vec3 projectColor = m_ElementColorOverrides[element];
+            if (ImGui::ColorEdit3("Project color", &projectColor.x,
+                                  ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+            {
+                m_ElementColorOverrides[element] = glm::clamp(projectColor, glm::vec3(0.0f), glm::vec3(1.0f));
+                settingsChanged = true;
+            }
+        }
+
+        bool hasProjectScaleOverride = (m_ElementScaleOverrides.find(element) != m_ElementScaleOverrides.end());
+        if (ImGui::Checkbox("Override size in current project", &hasProjectScaleOverride))
+        {
+            if (hasProjectScaleOverride)
+            {
+                m_ElementScaleOverrides[element] = resolvedScale;
+            }
+            else
+            {
+                m_ElementScaleOverrides.erase(element);
+            }
+            settingsChanged = true;
+        }
+        if (hasProjectScaleOverride)
+        {
+            float projectScale = m_ElementScaleOverrides[element];
+            if (ImGui::SliderFloat("Project size", &projectScale, 0.1f, 4.0f, "%.2fx"))
+            {
+                m_ElementScaleOverrides[element] = std::clamp(projectScale, 0.1f, 4.0f);
+                settingsChanged = true;
+            }
+        }
+
+        if (ImGui::Button("Clear project overrides"))
+        {
+            m_ElementColorOverrides.erase(element);
+            m_ElementScaleOverrides.erase(element);
+            settingsChanged = true;
+        }
+
+        ImGui::End();
     }
 
 

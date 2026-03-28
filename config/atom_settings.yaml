@@ -1,0 +1,1457 @@
+version: 1
+defaults:
+  overrideColor:
+    r: 0.9
+    g: 0.65
+    b: 0.35
+  atomScale: 0.3
+  fallbackVisual:
+    color:
+      r: 0.9
+      g: 0.65
+      b: 0.35
+    scale: 1
+elements:
+  Ac:
+    identity:
+      symbol: Ac
+    visualDefaults:
+      defaultColor:
+        r: 0.595098
+        g: 0.51666665
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ag:
+    identity:
+      symbol: Ag
+    visualDefaults:
+      defaultColor:
+        r: 0.44607842
+        g: 0.50490195
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Al:
+    identity:
+      symbol: Al
+    visualDefaults:
+      defaultColor:
+        r: 0.7892157
+        g: 0.46960783
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Am:
+    identity:
+      symbol: Am
+    visualDefaults:
+      defaultColor:
+        r: 0.5754902
+        g: 0.4735294
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ar:
+    identity:
+      symbol: Ar
+    visualDefaults:
+      defaultColor:
+        r: 0.40098038
+        g: 0.5637255
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  As:
+    identity:
+      symbol: As
+    visualDefaults:
+      defaultColor:
+        r: 0.68921566
+        g: 0.5656863
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  At:
+    identity:
+      symbol: At
+    visualDefaults:
+      defaultColor:
+        r: 0.67941177
+        g: 0.5441176
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Au:
+    identity:
+      symbol: Au
+    visualDefaults:
+      defaultColor:
+        r: 0.46568626
+        g: 0.5480392
+        b: 0.767647
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  B:
+    identity:
+      symbol: B
+    visualDefaults:
+      defaultColor:
+        r: 0.13333334
+        g: 1
+        b: 0
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ba:
+    identity:
+      symbol: Ba
+    visualDefaults:
+      defaultColor:
+        r: 0.8127451
+        g: 0.6147059
+        b: 0.7833333
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Be:
+    identity:
+      symbol: Be
+    visualDefaults:
+      defaultColor:
+        r: 0.6637255
+        g: 0.60294116
+        b: 0.7833333
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Bh:
+    identity:
+      symbol: Bh
+    visualDefaults:
+      defaultColor:
+        r: 0.39509803
+        g: 0.64411765
+        b: 0.7833333
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Bi:
+    identity:
+      symbol: Bi
+    visualDefaults:
+      defaultColor:
+        r: 0.60882354
+        g: 0.6401961
+        b: 0.7833333
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Bk:
+    identity:
+      symbol: Bk
+    visualDefaults:
+      defaultColor:
+        r: 0.68333334
+        g: 0.64607847
+        b: 0.7833333
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Br:
+    identity:
+      symbol: Br
+    visualDefaults:
+      defaultColor:
+        r: 0.767647
+        g: 0.6735294
+        b: 0.7833333
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  C:
+    identity:
+      symbol: C
+    visualDefaults:
+      defaultColor:
+        r: 0
+        g: 0
+        b: 0
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ca:
+    identity:
+      symbol: Ca
+    visualDefaults:
+      defaultColor:
+        r: 0.55588233
+        g: 0.79313725
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Cd:
+    identity:
+      symbol: Cd
+    visualDefaults:
+      defaultColor:
+        r: 0.41666666
+        g: 0.8029412
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ce:
+    identity:
+      symbol: Ce
+    visualDefaults:
+      defaultColor:
+        r: 0.70490193
+        g: 0.80490196
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Cf:
+    identity:
+      symbol: Cf
+    visualDefaults:
+      defaultColor:
+        r: 0.84411764
+        g: 0.79509807
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Cl:
+    identity:
+      symbol: Cl
+    visualDefaults:
+      defaultColor:
+        r: 0.7147059
+        g: 0.8264706
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Cm:
+    identity:
+      symbol: Cm
+    visualDefaults:
+      defaultColor:
+        r: 0.5009804
+        g: 0.8303921
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Co:
+    identity:
+      symbol: Co
+    visualDefaults:
+      defaultColor:
+        r: 0.42647058
+        g: 0.8245098
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Cr:
+    identity:
+      symbol: Cr
+    visualDefaults:
+      defaultColor:
+        r: 0.6009804
+        g: 0.7343137
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Cs:
+    identity:
+      symbol: Cs
+    visualDefaults:
+      defaultColor:
+        r: 0.3872549
+        g: 0.7382353
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Cu:
+    identity:
+      symbol: Cu
+    visualDefaults:
+      defaultColor:
+        r: 0.6107843
+        g: 0.7558824
+        b: 0.77549016
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Db:
+    identity:
+      symbol: Db
+    visualDefaults:
+      defaultColor:
+        r: 0.79509807
+        g: 0.677451
+        b: 0.75392157
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ds:
+    identity:
+      symbol: Ds
+    visualDefaults:
+      defaultColor:
+        r: 0.4127451
+        g: 0.62647057
+        b: 0.75392157
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Dy:
+    identity:
+      symbol: Dy
+    visualDefaults:
+      defaultColor:
+        r: 0.7852941
+        g: 0.65588236
+        b: 0.75392157
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Er:
+    identity:
+      symbol: Er
+    visualDefaults:
+      defaultColor:
+        r: 0.83235294
+        g: 0.49901962
+        b: 0.75
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Es:
+    identity:
+      symbol: Es
+    visualDefaults:
+      defaultColor:
+        r: 0.6186274
+        g: 0.5029412
+        b: 0.75
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Eu:
+    identity:
+      symbol: Eu
+    visualDefaults:
+      defaultColor:
+        r: 0.6931373
+        g: 0.5088235
+        b: 0.75
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  F:
+    identity:
+      symbol: F
+    visualDefaults:
+      defaultColor:
+        r: 0.4617647
+        g: 0.8303921
+        b: 0.37156862
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Fe:
+    identity:
+      symbol: Fe
+    visualDefaults:
+      defaultColor:
+        r: 0.7656863
+        g: 0.4735294
+        b: 0.7637255
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Fm:
+    identity:
+      symbol: Fm
+    visualDefaults:
+      defaultColor:
+        r: 0.46764705
+        g: 0.45
+        b: 0.7637255
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Fr:
+    identity:
+      symbol: Fr
+    visualDefaults:
+      defaultColor:
+        r: 0.38333333
+        g: 0.422549
+        b: 0.7637255
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ga:
+    identity:
+      symbol: Ga
+    visualDefaults:
+      defaultColor:
+        r: 0.4852941
+        g: 0.73039216
+        b: 0.75784314
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Gd:
+    identity:
+      symbol: Gd
+    visualDefaults:
+      defaultColor:
+        r: 0.55
+        g: 0.7147059
+        b: 0.75784314
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ge:
+    identity:
+      symbol: Ge
+    visualDefaults:
+      defaultColor:
+        r: 1
+        g: 0
+        b: 0
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  H:
+    identity:
+      symbol: H
+    visualDefaults:
+      defaultColor:
+        r: 0.83431375
+        g: 0.35784313
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  He:
+    identity:
+      symbol: He
+    visualDefaults:
+      defaultColor:
+        r: 0.76960784
+        g: 0.44607842
+        b: 0.81078434
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Hf:
+    identity:
+      symbol: Hf
+    visualDefaults:
+      defaultColor:
+        r: 0.48137254
+        g: 0.44411764
+        b: 0.81078434
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Hg:
+    identity:
+      symbol: Hg
+    visualDefaults:
+      defaultColor:
+        r: 0.69509804
+        g: 0.44019607
+        b: 0.81078434
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ho:
+    identity:
+      symbol: Ho
+    visualDefaults:
+      defaultColor:
+        r: 0.4911765
+        g: 0.46568626
+        b: 0.81078434
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Hs:
+    identity:
+      symbol: Hs
+    visualDefaults:
+      defaultColor:
+        r: 0.75
+        g: 0.40294117
+        b: 0.81078434
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  I:
+    identity:
+      symbol: I
+    visualDefaults:
+      defaultColor:
+        r: 0.54607844
+        g: 0.35588235
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  In:
+    identity:
+      symbol: In
+    visualDefaults:
+      defaultColor:
+        r: 0.722549
+        g: 0.74215686
+        b: 0.80490196
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ir:
+    identity:
+      symbol: Ir
+    visualDefaults:
+      defaultColor:
+        r: 0.66764706
+        g: 0.7794118
+        b: 0.80490196
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  K:
+    identity:
+      symbol: K
+    visualDefaults:
+      defaultColor:
+        r: 0.62058824
+        g: 0.3617647
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Kr:
+    identity:
+      symbol: Kr
+    visualDefaults:
+      defaultColor:
+        r: 0.5539216
+        g: 0.8362745
+        b: 0.81666666
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  La:
+    identity:
+      symbol: La
+    visualDefaults:
+      defaultColor:
+        r: 0.8480392
+        g: 0.39509803
+        b: 0.79313725
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Li:
+    identity:
+      symbol: Li
+    visualDefaults:
+      defaultColor:
+        r: 0.55
+        g: 0.37156862
+        b: 0.79313725
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Lr:
+    identity:
+      symbol: Lr
+    visualDefaults:
+      defaultColor:
+        r: 0.6539216
+        g: 0.44215685
+        b: 0.79313725
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Lu:
+    identity:
+      symbol: Lu
+    visualDefaults:
+      defaultColor:
+        r: 0.5892157
+        g: 0.45784312
+        b: 0.79313725
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Md:
+    identity:
+      symbol: Md
+    visualDefaults:
+      defaultColor:
+        r: 0.45196077
+        g: 0.36960784
+        b: 0.7892157
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Mg:
+    identity:
+      symbol: Mg
+    visualDefaults:
+      defaultColor:
+        r: 0.81470585
+        g: 0.37745097
+        b: 0.7892157
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Mn:
+    identity:
+      symbol: Mn
+    visualDefaults:
+      defaultColor:
+        r: 0.73039216
+        g: 0.35
+        b: 0.7892157
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Mo:
+    identity:
+      symbol: Mo
+    visualDefaults:
+      defaultColor:
+        r: 0.51666665
+        g: 0.35392156
+        b: 0.7892157
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Mt:
+    identity:
+      symbol: Mt
+    visualDefaults:
+      defaultColor:
+        r: 0.35784313
+        g: 0.822549
+        b: 0.7872549
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  N:
+    identity:
+      symbol: N
+    visualDefaults:
+      defaultColor:
+        r: 1
+        g: 1
+        b: 0
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Na:
+    identity:
+      symbol: Na
+    visualDefaults:
+      defaultColor:
+        r: 0.38137254
+        g: 0.67941177
+        b: 0.8009804
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Nb:
+    identity:
+      symbol: Nb
+    visualDefaults:
+      defaultColor:
+        r: 0.7441176
+        g: 0.6872549
+        b: 0.8009804
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Nd:
+    identity:
+      symbol: Nd
+    visualDefaults:
+      defaultColor:
+        r: 0.8186275
+        g: 0.6931373
+        b: 0.8009804
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ne:
+    identity:
+      symbol: Ne
+    visualDefaults:
+      defaultColor:
+        r: 0.53039217
+        g: 0.6911765
+        b: 0.8009804
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ni:
+    identity:
+      symbol: Ni
+    visualDefaults:
+      defaultColor:
+        r: 0.67941177
+        g: 0.7029412
+        b: 0.8009804
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  No:
+    identity:
+      symbol: No
+    visualDefaults:
+      defaultColor:
+        r: 0.40098038
+        g: 0.722549
+        b: 0.8009804
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Np:
+    identity:
+      symbol: Np
+    visualDefaults:
+      defaultColor:
+        r: 0.5754902
+        g: 0.63235295
+        b: 0.8009804
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  O:
+    identity:
+      symbol: O
+    visualDefaults:
+      defaultColor:
+        r: 0.4715686
+        g: 0.35
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Os:
+    identity:
+      symbol: Os
+    visualDefaults:
+      defaultColor:
+        r: 0.45784312
+        g: 0.5872549
+        b: 0.7970588
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  P:
+    identity:
+      symbol: P
+    visualDefaults:
+      defaultColor:
+        r: 0.6303922
+        g: 0.38333333
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Pa:
+    identity:
+      symbol: Pa
+    visualDefaults:
+      defaultColor:
+        r: 0.68333334
+        g: 0.4617647
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Pb:
+    identity:
+      symbol: Pb
+    visualDefaults:
+      defaultColor:
+        r: 0.39509803
+        g: 0.4598039
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Pd:
+    identity:
+      symbol: Pd
+    visualDefaults:
+      defaultColor:
+        r: 0.822549
+        g: 0.45196077
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Pm:
+    identity:
+      symbol: Pm
+    visualDefaults:
+      defaultColor:
+        r: 0.7382353
+        g: 0.4245098
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Po:
+    identity:
+      symbol: Po
+    visualDefaults:
+      defaultColor:
+        r: 0.6637255
+        g: 0.41862744
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Pr:
+    identity:
+      symbol: Pr
+    visualDefaults:
+      defaultColor:
+        r: 0.48921567
+        g: 0.5088235
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Pt:
+    identity:
+      symbol: Pt
+    visualDefaults:
+      defaultColor:
+        r: 0.41470587
+        g: 0.5029412
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Pu:
+    identity:
+      symbol: Pu
+    visualDefaults:
+      defaultColor:
+        r: 0.6284314
+        g: 0.49901962
+        b: 0.35
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ra:
+    identity:
+      symbol: Ra
+    visualDefaults:
+      defaultColor:
+        r: 0.71862745
+        g: 0.7441176
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Rb:
+    identity:
+      symbol: Rb
+    visualDefaults:
+      defaultColor:
+        r: 0.57941175
+        g: 0.75392157
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Re:
+    identity:
+      symbol: Re
+    visualDefaults:
+      defaultColor:
+        r: 0.56960785
+        g: 0.732353
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Rf:
+    identity:
+      symbol: Rf
+    visualDefaults:
+      defaultColor:
+        r: 0.43039215
+        g: 0.74215686
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Rg:
+    identity:
+      symbol: Rg
+    visualDefaults:
+      defaultColor:
+        r: 0.64411765
+        g: 0.7382353
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Rh:
+    identity:
+      symbol: Rh
+    visualDefaults:
+      defaultColor:
+        r: 0.8029412
+        g: 0.77156866
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Rn:
+    identity:
+      symbol: Rn
+    visualDefaults:
+      defaultColor:
+        r: 0.72843134
+        g: 0.7656863
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ru:
+    identity:
+      symbol: Ru
+    visualDefaults:
+      defaultColor:
+        r: 0.4754902
+        g: 0.68333334
+        b: 0.35784313
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  S:
+    identity:
+      symbol: S
+    visualDefaults:
+      defaultColor:
+        r: 0.41666666
+        g: 0.3872549
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Sb:
+    identity:
+      symbol: Sb
+    visualDefaults:
+      defaultColor:
+        r: 0.7264706
+        g: 0.5009804
+        b: 0.35392156
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Sc:
+    identity:
+      symbol: Sc
+    visualDefaults:
+      defaultColor:
+        r: 0.5127451
+        g: 0.50490195
+        b: 0.35392156
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Se:
+    identity:
+      symbol: Se
+    visualDefaults:
+      defaultColor:
+        r: 0.7362745
+        g: 0.52254903
+        b: 0.35392156
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Sg:
+    identity:
+      symbol: Sg
+    visualDefaults:
+      defaultColor:
+        r: 0.66176474
+        g: 0.51666665
+        b: 0.35392156
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Si:
+    identity:
+      symbol: Si
+    visualDefaults:
+      defaultColor:
+        r: 1
+        g: 0
+        b: 0
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Sm:
+    identity:
+      symbol: Sm
+    visualDefaults:
+      defaultColor:
+        r: 0.5323529
+        g: 0.5480392
+        b: 0.35392156
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Sn:
+    identity:
+      symbol: Sn
+    visualDefaults:
+      defaultColor:
+        r: 0.67156863
+        g: 0.5382353
+        b: 0.35392156
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Sr:
+    identity:
+      symbol: Sr
+    visualDefaults:
+      defaultColor:
+        r: 0.82058823
+        g: 0.55
+        b: 0.35392156
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ta:
+    identity:
+      symbol: Ta
+    visualDefaults:
+      defaultColor:
+        r: 0.6127451
+        g: 0.6127451
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Tb:
+    identity:
+      symbol: Tb
+    visualDefaults:
+      defaultColor:
+        r: 0.8264706
+        g: 0.60882354
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Tc:
+    identity:
+      symbol: Tc
+    visualDefaults:
+      defaultColor:
+        r: 0.5382353
+        g: 0.6068628
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Te:
+    identity:
+      symbol: Te
+    visualDefaults:
+      defaultColor:
+        r: 0.7617647
+        g: 0.6245098
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Th:
+    identity:
+      symbol: Th
+    visualDefaults:
+      defaultColor:
+        r: 0.6970588
+        g: 0.6401961
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Ti:
+    identity:
+      symbol: Ti
+    visualDefaults:
+      defaultColor:
+        r: 0.40882352
+        g: 0.63823533
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Tl:
+    identity:
+      symbol: Tl
+    visualDefaults:
+      defaultColor:
+        r: 0.8460784
+        g: 0.6519608
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Tm:
+    identity:
+      symbol: Tm
+    visualDefaults:
+      defaultColor:
+        r: 0.55784315
+        g: 0.65
+        b: 0.8303921
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  U:
+    identity:
+      symbol: U
+    visualDefaults:
+      defaultColor:
+        r: 0.69509804
+        g: 0.36764705
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  V:
+    identity:
+      symbol: V
+    visualDefaults:
+      defaultColor:
+        r: 0.55588233
+        g: 0.37745097
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  W:
+    identity:
+      symbol: W
+    visualDefaults:
+      defaultColor:
+        r: 0.76960784
+        g: 0.3735294
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Xe:
+    identity:
+      symbol: Xe
+    visualDefaults:
+      defaultColor:
+        r: 0.8009804
+        g: 0.66568625
+        b: 0.3872549
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Y:
+    identity:
+      symbol: Y
+    visualDefaults:
+      defaultColor:
+        r: 0.6401961
+        g: 0.40490195
+        b: 0.3735294
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Yb:
+    identity:
+      symbol: Yb
+    visualDefaults:
+      defaultColor:
+        r: 0.47941178
+        g: 0.64607847
+        b: 0.38333333
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Zn:
+    identity:
+      symbol: Zn
+    visualDefaults:
+      defaultColor:
+        r: 0.3990196
+        g: 0.43235293
+        b: 0.3970588
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}
+  Zr:
+    identity:
+      symbol: Zr
+    visualDefaults:
+      defaultColor:
+        r: 0.43823528
+        g: 0.51862746
+        b: 0.3970588
+      defaultScale: 1
+    chemistry:
+      {}
+    crystal:
+      {}

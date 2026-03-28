@@ -1,7 +1,116 @@
 #include "Layers/EditorLayerPrivate.h"
 
+#include <yaml-cpp/yaml.h>
+
 namespace ds
 {
+    namespace
+    {
+        template <typename T>
+        void TryLoadYamlScalar(const YAML::Node &node, const char *key, T &value)
+        {
+            if (!node || !node[key])
+            {
+                return;
+            }
+
+            try
+            {
+                value = node[key].as<T>();
+            }
+            catch (const YAML::Exception &)
+            {
+            }
+        }
+
+        void TryLoadYamlVec3(const YAML::Node &node, glm::vec3 &value)
+        {
+            if (!node)
+            {
+                return;
+            }
+
+            try
+            {
+                if (node.IsMap())
+                {
+                    if (node["r"] && node["g"] && node["b"])
+                    {
+                        value.r = node["r"].as<float>();
+                        value.g = node["g"].as<float>();
+                        value.b = node["b"].as<float>();
+                        return;
+                    }
+
+                    if (node["x"] && node["y"] && node["z"])
+                    {
+                        value.x = node["x"].as<float>();
+                        value.y = node["y"].as<float>();
+                        value.z = node["z"].as<float>();
+                        return;
+                    }
+                }
+                else if (node.IsSequence() && node.size() >= 3)
+                {
+                    value.x = node[0].as<float>();
+                    value.y = node[1].as<float>();
+                    value.z = node[2].as<float>();
+                }
+            }
+            catch (const YAML::Exception &)
+            {
+            }
+        }
+
+        void TryLoadYamlArray4(const YAML::Node &node, std::array<float, 4> &value)
+        {
+            if (!node || !node.IsSequence() || node.size() < 4)
+            {
+                return;
+            }
+
+            try
+            {
+                for (std::size_t index = 0; index < 4; ++index)
+                {
+                    value[index] = node[index].as<float>();
+                }
+            }
+            catch (const YAML::Exception &)
+            {
+            }
+        }
+
+        YAML::Node MakeColorNode(const glm::vec3 &value)
+        {
+            YAML::Node node;
+            node["r"] = value.r;
+            node["g"] = value.g;
+            node["b"] = value.b;
+            return node;
+        }
+
+        YAML::Node MakeVec3Node(const glm::vec3 &value)
+        {
+            YAML::Node node;
+            node["x"] = value.x;
+            node["y"] = value.y;
+            node["z"] = value.z;
+            return node;
+        }
+
+        YAML::Node MakeArray4Node(const std::array<float, 4> &value)
+        {
+            YAML::Node node(YAML::NodeType::Sequence);
+            for (float component : value)
+            {
+                node.push_back(component);
+            }
+            return node;
+        }
+
+    } // namespace
+
     bool EditorLayer::LoadStructureFromPath(const std::string &path)
     {
         Structure parsed;
@@ -32,6 +141,7 @@ namespace ds
         EnsureAtomCollectionAssignments();
         m_ActiveCollectionIndex = 0;
         m_AutoBondsDirty = true;
+        ClearSceneHistory();
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Imported structure from: " + path;
 
@@ -100,6 +210,7 @@ namespace ds
 
         SceneCollection collection;
         collection.id = GenerateSceneUUID();
+        PushUndoSnapshot("Append structure as collection");
         const std::string stem = std::filesystem::path(path).stem().string();
         collection.name = stem.empty() ? ("Collection " + std::to_string(m_CollectionCounter++)) : stem;
         m_Collections.push_back(collection);
@@ -198,6 +309,7 @@ namespace ds
         atom.element = symbol;
         atom.selectiveDynamics = false;
         atom.selectiveFlags = {true, true, true};
+        PushUndoSnapshot("Add atom");
 
         if (inputMode == m_WorkingStructure.coordinateMode)
         {
@@ -252,6 +364,28 @@ namespace ds
         }
 
         std::size_t changedCount = 0;
+        bool hasChange = false;
+        for (std::size_t atomIndex : m_SelectedAtomIndices)
+        {
+            if (atomIndex < m_WorkingStructure.atoms.size() && m_WorkingStructure.atoms[atomIndex].element != symbol)
+            {
+                hasChange = true;
+                break;
+            }
+        }
+
+        if (!hasChange)
+        {
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Change atom type: selection already uses " + symbol + ".";
+            if (outChangedCount)
+            {
+                *outChangedCount = 0;
+            }
+            return true;
+        }
+
+        PushUndoSnapshot("Change atom type");
         for (std::size_t atomIndex : m_SelectedAtomIndices)
         {
             if (atomIndex >= m_WorkingStructure.atoms.size())
@@ -267,17 +401,6 @@ namespace ds
 
             atom.element = symbol;
             ++changedCount;
-        }
-
-        if (changedCount == 0)
-        {
-            m_LastStructureOperationFailed = false;
-            m_LastStructureMessage = "Change atom type: selection already uses " + symbol + ".";
-            if (outChangedCount)
-            {
-                *outChangedCount = 0;
-            }
-            return true;
         }
 
         m_WorkingStructure.RebuildSpeciesFromAtoms();
@@ -506,6 +629,446 @@ namespace ds
             m_CameraZoomSensitivity * kBaseZoomSensitivity);
     }
 
+    void EditorLayer::ApplyAtomDefaultsToSceneSettings()
+    {
+        m_AtomDefaults.defaultOverrideColor = glm::clamp(m_AtomDefaults.defaultOverrideColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_AtomDefaults.defaultSize = std::clamp(m_AtomDefaults.defaultSize, 0.05f, 1.25f);
+
+        std::unordered_map<std::string, glm::vec3> sanitizedElementColors;
+        sanitizedElementColors.reserve(m_AtomDefaults.elementColors.size());
+        for (const auto &[element, color] : m_AtomDefaults.elementColors)
+        {
+            const std::string normalizedElement = NormalizeElementSymbol(element);
+            if (normalizedElement.empty())
+            {
+                continue;
+            }
+
+            sanitizedElementColors[normalizedElement] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        m_AtomDefaults.elementColors = std::move(sanitizedElementColors);
+        std::unordered_map<std::string, float> sanitizedElementScales;
+        sanitizedElementScales.reserve(m_AtomDefaults.elementScales.size());
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            const std::string normalizedElement = NormalizeElementSymbol(element);
+            if (normalizedElement.empty())
+            {
+                continue;
+            }
+
+            sanitizedElementScales[normalizedElement] = std::clamp(scale, 0.1f, 4.0f);
+        }
+
+        m_AtomDefaults.elementScales = std::move(sanitizedElementScales);
+        m_SceneSettings.atomScale = m_AtomDefaults.defaultSize;
+        m_SceneSettings.atomOverrideColor = m_AtomDefaults.defaultOverrideColor;
+    }
+
+    glm::vec3 EditorLayer::ResolveElementColor(const std::string &element) const
+    {
+        const std::string normalizedElement = NormalizeElementSymbol(element);
+        if (normalizedElement.empty())
+        {
+            return glm::clamp(ColorFromElement(element), glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        const auto projectOverrideIt = m_ElementColorOverrides.find(normalizedElement);
+        if (projectOverrideIt != m_ElementColorOverrides.end())
+        {
+            return glm::clamp(projectOverrideIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        const auto catalogColorIt = m_AtomDefaults.elementColors.find(normalizedElement);
+        if (catalogColorIt != m_AtomDefaults.elementColors.end())
+        {
+            return glm::clamp(catalogColorIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        return glm::clamp(ColorFromElement(normalizedElement), glm::vec3(0.0f), glm::vec3(1.0f));
+    }
+
+    float EditorLayer::ResolveElementVisualScale(const std::string &element) const
+    {
+        const std::string normalizedElement = NormalizeElementSymbol(element);
+        if (normalizedElement.empty())
+        {
+            return 1.0f;
+        }
+
+        const auto projectOverrideIt = m_ElementScaleOverrides.find(normalizedElement);
+        if (projectOverrideIt != m_ElementScaleOverrides.end())
+        {
+            return std::clamp(projectOverrideIt->second, 0.1f, 4.0f);
+        }
+
+        const auto catalogScaleIt = m_AtomDefaults.elementScales.find(normalizedElement);
+        if (catalogScaleIt != m_AtomDefaults.elementScales.end())
+        {
+            return std::clamp(catalogScaleIt->second, 0.1f, 4.0f);
+        }
+
+        return 1.0f;
+    }
+
+    void EditorLayer::EnsureElementAppearanceSelection()
+    {
+        m_ElementCatalogSelectedSymbol = NormalizeElementSymbol(m_ElementCatalogSelectedSymbol);
+        if (!m_ElementCatalogSelectedSymbol.empty())
+        {
+            return;
+        }
+
+        std::unordered_set<std::string> availableSymbols;
+        if (m_HasStructureLoaded)
+        {
+            for (const std::string &element : m_WorkingStructure.species)
+            {
+                const std::string normalized = NormalizeElementSymbol(element);
+                if (!normalized.empty())
+                {
+                    availableSymbols.insert(normalized);
+                }
+            }
+        }
+
+        for (const auto &[element, color] : m_AtomDefaults.elementColors)
+        {
+            (void)color;
+            availableSymbols.insert(element);
+        }
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            (void)scale;
+            availableSymbols.insert(element);
+        }
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            availableSymbols.insert(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            availableSymbols.insert(element);
+        }
+
+        if (!availableSymbols.empty())
+        {
+            std::vector<std::string> symbols(availableSymbols.begin(), availableSymbols.end());
+            std::sort(symbols.begin(), symbols.end());
+            m_ElementCatalogSelectedSymbol = symbols.front();
+            return;
+        }
+
+        m_ElementCatalogSelectedSymbol = "C";
+    }
+
+    void EditorLayer::LoadDefaultConfigYaml()
+    {
+        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", kFallbackStartupImportPath);
+
+        if (!std::filesystem::exists(kDefaultConfigPath))
+        {
+            return;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(kDefaultConfigPath);
+            const YAML::Node app = root["app"];
+            if (app)
+            {
+                const YAML::Node startup = app["startup"];
+                if (startup && startup["defaultStructurePath"])
+                {
+                    const std::string defaultStructurePath = startup["defaultStructurePath"].as<std::string>();
+                    if (!defaultStructurePath.empty())
+                    {
+                        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", defaultStructurePath.c_str());
+                    }
+                }
+            }
+
+            const YAML::Node camera = root["app"] ? root["app"]["camera"] : YAML::Node();
+            TryLoadYamlScalar(camera, "orbitSensitivity", m_CameraOrbitSensitivity);
+            TryLoadYamlScalar(camera, "panSensitivity", m_CameraPanSensitivity);
+            TryLoadYamlScalar(camera, "zoomSensitivity", m_CameraZoomSensitivity);
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("LoadDefaultConfigYaml failed: ") + exception.what());
+        }
+    }
+
+    void EditorLayer::MigrateLegacyAtomIniIfNeeded()
+    {
+        if (std::filesystem::exists(kAtomSettingsPath))
+        {
+            return;
+        }
+
+        if (std::filesystem::exists(kLegacyAtomSettingsPath))
+        {
+            try
+            {
+                const YAML::Node root = YAML::LoadFile(kLegacyAtomSettingsPath);
+                const YAML::Node defaults = root["defaults"];
+                if (defaults)
+                {
+                    TryLoadYamlVec3(defaults["overrideColor"], m_AtomDefaults.defaultOverrideColor);
+                    TryLoadYamlScalar(defaults, "atomScale", m_AtomDefaults.defaultSize);
+                }
+
+                const YAML::Node elements = root["elements"];
+                if (elements && elements.IsMap())
+                {
+                    m_AtomDefaults.elementColors.clear();
+                    m_AtomDefaults.elementScales.clear();
+                    for (const auto &entry : elements)
+                    {
+                        const std::string element = NormalizeElementSymbol(entry.first.as<std::string>());
+                        if (element.empty())
+                        {
+                            continue;
+                        }
+
+                        glm::vec3 color = ColorFromElement(element);
+                        const YAML::Node visual = entry.second["visual"];
+                        if (visual)
+                        {
+                            TryLoadYamlVec3(visual["color"], color);
+                            float scale = 1.0f;
+                            TryLoadYamlScalar(visual, "scale", scale);
+                            m_AtomDefaults.elementScales[element] = scale;
+                        }
+
+                        m_AtomDefaults.elementColors[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                    }
+                }
+            }
+            catch (const YAML::Exception &exception)
+            {
+                LogWarn(std::string("MigrateLegacyAtomIniIfNeeded: failed to read config/atom_catalog.yaml: ") + exception.what());
+            }
+        }
+        else if (std::filesystem::exists(kLegacyAtomSettingsIniPath))
+        {
+            LoadLegacyAtomSettingsIni(kLegacyAtomSettingsIniPath);
+        }
+        else
+        {
+            return;
+        }
+
+        SaveAtomSettingsYaml();
+        LogInfo("MigrateLegacyAtomIniIfNeeded: created config/atom_settings.yaml from legacy atom settings");
+    }
+
+    void EditorLayer::LoadLegacyAtomSettingsIni(const std::string &path)
+    {
+        std::ifstream in(path);
+        if (!in.is_open())
+        {
+            return;
+        }
+
+        std::string line;
+        while (std::getline(in, line))
+        {
+            if (line.empty() || line[0] == '#' || line[0] == ';')
+            {
+                continue;
+            }
+
+            const std::size_t sep = line.find('=');
+            if (sep == std::string::npos)
+            {
+                continue;
+            }
+
+            const std::string key = line.substr(0, sep);
+            const std::string value = line.substr(sep + 1);
+
+            if (key == "default_atom_size")
+            {
+                try
+                {
+                    m_AtomDefaults.defaultSize = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "default_atom_override_color_r" || key == "default_atom_color_r")
+            {
+                try
+                {
+                    m_AtomDefaults.defaultOverrideColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "default_atom_override_color_g" || key == "default_atom_color_g")
+            {
+                try
+                {
+                    m_AtomDefaults.defaultOverrideColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "default_atom_override_color_b" || key == "default_atom_color_b")
+            {
+                try
+                {
+                    m_AtomDefaults.defaultOverrideColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "element_colors")
+            {
+                m_AtomDefaults.elementColors = ParseElementColorOverrides(value);
+            }
+        }
+
+        ApplyAtomDefaultsToSceneSettings();
+    }
+
+    void EditorLayer::LoadAtomSettingsYaml()
+    {
+        if (!std::filesystem::exists(kAtomSettingsPath))
+        {
+            ApplyAtomDefaultsToSceneSettings();
+            SaveAtomSettingsYaml();
+            return;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(kAtomSettingsPath);
+            const YAML::Node defaults = root["defaults"];
+            const YAML::Node elements = root["elements"];
+
+            if (defaults)
+            {
+                TryLoadYamlVec3(defaults["overrideColor"], m_AtomDefaults.defaultOverrideColor);
+                TryLoadYamlScalar(defaults, "atomScale", m_AtomDefaults.defaultSize);
+            }
+
+            std::unordered_map<std::string, glm::vec3> elementColors;
+            std::unordered_map<std::string, float> elementScales;
+            if (elements && elements.IsMap())
+            {
+                for (const auto &entry : elements)
+                {
+                    const std::string element = NormalizeElementSymbol(entry.first.as<std::string>());
+                    if (element.empty())
+                    {
+                        continue;
+                    }
+
+                    glm::vec3 color = ColorFromElement(element);
+                    const YAML::Node visual = entry.second["visualDefaults"] ? entry.second["visualDefaults"] : entry.second["visual"];
+                    if (visual)
+                    {
+                        TryLoadYamlVec3(visual["defaultColor"] ? visual["defaultColor"] : visual["color"], color);
+                        float scale = 1.0f;
+                        TryLoadYamlScalar(visual, "defaultScale", scale);
+                        if (!visual["defaultScale"])
+                        {
+                            TryLoadYamlScalar(visual, "scale", scale);
+                        }
+                        elementScales[element] = std::clamp(scale, 0.1f, 4.0f);
+                    }
+
+                    elementColors[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                }
+            }
+
+            m_AtomDefaults.elementColors = std::move(elementColors);
+            m_AtomDefaults.elementScales = std::move(elementScales);
+            ApplyAtomDefaultsToSceneSettings();
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("LoadAtomSettingsYaml failed: ") + exception.what());
+            ApplyAtomDefaultsToSceneSettings();
+        }
+    }
+
+    void EditorLayer::LoadAtomSettings()
+    {
+        LoadAtomSettingsYaml();
+    }
+
+    void EditorLayer::SaveAtomSettingsYaml() const
+    {
+        std::filesystem::create_directories("config");
+
+        std::ofstream out(kAtomSettingsPath, std::ios::trunc);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        const glm::vec3 defaultOverrideColor = glm::clamp(m_AtomDefaults.defaultOverrideColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        const float defaultSize = std::clamp(m_AtomDefaults.defaultSize, 0.05f, 1.25f);
+        YAML::Node root;
+        root["version"] = 1;
+        root["defaults"]["overrideColor"] = MakeColorNode(defaultOverrideColor);
+        root["defaults"]["atomScale"] = defaultSize;
+        root["defaults"]["fallbackVisual"]["color"] = MakeColorNode(defaultOverrideColor);
+        root["defaults"]["fallbackVisual"]["scale"] = 1.0f;
+
+        std::unordered_set<std::string> elementKeySet;
+        for (const auto &[element, color] : m_AtomDefaults.elementColors)
+        {
+            (void)color;
+            elementKeySet.insert(element);
+        }
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            (void)scale;
+            elementKeySet.insert(element);
+        }
+        std::vector<std::string> elementKeys(elementKeySet.begin(), elementKeySet.end());
+        std::sort(elementKeys.begin(), elementKeys.end());
+
+        for (const std::string &element : elementKeys)
+        {
+            const auto colorIt = m_AtomDefaults.elementColors.find(element);
+            if (colorIt == m_AtomDefaults.elementColors.end())
+            {
+                continue;
+            }
+
+            root["elements"][element]["identity"]["symbol"] = element;
+            root["elements"][element]["visualDefaults"]["defaultColor"] = MakeColorNode(glm::clamp(colorIt->second, glm::vec3(0.0f), glm::vec3(1.0f)));
+            const auto scaleIt = m_AtomDefaults.elementScales.find(element);
+            root["elements"][element]["visualDefaults"]["defaultScale"] = (scaleIt != m_AtomDefaults.elementScales.end())
+                                                                              ? std::clamp(scaleIt->second, 0.1f, 4.0f)
+                                                                              : 1.0f;
+            root["elements"][element]["chemistry"] = YAML::Node(YAML::NodeType::Map);
+            root["elements"][element]["crystal"] = YAML::Node(YAML::NodeType::Map);
+        }
+
+        YAML::Emitter emitter;
+        emitter.SetIndent(2);
+        emitter << root;
+        out << emitter.c_str();
+    }
+
+    void EditorLayer::SaveAtomSettings() const
+    {
+        SaveAtomSettingsYaml();
+    }
+
     const char *EditorLayer::ThemeName(ThemePreset preset) const
     {
         switch (preset)
@@ -525,15 +1088,229 @@ namespace ds
         }
     }
 
+    EditorLayer::EditorSceneSnapshot EditorLayer::CaptureSceneSnapshot() const
+    {
+        EditorSceneSnapshot snapshot;
+        snapshot.hasStructureLoaded = m_HasStructureLoaded;
+        snapshot.originalStructure = m_OriginalStructure;
+        snapshot.workingStructure = m_WorkingStructure;
+        snapshot.atomNodeIds = m_AtomNodeIds;
+        snapshot.atomCollectionIndices = m_AtomCollectionIndices;
+        snapshot.hiddenAtomIndices = m_HiddenAtomIndices;
+        snapshot.hiddenBondKeys = m_HiddenBondKeys;
+        snapshot.manualBondKeys = m_ManualBondKeys;
+        snapshot.deletedBondKeys = m_DeletedBondKeys;
+        snapshot.bondLabelStates = m_BondLabelStates;
+        snapshot.selectedBondKeys = m_SelectedBondKeys;
+        snapshot.selectedBondLabelKey = m_SelectedBondLabelKey;
+        snapshot.angleLabelStates = m_AngleLabelStates;
+        snapshot.elementColorOverrides = m_ElementColorOverrides;
+        snapshot.elementScaleOverrides = m_ElementScaleOverrides;
+        snapshot.atomColorOverrides = m_AtomColorOverrides;
+        snapshot.selectedAtomIndices = m_SelectedAtomIndices;
+        snapshot.outlinerAtomSelectionAnchor = m_OutlinerAtomSelectionAnchor;
+        snapshot.transformEmpties = m_TransformEmpties;
+        snapshot.activeTransformEmptyIndex = m_ActiveTransformEmptyIndex;
+        snapshot.selectedTransformEmptyIndex = m_SelectedTransformEmptyIndex;
+        snapshot.transformEmptyCounter = m_TransformEmptyCounter;
+        snapshot.collections = m_Collections;
+        snapshot.objectGroups = m_ObjectGroups;
+        snapshot.activeCollectionIndex = m_ActiveCollectionIndex;
+        snapshot.activeGroupIndex = m_ActiveGroupIndex;
+        snapshot.collectionCounter = m_CollectionCounter;
+        snapshot.groupCounter = m_GroupCounter;
+        snapshot.selectedSpecialNode = m_SelectedSpecialNode;
+        snapshot.lightPosition = m_LightPosition;
+        snapshot.cursorPosition = m_CursorPosition;
+        return snapshot;
+    }
+
+    void EditorLayer::RestoreSceneSnapshot(const EditorSceneSnapshot &snapshot)
+    {
+        m_HasStructureLoaded = snapshot.hasStructureLoaded;
+        m_OriginalStructure = snapshot.originalStructure;
+        m_WorkingStructure = snapshot.workingStructure;
+        m_AtomNodeIds = snapshot.atomNodeIds;
+        m_AtomCollectionIndices = snapshot.atomCollectionIndices;
+        m_HiddenAtomIndices = snapshot.hiddenAtomIndices;
+        m_HiddenBondKeys = snapshot.hiddenBondKeys;
+        m_ManualBondKeys = snapshot.manualBondKeys;
+        m_DeletedBondKeys = snapshot.deletedBondKeys;
+        m_BondLabelStates = snapshot.bondLabelStates;
+        m_SelectedBondKeys = snapshot.selectedBondKeys;
+        m_SelectedBondLabelKey = snapshot.selectedBondLabelKey;
+        m_AngleLabelStates = snapshot.angleLabelStates;
+        m_ElementColorOverrides = snapshot.elementColorOverrides;
+        m_ElementScaleOverrides = snapshot.elementScaleOverrides;
+        m_AtomColorOverrides = snapshot.atomColorOverrides;
+        m_SelectedAtomIndices = snapshot.selectedAtomIndices;
+        m_OutlinerAtomSelectionAnchor = snapshot.outlinerAtomSelectionAnchor;
+        m_TransformEmpties = snapshot.transformEmpties;
+        m_ActiveTransformEmptyIndex = snapshot.activeTransformEmptyIndex;
+        m_SelectedTransformEmptyIndex = snapshot.selectedTransformEmptyIndex;
+        m_TransformEmptyCounter = snapshot.transformEmptyCounter;
+        m_Collections = snapshot.collections;
+        m_ObjectGroups = snapshot.objectGroups;
+        m_ActiveCollectionIndex = snapshot.activeCollectionIndex;
+        m_ActiveGroupIndex = snapshot.activeGroupIndex;
+        m_CollectionCounter = snapshot.collectionCounter;
+        m_GroupCounter = snapshot.groupCounter;
+        m_SelectedSpecialNode = snapshot.selectedSpecialNode;
+        m_LightPosition = snapshot.lightPosition;
+        m_CursorPosition = snapshot.cursorPosition;
+
+        EnsureAtomNodeIds();
+        EnsureAtomCollectionAssignments();
+        for (int groupIndex = 0; groupIndex < static_cast<int>(m_ObjectGroups.size()); ++groupIndex)
+        {
+            SceneGroupingBackend::SanitizeGroup(*this, groupIndex);
+        }
+
+        m_GeneratedBonds.clear();
+        m_AutoBondsDirty = true;
+        m_LastStructureOperationFailed = false;
+    }
+
+    void EditorLayer::PushUndoSnapshot(std::string label)
+    {
+        if (m_SuspendUndoCapture)
+        {
+            return;
+        }
+
+        m_UndoStack.push_back(EditorSceneHistoryEntry{std::move(label), CaptureSceneSnapshot()});
+        if (m_UndoStack.size() > kMaxSceneHistoryEntries)
+        {
+            m_UndoStack.erase(m_UndoStack.begin(), m_UndoStack.begin() + static_cast<std::ptrdiff_t>(m_UndoStack.size() - kMaxSceneHistoryEntries));
+        }
+        m_RedoStack.clear();
+    }
+
+    bool EditorLayer::UndoSceneEdit()
+    {
+        if (m_UndoStack.empty())
+        {
+            return false;
+        }
+
+        EditorSceneHistoryEntry entry = std::move(m_UndoStack.back());
+        m_UndoStack.pop_back();
+        m_RedoStack.push_back(EditorSceneHistoryEntry{entry.label, CaptureSceneSnapshot()});
+        if (m_RedoStack.size() > kMaxSceneHistoryEntries)
+        {
+            m_RedoStack.erase(m_RedoStack.begin(), m_RedoStack.begin() + static_cast<std::ptrdiff_t>(m_RedoStack.size() - kMaxSceneHistoryEntries));
+        }
+
+        RestoreSceneSnapshot(entry.snapshot);
+        m_LastStructureMessage = "Undo: " + entry.label;
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::RedoSceneEdit()
+    {
+        if (m_RedoStack.empty())
+        {
+            return false;
+        }
+
+        EditorSceneHistoryEntry entry = std::move(m_RedoStack.back());
+        m_RedoStack.pop_back();
+        m_UndoStack.push_back(EditorSceneHistoryEntry{entry.label, CaptureSceneSnapshot()});
+        if (m_UndoStack.size() > kMaxSceneHistoryEntries)
+        {
+            m_UndoStack.erase(m_UndoStack.begin(), m_UndoStack.begin() + static_cast<std::ptrdiff_t>(m_UndoStack.size() - kMaxSceneHistoryEntries));
+        }
+
+        RestoreSceneSnapshot(entry.snapshot);
+        m_LastStructureMessage = "Redo: " + entry.label;
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    void EditorLayer::ClearSceneHistory()
+    {
+        m_UndoStack.clear();
+        m_RedoStack.clear();
+    }
+
     void EditorLayer::ApplyTheme(ThemePreset preset)
     {
         ImGuiStyle &style = ImGui::GetStyle();
+        style.WindowRounding = 0.0f;
+        style.ChildRounding = 0.0f;
+        style.PopupRounding = 0.0f;
+        style.FrameRounding = 2.0f;
+        style.GrabRounding = 2.0f;
+        style.ScrollbarRounding = 2.0f;
+        style.TabRounding = 0.0f;
+        style.WindowBorderSize = 1.0f;
+        style.ChildBorderSize = 1.0f;
+        style.PopupBorderSize = 1.0f;
+        style.FrameBorderSize = 0.0f;
+        style.TabBorderSize = 0.0f;
+        style.WindowPadding = ImVec2(8.0f, 8.0f);
+        style.FramePadding = ImVec2(6.0f, 4.0f);
+        style.CellPadding = ImVec2(6.0f, 4.0f);
+        style.ItemSpacing = ImVec2(8.0f, 6.0f);
+        style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
+        style.IndentSpacing = 20.0f;
 
         switch (preset)
         {
         case ThemePreset::Dark:
         {
             ImGui::StyleColorsDark();
+            ImVec4 *colors = style.Colors;
+            colors[ImGuiCol_Text] = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+            colors[ImGuiCol_TextDisabled] = ImVec4(0.65f, 0.68f, 0.71f, 1.00f);
+            colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.11f, 0.11f, 1.00f);
+            colors[ImGuiCol_ChildBg] = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
+            colors[ImGuiCol_PopupBg] = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
+            colors[ImGuiCol_Border] = ImVec4(0.18f, 0.19f, 0.20f, 1.00f);
+            colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+            colors[ImGuiCol_FrameBg] = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+            colors[ImGuiCol_FrameBgHovered] = ImVec4(0.30f, 0.31f, 0.31f, 1.00f);
+            colors[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
+            colors[ImGuiCol_TitleBg] = ImVec4(0.10f, 0.11f, 0.11f, 1.00f);
+            colors[ImGuiCol_TitleBgActive] = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
+            colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.10f, 0.11f, 0.11f, 1.00f);
+            colors[ImGuiCol_MenuBarBg] = ImVec4(0.10f, 0.11f, 0.11f, 1.00f);
+            colors[ImGuiCol_ScrollbarBg] = ImVec4(0.10f, 0.11f, 0.11f, 1.00f);
+            colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+            colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.30f, 0.31f, 0.31f, 1.00f);
+            colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.34f, 0.35f, 0.35f, 1.00f);
+            colors[ImGuiCol_CheckMark] = ImVec4(1.00f, 0.50f, 0.00f, 1.00f);
+            colors[ImGuiCol_SliderGrab] = ImVec4(0.90f, 0.46f, 0.08f, 1.00f);
+            colors[ImGuiCol_SliderGrabActive] = ImVec4(1.00f, 0.50f, 0.00f, 1.00f);
+            colors[ImGuiCol_Button] = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+            colors[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.31f, 0.31f, 1.00f);
+            colors[ImGuiCol_ButtonActive] = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
+            colors[ImGuiCol_Header] = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+            colors[ImGuiCol_HeaderHovered] = ImVec4(0.30f, 0.31f, 0.31f, 1.00f);
+            colors[ImGuiCol_HeaderActive] = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
+            colors[ImGuiCol_Separator] = ImVec4(0.19f, 0.20f, 0.21f, 1.00f);
+            colors[ImGuiCol_SeparatorHovered] = ImVec4(0.88f, 0.47f, 0.08f, 1.00f);
+            colors[ImGuiCol_SeparatorActive] = ImVec4(1.00f, 0.55f, 0.00f, 1.00f);
+            colors[ImGuiCol_ResizeGrip] = ImVec4(0.88f, 0.47f, 0.08f, 0.24f);
+            colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.88f, 0.47f, 0.08f, 0.72f);
+            colors[ImGuiCol_ResizeGripActive] = ImVec4(1.00f, 0.55f, 0.00f, 0.92f);
+            colors[ImGuiCol_Tab] = ImVec4(0.15f, 0.15f, 0.16f, 1.00f);
+            colors[ImGuiCol_TabHovered] = ImVec4(0.30f, 0.31f, 0.31f, 1.00f);
+            colors[ImGuiCol_TabActive] = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+            colors[ImGuiCol_TabUnfocused] = ImVec4(0.13f, 0.13f, 0.14f, 1.00f);
+            colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.18f, 0.18f, 0.18f, 1.00f);
+            colors[ImGuiCol_DockingPreview] = ImVec4(1.00f, 0.50f, 0.00f, 0.72f);
+            colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.08f, 0.08f, 0.08f, 1.00f);
+            colors[ImGuiCol_PlotLines] = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+            colors[ImGuiCol_PlotHistogram] = ImVec4(1.00f, 0.50f, 0.00f, 1.00f);
+            colors[ImGuiCol_TableHeaderBg] = ImVec4(0.15f, 0.15f, 0.16f, 1.00f);
+            colors[ImGuiCol_TableBorderStrong] = ImVec4(0.18f, 0.19f, 0.20f, 1.00f);
+            colors[ImGuiCol_TableBorderLight] = ImVec4(0.15f, 0.16f, 0.17f, 1.00f);
+            colors[ImGuiCol_TableRowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.00f);
+            colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.03f);
+            colors[ImGuiCol_TextSelectedBg] = ImVec4(1.00f, 0.50f, 0.00f, 0.28f);
+            colors[ImGuiCol_NavHighlight] = ImVec4(1.00f, 0.50f, 0.00f, 0.80f);
             break;
         }
         case ThemePreset::Light:
@@ -598,9 +1375,9 @@ namespace ds
         }
     }
 
-    void EditorLayer::LoadSettings()
+    void EditorLayer::LoadLegacyUiSettingsIni(const std::string &settingsPath)
     {
-        std::ifstream in(kSettingsPath);
+        std::ifstream in(settingsPath);
         if (!in.is_open())
         {
             return;
@@ -642,13 +1419,49 @@ namespace ds
             {
                 m_ShowLogPanel = (value == "1");
             }
+            else if (key == "show_stats_panel")
+            {
+                m_ShowStatsPanel = (value == "1");
+            }
+            else if (key == "show_viewport_info_panel")
+            {
+                m_ShowViewportInfoPanel = (value == "1");
+            }
+            if (key == "show_shortcut_reference_panel")
+            {
+                m_ShowShortcutReferencePanel = (value == "1");
+            }
             else if (key == "show_tools_panel")
             {
-                m_ShowToolsPanel = (value == "1");
+                m_ShowActionsPanel = (value == "1");
+            }
+            else if (key == "show_actions_panel")
+            {
+                m_ShowActionsPanel = (value == "1");
+            }
+            else if (key == "show_appearance_panel")
+            {
+                m_ShowAppearancePanel = (value == "1");
             }
             else if (key == "show_settings_panel")
             {
                 m_ShowSettingsPanel = (value == "1");
+            }
+            else if (key == "show_scene_outliner_panel")
+            {
+                m_ShowSceneOutlinerPanel = (value == "1");
+            }
+            else if (key == "show_object_properties_panel")
+            {
+                m_ShowObjectPropertiesPanel = (value == "1");
+            }
+            else if (key == "show_render_preview_window")
+            {
+                m_ShowRenderPreviewWindow = (value == "1");
+            }
+            else if (key == "viewport_settings_open")
+            {
+                m_ViewportSettingsOpen = (value == "1");
             }
             else if (key == "font_scale")
             {
@@ -1140,6 +1953,18 @@ namespace ds
             {
                 m_BondLabelDeleteOnlyMode = (value == "1");
             }
+            else if (key == "viewport_selection_filter")
+            {
+                try
+                {
+                    const int mode = std::stoi(value);
+                    m_SelectionFilter = static_cast<SelectionFilter>(std::clamp(mode, 0, 3));
+                }
+                catch (...)
+                {
+                    m_SelectionFilter = SelectionFilter::AtomsAndBonds;
+                }
+            }
             else if (key == "viewport_bonds_threshold_scale")
             {
                 try
@@ -1248,6 +2073,136 @@ namespace ds
                 {
                 }
             }
+            if (key == "viewport_bond_label_text_color_r")
+            {
+                try
+                {
+                    m_BondLabelTextColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_text_color_g")
+            {
+                try
+                {
+                    m_BondLabelTextColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_text_color_b")
+            {
+                try
+                {
+                    m_BondLabelTextColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_bg_color_r")
+            {
+                try
+                {
+                    m_BondLabelBackgroundColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_bg_color_g")
+            {
+                try
+                {
+                    m_BondLabelBackgroundColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_bg_color_b")
+            {
+                try
+                {
+                    m_BondLabelBackgroundColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_border_color_r")
+            {
+                try
+                {
+                    m_BondLabelBorderColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_border_color_g")
+            {
+                try
+                {
+                    m_BondLabelBorderColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_border_color_b")
+            {
+                try
+                {
+                    m_BondLabelBorderColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_bond_label_precision")
+            {
+                try
+                {
+                    m_BondLabelPrecision = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_selected_atom_custom_color_r")
+            {
+                try
+                {
+                    m_SelectedAtomCustomColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_selected_atom_custom_color_g")
+            {
+                try
+                {
+                    m_SelectedAtomCustomColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            else if (key == "viewport_selected_atom_custom_color_b")
+            {
+                try
+                {
+                    m_SelectedAtomCustomColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
             else if (key == "selection_color_r")
             {
                 try
@@ -1302,7 +2257,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "viewport_projection_mode")
+            if (key == "viewport_projection_mode")
             {
                 try
                 {
@@ -1433,7 +2388,7 @@ namespace ds
             {
                 m_AppendImportToNewCollection = (value == "1");
             }
-            else if (key == "viewport_measurement_show")
+            if (key == "viewport_measurement_show")
             {
                 m_ShowSelectionMeasurements = (value == "1");
             }
@@ -1587,7 +2542,7 @@ namespace ds
                 {
                 }
             }
-            else if (key == "viewport_show_transform_empties")
+            if (key == "viewport_show_transform_empties")
             {
                 m_ShowTransformEmpties = (value == "1");
             }
@@ -1764,6 +2719,308 @@ namespace ds
                 {
                 }
             }
+            if (key == "render_image_width")
+            {
+                try
+                {
+                    m_RenderImageWidth = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_image_height")
+            {
+                try
+                {
+                    m_RenderImageHeight = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_image_format")
+            {
+                try
+                {
+                    const int format = std::stoi(value);
+                    m_RenderImageFormat = (format == 1) ? RenderImageFormat::Jpg : RenderImageFormat::Png;
+                }
+                catch (...)
+                {
+                    m_RenderImageFormat = RenderImageFormat::Png;
+                }
+            }
+            if (key == "render_jpeg_quality")
+            {
+                try
+                {
+                    m_RenderJpegQuality = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_crop_enabled")
+            {
+                m_RenderCropEnabled = (value == "1");
+            }
+            if (key == "render_show_bond_length_labels")
+            {
+                m_RenderShowBondLengthLabels = (value == "1");
+            }
+            if (key == "render_bond_label_scale_multiplier")
+            {
+                try
+                {
+                    m_RenderBondLabelScaleMultiplier = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_precision")
+            {
+                try
+                {
+                    m_RenderBondLabelPrecision = std::stoi(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_text_color_r")
+            {
+                try
+                {
+                    m_RenderBondLabelTextColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_text_color_g")
+            {
+                try
+                {
+                    m_RenderBondLabelTextColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_text_color_b")
+            {
+                try
+                {
+                    m_RenderBondLabelTextColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_bg_color_r")
+            {
+                try
+                {
+                    m_RenderBondLabelBackgroundColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_bg_color_g")
+            {
+                try
+                {
+                    m_RenderBondLabelBackgroundColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_bg_color_b")
+            {
+                try
+                {
+                    m_RenderBondLabelBackgroundColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_border_color_r")
+            {
+                try
+                {
+                    m_RenderBondLabelBorderColor.r = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_border_color_g")
+            {
+                try
+                {
+                    m_RenderBondLabelBorderColor.g = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_bond_label_border_color_b")
+            {
+                try
+                {
+                    m_RenderBondLabelBorderColor.b = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_preview_long_side_cap")
+            {
+                try
+                {
+                    m_RenderPreviewLongSideCap = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "render_dialog_aspect_locked")
+            {
+                m_RenderDialogAspectLocked = (value == "1");
+            }
+            if (key == "input_invert_viewport_zoom")
+            {
+                m_InvertViewportZoom = (value == "1");
+            }
+            if (key == "input_invert_circle_select_wheel")
+            {
+                m_InvertCircleSelectWheel = (value == "1");
+            }
+            if (key == "input_circle_select_wheel_step")
+            {
+                try
+                {
+                    m_CircleSelectWheelStep = std::stof(value);
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_add_menu")
+            {
+                try
+                {
+                    m_HotkeyAddMenu = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_open_render")
+            {
+                try
+                {
+                    m_HotkeyOpenRender = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_toggle_side_panels")
+            {
+                try
+                {
+                    m_HotkeyToggleSidePanels = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_delete_selection")
+            {
+                try
+                {
+                    m_HotkeyDeleteSelection = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_hide_selection")
+            {
+                try
+                {
+                    m_HotkeyHideSelection = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_box_select")
+            {
+                try
+                {
+                    m_HotkeyBoxSelect = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_circle_select")
+            {
+                try
+                {
+                    m_HotkeyCircleSelect = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_translate_modal")
+            {
+                try
+                {
+                    m_HotkeyTranslateModal = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_translate_gizmo")
+            {
+                try
+                {
+                    m_HotkeyTranslateGizmo = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_rotate_gizmo")
+            {
+                try
+                {
+                    m_HotkeyRotateGizmo = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
+            if (key == "hotkey_scale_gizmo")
+            {
+                try
+                {
+                    m_HotkeyScaleGizmo = static_cast<std::uint32_t>(std::stoul(value));
+                }
+                catch (...)
+                {
+                }
+            }
         }
 
         if (!hasSensitivityMode || !relativeSensitivity)
@@ -1774,6 +3031,16 @@ namespace ds
             m_CameraZoomSensitivity = m_CameraZoomSensitivity / kBaseZoomSensitivity;
         }
 
+        if (settingsPath == kLegacyUiSettingsPath || settingsPath == kLegacyEditorSettingsPath)
+        {
+            LogInfo("LoadLegacyUiSettingsIni: loaded legacy UI settings from " + settingsPath);
+        }
+
+        SanitizeLoadedUiState();
+    }
+
+    void EditorLayer::SanitizeLoadedUiState()
+    {
         if (m_CameraOrbitSensitivity < 0.05f)
             m_CameraOrbitSensitivity = 0.05f;
         if (m_CameraPanSensitivity < 0.05f)
@@ -1798,6 +3065,10 @@ namespace ds
             m_ViewportRenderScale = 0.25f;
         if (m_ViewportRenderScale > 1.0f)
             m_ViewportRenderScale = 1.0f;
+        if (m_CircleSelectWheelStep < 1.0f)
+            m_CircleSelectWheelStep = 1.0f;
+        if (m_CircleSelectWheelStep > 32.0f)
+            m_CircleSelectWheelStep = 32.0f;
         if (m_TransformGizmoSize < 0.05f)
             m_TransformGizmoSize = 0.05f;
         if (m_TransformGizmoSize > 0.35f)
@@ -1851,171 +3122,492 @@ namespace ds
             m_UiSpacingScale = 0.75f;
         if (m_UiSpacingScale > 1.80f)
             m_UiSpacingScale = 1.80f;
+        if (m_RenderPreviewLongSideCap < 320.0f)
+            m_RenderPreviewLongSideCap = 320.0f;
+        if (m_RenderPreviewLongSideCap > 8192.0f)
+            m_RenderPreviewLongSideCap = 8192.0f;
 
         m_SceneSettings.drawCellEdges = m_ShowCellEdges;
         m_SceneSettings.cellEdgeColor = glm::clamp(m_CellEdgeColor, glm::vec3(0.0f), glm::vec3(1.0f));
         m_SceneSettings.cellEdgeLineWidth = m_CellEdgeLineWidth;
+        m_RenderCropRectNormalized[0] = glm::clamp(m_RenderCropRectNormalized[0], 0.0f, 1.0f);
+        m_RenderCropRectNormalized[1] = glm::clamp(m_RenderCropRectNormalized[1], 0.0f, 1.0f);
+        m_RenderCropRectNormalized[2] = glm::clamp(m_RenderCropRectNormalized[2], 0.01f, 1.0f);
+        m_RenderCropRectNormalized[3] = glm::clamp(m_RenderCropRectNormalized[3], 0.01f, 1.0f);
 
-        // Keep simulation grid on the canonical XY plane.
         m_SceneSettings.gridOrigin.z = 0.0f;
     }
 
-    void EditorLayer::SaveSettings() const
+    void EditorLayer::MigrateLegacyUiIniIfNeeded()
+    {
+        if (std::filesystem::exists(kUiSettingsPath))
+        {
+            return;
+        }
+
+        std::string legacyPath;
+        if (std::filesystem::exists(kLegacyUiSettingsPath))
+        {
+            legacyPath = kLegacyUiSettingsPath;
+        }
+        else if (std::filesystem::exists(kLegacyEditorSettingsPath))
+        {
+            legacyPath = kLegacyEditorSettingsPath;
+        }
+
+        if (legacyPath.empty())
+        {
+            return;
+        }
+
+        LoadLegacyUiSettingsIni(legacyPath);
+        LoadAtomSettingsYaml();
+        SaveUiSettingsYaml();
+        SaveSceneState();
+        LogInfo("MigrateLegacyUiIniIfNeeded: migrated " + legacyPath + " to config/ui_settings.yaml");
+    }
+
+    void EditorLayer::LoadSettings()
+    {
+        LoadUiSettingsYaml();
+    }
+
+    void EditorLayer::LoadUiSettingsYaml()
+    {
+        if (!std::filesystem::exists(kUiSettingsPath))
+        {
+            SaveUiSettingsYaml();
+            return;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(kUiSettingsPath);
+
+            const YAML::Node ui = root["ui"];
+            const YAML::Node panels = root["panels"];
+            const YAML::Node logs = root["logs"];
+            const YAML::Node camera = root["camera"];
+            const YAML::Node viewport = root["viewport"];
+            const YAML::Node render = root["renderImage"];
+            const YAML::Node hotkeys = root["hotkeys"];
+            const YAML::Node elementCatalog = root["elementCatalog"];
+
+            if (ui)
+            {
+                std::string themeName;
+                TryLoadYamlScalar(ui, "theme", themeName);
+                if (themeName == "Dark")
+                    m_CurrentTheme = ThemePreset::Dark;
+                else if (themeName == "Light")
+                    m_CurrentTheme = ThemePreset::Light;
+                else if (themeName == "Classic")
+                    m_CurrentTheme = ThemePreset::Classic;
+                else if (themeName == "PhotoshopStyle")
+                    m_CurrentTheme = ThemePreset::PhotoshopStyle;
+                else if (themeName == "WarmSlate")
+                    m_CurrentTheme = ThemePreset::WarmSlate;
+
+                TryLoadYamlScalar(ui, "fontScale", m_FontScale);
+                TryLoadYamlScalar(ui, "spacingScale", m_UiSpacingScale);
+            }
+
+            if (panels)
+            {
+                TryLoadYamlScalar(panels, "showDemoWindow", m_ShowDemoWindow);
+                TryLoadYamlScalar(panels, "showLogPanel", m_ShowLogPanel);
+                TryLoadYamlScalar(panels, "showStatsPanel", m_ShowStatsPanel);
+                TryLoadYamlScalar(panels, "showViewportInfoPanel", m_ShowViewportInfoPanel);
+                TryLoadYamlScalar(panels, "showShortcutReferencePanel", m_ShowShortcutReferencePanel);
+                TryLoadYamlScalar(panels, "showElementCatalogPanel", m_ShowElementCatalogPanel);
+                TryLoadYamlScalar(panels, "showPeriodicTablePanel", m_ShowPeriodicTablePanel);
+                TryLoadYamlScalar(panels, "showActionsPanel", m_ShowActionsPanel);
+                TryLoadYamlScalar(panels, "showAppearancePanel", m_ShowAppearancePanel);
+                TryLoadYamlScalar(panels, "showSettingsPanel", m_ShowSettingsPanel);
+                TryLoadYamlScalar(panels, "showSceneOutlinerPanel", m_ShowSceneOutlinerPanel);
+                TryLoadYamlScalar(panels, "showObjectPropertiesPanel", m_ShowObjectPropertiesPanel);
+                TryLoadYamlScalar(panels, "showRenderPreviewWindow", m_ShowRenderPreviewWindow);
+                TryLoadYamlScalar(panels, "viewportSettingsOpen", m_ViewportSettingsOpen);
+            }
+
+            if (logs)
+            {
+                TryLoadYamlScalar(logs, "filter", m_LogFilter);
+                TryLoadYamlScalar(logs, "autoScroll", m_LogAutoScroll);
+            }
+
+            if (camera)
+            {
+                TryLoadYamlScalar(camera, "orbitSensitivity", m_CameraOrbitSensitivity);
+                TryLoadYamlScalar(camera, "panSensitivity", m_CameraPanSensitivity);
+                TryLoadYamlScalar(camera, "zoomSensitivity", m_CameraZoomSensitivity);
+                TryLoadYamlVec3(camera["target"], m_CameraTargetPersisted);
+                TryLoadYamlScalar(camera, "distance", m_CameraDistancePersisted);
+                TryLoadYamlScalar(camera, "yaw", m_CameraYawPersisted);
+                TryLoadYamlScalar(camera, "pitch", m_CameraPitchPersisted);
+                TryLoadYamlScalar(camera, "roll", m_CameraRollPersisted);
+                if (camera["target"] || camera["distance"] || camera["yaw"] || camera["pitch"] || camera["roll"])
+                {
+                    m_HasPersistedCameraState = true;
+                }
+            }
+
+            if (viewport)
+            {
+                TryLoadYamlVec3(viewport["clearColor"], m_SceneSettings.clearColor);
+                TryLoadYamlScalar(viewport, "projectionMode", m_ProjectionModeIndex);
+                TryLoadYamlScalar(viewport, "renderScale", m_ViewportRenderScale);
+                TryLoadYamlScalar(viewport, "touchpadNavigation", m_TouchpadNavigationEnabled);
+                TryLoadYamlScalar(viewport, "cleanViewMode", m_CleanViewMode);
+                TryLoadYamlScalar(viewport, "appendImportCollection", m_AppendImportToNewCollection);
+
+                const YAML::Node grid = viewport["grid"];
+                TryLoadYamlScalar(grid, "enabled", m_SceneSettings.drawGrid);
+                TryLoadYamlScalar(grid, "showCellEdges", m_ShowCellEdges);
+                TryLoadYamlScalar(grid, "halfExtent", m_SceneSettings.gridHalfExtent);
+                TryLoadYamlScalar(grid, "spacing", m_SceneSettings.gridSpacing);
+                TryLoadYamlScalar(grid, "lineWidth", m_SceneSettings.gridLineWidth);
+                TryLoadYamlVec3(grid["origin"], m_SceneSettings.gridOrigin);
+                TryLoadYamlVec3(grid["color"], m_SceneSettings.gridColor);
+                TryLoadYamlScalar(grid, "opacity", m_SceneSettings.gridOpacity);
+                TryLoadYamlVec3(grid["cellEdgeColor"], m_CellEdgeColor);
+                TryLoadYamlScalar(grid, "cellEdgeLineWidth", m_CellEdgeLineWidth);
+
+                const YAML::Node lighting = viewport["lighting"];
+                TryLoadYamlVec3(lighting["direction"], m_SceneSettings.lightDirection);
+                TryLoadYamlScalar(lighting, "ambientStrength", m_SceneSettings.ambientStrength);
+                TryLoadYamlScalar(lighting, "diffuseStrength", m_SceneSettings.diffuseStrength);
+                TryLoadYamlVec3(lighting["color"], m_SceneSettings.lightColor);
+                TryLoadYamlVec3(lighting["position"], m_LightPosition);
+
+                const YAML::Node atoms = viewport["atoms"];
+                TryLoadYamlScalar(atoms, "overrideColorEnabled", m_SceneSettings.overrideAtomColor);
+                TryLoadYamlVec3(atoms["overrideColor"], m_SceneSettings.atomOverrideColor);
+                TryLoadYamlScalar(atoms, "brightness", m_SceneSettings.atomBrightness);
+                TryLoadYamlScalar(atoms, "glowStrength", m_SceneSettings.atomGlowStrength);
+                TryLoadYamlVec3(atoms["selectedCustomColor"], m_SelectedAtomCustomColor);
+
+                const YAML::Node bonds = viewport["bonds"];
+                TryLoadYamlScalar(bonds, "autoGenerate", m_AutoBondGenerationEnabled);
+                TryLoadYamlScalar(bonds, "showLengthLabels", m_ShowBondLengthLabels);
+                TryLoadYamlScalar(bonds, "deleteLabelOnlyMode", m_BondLabelDeleteOnlyMode);
+                TryLoadYamlScalar(bonds, "thresholdScale", m_BondThresholdScale);
+                TryLoadYamlScalar(bonds, "usePairThresholdOverrides", m_BondUsePairThresholdOverrides);
+                std::string pairThresholdOverrides;
+                TryLoadYamlScalar(bonds, "pairThresholdOverrides", pairThresholdOverrides);
+                if (!pairThresholdOverrides.empty())
+                {
+                    m_BondPairThresholdScaleOverrides = ParsePairScaleOverrides(pairThresholdOverrides);
+                }
+                int bondRenderStyle = static_cast<int>(m_BondRenderStyle);
+                TryLoadYamlScalar(bonds, "renderStyle", bondRenderStyle);
+                m_BondRenderStyle = static_cast<BondRenderStyle>(std::clamp(bondRenderStyle, 0, 2));
+                TryLoadYamlScalar(bonds, "lineWidth", m_BondLineWidth);
+                TryLoadYamlScalar(bonds, "lineWidthMin", m_BondLineWidthMin);
+                TryLoadYamlScalar(bonds, "lineWidthMax", m_BondLineWidthMax);
+                TryLoadYamlVec3(bonds["color"], m_BondColor);
+                TryLoadYamlVec3(bonds["selectedColor"], m_BondSelectedColor);
+
+                const YAML::Node bondLabels = bonds["labels"];
+                TryLoadYamlVec3(bondLabels["textColor"], m_BondLabelTextColor);
+                TryLoadYamlVec3(bondLabels["backgroundColor"], m_BondLabelBackgroundColor);
+                TryLoadYamlVec3(bondLabels["borderColor"], m_BondLabelBorderColor);
+                TryLoadYamlScalar(bondLabels, "precision", m_BondLabelPrecision);
+
+                const YAML::Node selection = viewport["selection"];
+                int selectionFilter = static_cast<int>(m_SelectionFilter);
+                TryLoadYamlScalar(selection, "filter", selectionFilter);
+                m_SelectionFilter = static_cast<SelectionFilter>(std::clamp(selectionFilter, 0, 3));
+                TryLoadYamlVec3(selection["color"], m_SelectionColor);
+                TryLoadYamlScalar(selection, "outlineThickness", m_SelectionOutlineThickness);
+                TryLoadYamlScalar(selection, "debugToFile", m_SelectionDebugToFile);
+
+                const YAML::Node input = viewport["input"];
+                TryLoadYamlScalar(input, "invertViewportZoom", m_InvertViewportZoom);
+                TryLoadYamlScalar(input, "invertCircleSelectWheel", m_InvertCircleSelectWheel);
+                TryLoadYamlScalar(input, "circleSelectWheelStep", m_CircleSelectWheelStep);
+
+                const YAML::Node cursor = viewport["cursor"];
+                TryLoadYamlScalar(cursor, "show", m_Show3DCursor);
+                TryLoadYamlVec3(cursor["position"], m_CursorPosition);
+                TryLoadYamlScalar(cursor, "visualScale", m_CursorVisualScale);
+                TryLoadYamlScalar(cursor, "snapToGrid", m_CursorSnapToGrid);
+
+                const YAML::Node measurements = viewport["measurements"];
+                TryLoadYamlScalar(measurements, "show", m_ShowSelectionMeasurements);
+                TryLoadYamlScalar(measurements, "showDistance", m_ShowSelectionDistanceMeasurement);
+                TryLoadYamlScalar(measurements, "showAngle", m_ShowSelectionAngleMeasurement);
+                TryLoadYamlScalar(measurements, "showStaticAngleLabels", m_ShowStaticAngleLabels);
+                TryLoadYamlScalar(measurements, "precision", m_MeasurementPrecision);
+                TryLoadYamlVec3(measurements["textColor"], m_MeasurementTextColor);
+                TryLoadYamlVec3(measurements["backgroundColor"], m_MeasurementBackgroundColor);
+
+                const YAML::Node scene = viewport["scene"];
+                TryLoadYamlVec3(scene["origin"], m_SceneOriginPosition);
+
+                const YAML::Node gizmos = viewport["gizmos"];
+                TryLoadYamlScalar(gizmos, "viewEnabled", m_ViewGuizmoEnabled);
+                TryLoadYamlScalar(gizmos, "viewDragMode", m_ViewGizmoDragMode);
+                TryLoadYamlScalar(gizmos, "transformSize", m_TransformGizmoSize);
+                TryLoadYamlScalar(gizmos, "viewScale", m_ViewGizmoScale);
+                TryLoadYamlScalar(gizmos, "offsetRight", m_ViewGizmoOffsetRight);
+                TryLoadYamlScalar(gizmos, "offsetTop", m_ViewGizmoOffsetTop);
+                TryLoadYamlScalar(gizmos, "rotateStepDegrees", m_ViewportRotateStepDeg);
+                TryLoadYamlScalar(gizmos, "fallbackMarkerScale", m_FallbackGizmoVisualScale);
+                TryLoadYamlScalar(gizmos, "showTransformEmpties", m_ShowTransformEmpties);
+                TryLoadYamlScalar(gizmos, "transformEmptyVisualScale", m_TransformEmptyVisualScale);
+                TryLoadYamlScalar(gizmos, "showGlobalAxesOverlay", m_ShowGlobalAxesOverlay);
+                const YAML::Node globalAxes = gizmos["showGlobalAxis"];
+                TryLoadYamlScalar(globalAxes, "x", m_ShowGlobalAxis[0]);
+                TryLoadYamlScalar(globalAxes, "y", m_ShowGlobalAxis[1]);
+                TryLoadYamlScalar(globalAxes, "z", m_ShowGlobalAxis[2]);
+                TryLoadYamlScalar(gizmos, "useTemporaryLocalAxes", m_UseTemporaryLocalAxes);
+                int temporaryAxesSource = (m_TemporaryAxesSource == TemporaryAxesSource::ActiveEmpty) ? 1 : 0;
+                TryLoadYamlScalar(gizmos, "temporaryAxesSource", temporaryAxesSource);
+                m_TemporaryAxesSource = (temporaryAxesSource == 1) ? TemporaryAxesSource::ActiveEmpty : TemporaryAxesSource::SelectionAtoms;
+                TryLoadYamlScalar(gizmos, "temporaryAxisAtomA", m_TemporaryAxisAtomA);
+                TryLoadYamlScalar(gizmos, "temporaryAxisAtomB", m_TemporaryAxisAtomB);
+                TryLoadYamlScalar(gizmos, "temporaryAxisAtomC", m_TemporaryAxisAtomC);
+                TryLoadYamlVec3(gizmos["axisColorX"], m_AxisColors[0]);
+                TryLoadYamlVec3(gizmos["axisColorY"], m_AxisColors[1]);
+                TryLoadYamlVec3(gizmos["axisColorZ"], m_AxisColors[2]);
+            }
+
+            if (render)
+            {
+                TryLoadYamlScalar(render, "width", m_RenderImageWidth);
+                TryLoadYamlScalar(render, "height", m_RenderImageHeight);
+                int renderFormat = static_cast<int>(m_RenderImageFormat);
+                TryLoadYamlScalar(render, "format", renderFormat);
+                m_RenderImageFormat = static_cast<RenderImageFormat>(std::clamp(renderFormat, 0, 1));
+                TryLoadYamlScalar(render, "jpegQuality", m_RenderJpegQuality);
+                TryLoadYamlScalar(render, "cropEnabled", m_RenderCropEnabled);
+                TryLoadYamlArray4(render["cropRectNormalized"], m_RenderCropRectNormalized);
+                TryLoadYamlScalar(render, "showBondLengthLabels", m_RenderShowBondLengthLabels);
+                TryLoadYamlScalar(render, "bondLabelScaleMultiplier", m_RenderBondLabelScaleMultiplier);
+                TryLoadYamlScalar(render, "bondLabelPrecision", m_RenderBondLabelPrecision);
+                TryLoadYamlVec3(render["bondLabelTextColor"], m_RenderBondLabelTextColor);
+                TryLoadYamlVec3(render["bondLabelBackgroundColor"], m_RenderBondLabelBackgroundColor);
+                TryLoadYamlVec3(render["bondLabelBorderColor"], m_RenderBondLabelBorderColor);
+                TryLoadYamlScalar(render, "previewLongSideCap", m_RenderPreviewLongSideCap);
+                TryLoadYamlScalar(render, "dialogAspectLocked", m_RenderDialogAspectLocked);
+            }
+
+            if (hotkeys)
+            {
+                TryLoadYamlScalar(hotkeys, "addMenu", m_HotkeyAddMenu);
+                TryLoadYamlScalar(hotkeys, "openRender", m_HotkeyOpenRender);
+                TryLoadYamlScalar(hotkeys, "toggleSidePanels", m_HotkeyToggleSidePanels);
+                TryLoadYamlScalar(hotkeys, "deleteSelection", m_HotkeyDeleteSelection);
+                TryLoadYamlScalar(hotkeys, "hideSelection", m_HotkeyHideSelection);
+                TryLoadYamlScalar(hotkeys, "boxSelect", m_HotkeyBoxSelect);
+                TryLoadYamlScalar(hotkeys, "circleSelect", m_HotkeyCircleSelect);
+                TryLoadYamlScalar(hotkeys, "translateModal", m_HotkeyTranslateModal);
+                TryLoadYamlScalar(hotkeys, "translateGizmo", m_HotkeyTranslateGizmo);
+                TryLoadYamlScalar(hotkeys, "rotateGizmo", m_HotkeyRotateGizmo);
+                TryLoadYamlScalar(hotkeys, "scaleGizmo", m_HotkeyScaleGizmo);
+            }
+
+            if (elementCatalog)
+            {
+                std::string selectionSource;
+                TryLoadYamlScalar(elementCatalog, "selectionSource", selectionSource);
+                if (selectionSource == "viewport")
+                {
+                    m_ElementCatalogFollowViewportSelection = true;
+                }
+                else if (selectionSource == "periodicTable")
+                {
+                    m_ElementCatalogFollowViewportSelection = false;
+                }
+            }
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("LoadUiSettingsYaml failed: ") + exception.what());
+        }
+
+        SanitizeLoadedUiState();
+    }
+
+    void EditorLayer::SaveUiSettingsYaml() const
     {
         std::filesystem::create_directories("config");
 
-        std::ofstream out(kSettingsPath, std::ios::trunc);
+        std::ofstream out(kUiSettingsPath, std::ios::trunc);
         if (!out.is_open())
         {
             return;
         }
 
-        out << "theme=" << ThemeName(m_CurrentTheme) << '\n';
-        out << "show_demo_window=" << (m_ShowDemoWindow ? "1" : "0") << '\n';
-        out << "show_log_panel=" << (m_ShowLogPanel ? "1" : "0") << '\n';
-        out << "show_tools_panel=" << (m_ShowToolsPanel ? "1" : "0") << '\n';
-        out << "show_settings_panel=" << (m_ShowSettingsPanel ? "1" : "0") << '\n';
-        out << "font_scale=" << m_FontScale << '\n';
-        out << "log_filter=" << m_LogFilter << '\n';
-        out << "log_auto_scroll=" << (m_LogAutoScroll ? "1" : "0") << '\n';
-        out << "camera_orbit_sensitivity=" << m_CameraOrbitSensitivity << '\n';
-        out << "camera_pan_sensitivity=" << m_CameraPanSensitivity << '\n';
-        out << "camera_zoom_sensitivity=" << m_CameraZoomSensitivity << '\n';
-        out << "camera_sensitivity_mode=relative_v2" << '\n';
-        if (m_Camera)
-        {
-            out << "camera_target_x=" << m_Camera->GetTarget().x << '\n';
-            out << "camera_target_y=" << m_Camera->GetTarget().y << '\n';
-            out << "camera_target_z=" << m_Camera->GetTarget().z << '\n';
-            out << "camera_distance=" << m_Camera->GetDistance() << '\n';
-            out << "camera_yaw=" << m_Camera->GetYaw() << '\n';
-            out << "camera_pitch=" << m_Camera->GetPitch() << '\n';
-            out << "camera_roll=" << m_Camera->GetRoll() << '\n';
-        }
-        else
-        {
-            out << "camera_target_x=" << m_CameraTargetPersisted.x << '\n';
-            out << "camera_target_y=" << m_CameraTargetPersisted.y << '\n';
-            out << "camera_target_z=" << m_CameraTargetPersisted.z << '\n';
-            out << "camera_distance=" << m_CameraDistancePersisted << '\n';
-            out << "camera_yaw=" << m_CameraYawPersisted << '\n';
-            out << "camera_pitch=" << m_CameraPitchPersisted << '\n';
-            out << "camera_roll=" << m_CameraRollPersisted << '\n';
-        }
-        out << "viewport_bg_r=" << m_SceneSettings.clearColor.r << '\n';
-        out << "viewport_bg_g=" << m_SceneSettings.clearColor.g << '\n';
-        out << "viewport_bg_b=" << m_SceneSettings.clearColor.b << '\n';
-        out << "viewport_grid_enabled=" << (m_SceneSettings.drawGrid ? "1" : "0") << '\n';
-        out << "viewport_cell_edges=" << (m_ShowCellEdges ? "1" : "0") << '\n';
-        out << "viewport_grid_extent=" << m_SceneSettings.gridHalfExtent << '\n';
-        out << "viewport_grid_spacing=" << m_SceneSettings.gridSpacing << '\n';
-        out << "viewport_grid_line_width=" << m_SceneSettings.gridLineWidth << '\n';
-        out << "viewport_grid_origin_x=" << m_SceneSettings.gridOrigin.x << '\n';
-        out << "viewport_grid_origin_y=" << m_SceneSettings.gridOrigin.y << '\n';
-        out << "viewport_grid_origin_z=" << 0.0f << '\n';
-        out << "viewport_grid_color_r=" << m_SceneSettings.gridColor.r << '\n';
-        out << "viewport_grid_color_g=" << m_SceneSettings.gridColor.g << '\n';
-        out << "viewport_grid_color_b=" << m_SceneSettings.gridColor.b << '\n';
-        out << "viewport_grid_opacity=" << m_SceneSettings.gridOpacity << '\n';
-        out << "viewport_cell_edge_color_r=" << m_CellEdgeColor.r << '\n';
-        out << "viewport_cell_edge_color_g=" << m_CellEdgeColor.g << '\n';
-        out << "viewport_cell_edge_color_b=" << m_CellEdgeColor.b << '\n';
-        out << "viewport_cell_edge_line_width=" << m_CellEdgeLineWidth << '\n';
-        out << "viewport_light_dir_x=" << m_SceneSettings.lightDirection.x << '\n';
-        out << "viewport_light_dir_y=" << m_SceneSettings.lightDirection.y << '\n';
-        out << "viewport_light_dir_z=" << m_SceneSettings.lightDirection.z << '\n';
-        out << "viewport_light_ambient=" << m_SceneSettings.ambientStrength << '\n';
-        out << "viewport_light_diffuse=" << m_SceneSettings.diffuseStrength << '\n';
-        out << "viewport_light_color_r=" << m_SceneSettings.lightColor.r << '\n';
-        out << "viewport_light_color_g=" << m_SceneSettings.lightColor.g << '\n';
-        out << "viewport_light_color_b=" << m_SceneSettings.lightColor.b << '\n';
-        out << "viewport_atom_scale=" << m_SceneSettings.atomScale << '\n';
-        out << "viewport_atom_override=" << (m_SceneSettings.overrideAtomColor ? "1" : "0") << '\n';
-        out << "viewport_atom_override_r=" << m_SceneSettings.atomOverrideColor.r << '\n';
-        out << "viewport_atom_override_g=" << m_SceneSettings.atomOverrideColor.g << '\n';
-        out << "viewport_atom_override_b=" << m_SceneSettings.atomOverrideColor.b << '\n';
-        out << "viewport_atom_element_colors=" << SerializeElementColorOverrides(m_ElementColorOverrides) << '\n';
-        out << "viewport_atom_brightness=" << m_SceneSettings.atomBrightness << '\n';
-        out << "viewport_atom_glow=" << m_SceneSettings.atomGlowStrength << '\n';
-        out << "viewport_bonds_auto=" << (m_AutoBondGenerationEnabled ? "1" : "0") << '\n';
-        out << "viewport_bonds_labels=" << (m_ShowBondLengthLabels ? "1" : "0") << '\n';
-        out << "viewport_bonds_render_style=" << static_cast<int>(m_BondRenderStyle) << '\n';
-        out << "viewport_bond_label_delete_only=" << (m_BondLabelDeleteOnlyMode ? "1" : "0") << '\n';
-        out << "viewport_bonds_threshold_scale=" << m_BondThresholdScale << '\n';
-        out << "viewport_bonds_pair_override_enabled=" << (m_BondUsePairThresholdOverrides ? "1" : "0") << '\n';
-        out << "viewport_bond_pair_scales=" << SerializePairScaleOverrides(m_BondPairThresholdScaleOverrides) << '\n';
-        out << "viewport_bonds_line_width=" << m_BondLineWidth << '\n';
-        out << "viewport_bonds_line_width_min=" << m_BondLineWidthMin << '\n';
-        out << "viewport_bonds_line_width_max=" << m_BondLineWidthMax << '\n';
-        out << "viewport_bonds_color_r=" << m_BondColor.r << '\n';
-        out << "viewport_bonds_color_g=" << m_BondColor.g << '\n';
-        out << "viewport_bonds_color_b=" << m_BondColor.b << '\n';
-        out << "viewport_bonds_selected_color_r=" << m_BondSelectedColor.r << '\n';
-        out << "viewport_bonds_selected_color_g=" << m_BondSelectedColor.g << '\n';
-        out << "viewport_bonds_selected_color_b=" << m_BondSelectedColor.b << '\n';
-        out << "selection_color_r=" << m_SelectionColor.r << '\n';
-        out << "selection_color_g=" << m_SelectionColor.g << '\n';
-        out << "selection_color_b=" << m_SelectionColor.b << '\n';
-        out << "selection_outline_thickness=" << m_SelectionOutlineThickness << '\n';
-        out << "selection_debug_to_file=" << (m_SelectionDebugToFile ? "1" : "0") << '\n';
-        out << "viewport_render_scale=" << m_ViewportRenderScale << '\n';
-        out << "viewport_projection_mode=" << m_ProjectionModeIndex << '\n';
-        out << "viewport_cursor_show=" << (m_Show3DCursor ? "1" : "0") << '\n';
-        out << "viewport_cursor_x=" << m_CursorPosition.x << '\n';
-        out << "viewport_cursor_y=" << m_CursorPosition.y << '\n';
-        out << "viewport_cursor_z=" << m_CursorPosition.z << '\n';
-        out << "viewport_touchpad_navigation=" << (m_TouchpadNavigationEnabled ? "1" : "0") << '\n';
-        out << "viewport_clean_view_mode=" << (m_CleanViewMode ? "1" : "0") << '\n';
-        out << "viewport_append_import_collection=" << (m_AppendImportToNewCollection ? "1" : "0") << '\n';
-        out << "viewport_measurement_show=" << (m_ShowSelectionMeasurements ? "1" : "0") << '\n';
-        out << "viewport_measurement_distance=" << (m_ShowSelectionDistanceMeasurement ? "1" : "0") << '\n';
-        out << "viewport_measurement_angle=" << (m_ShowSelectionAngleMeasurement ? "1" : "0") << '\n';
-        out << "viewport_static_angle_labels=" << (m_ShowStaticAngleLabels ? "1" : "0") << '\n';
-        out << "viewport_measurement_precision=" << m_MeasurementPrecision << '\n';
-        out << "viewport_measurement_text_color_r=" << m_MeasurementTextColor.r << '\n';
-        out << "viewport_measurement_text_color_g=" << m_MeasurementTextColor.g << '\n';
-        out << "viewport_measurement_text_color_b=" << m_MeasurementTextColor.b << '\n';
-        out << "viewport_measurement_bg_color_r=" << m_MeasurementBackgroundColor.r << '\n';
-        out << "viewport_measurement_bg_color_g=" << m_MeasurementBackgroundColor.g << '\n';
-        out << "viewport_measurement_bg_color_b=" << m_MeasurementBackgroundColor.b << '\n';
-        out << "scene_origin_x=" << m_SceneOriginPosition.x << '\n';
-        out << "scene_origin_y=" << m_SceneOriginPosition.y << '\n';
-        out << "scene_origin_z=" << m_SceneOriginPosition.z << '\n';
-        out << "light_position_x=" << m_LightPosition.x << '\n';
-        out << "light_position_y=" << m_LightPosition.y << '\n';
-        out << "light_position_z=" << m_LightPosition.z << '\n';
-        out << "viewport_cursor_scale=" << m_CursorVisualScale << '\n';
-        out << "viewport_cursor_snap=" << (m_CursorSnapToGrid ? "1" : "0") << '\n';
-        out << "viewport_view_gizmo=" << (m_ViewGuizmoEnabled ? "1" : "0") << '\n';
-        out << "viewport_view_gizmo_drag_mode=" << (m_ViewGizmoDragMode ? "1" : "0") << '\n';
-        out << "viewport_transform_gizmo_size=" << m_TransformGizmoSize << '\n';
-        out << "viewport_view_gizmo_scale=" << m_ViewGizmoScale << '\n';
-        out << "viewport_view_gizmo_offset_right=" << m_ViewGizmoOffsetRight << '\n';
-        out << "viewport_view_gizmo_offset_top=" << m_ViewGizmoOffsetTop << '\n';
-        out << "viewport_rotate_step_deg=" << m_ViewportRotateStepDeg << '\n';
-        out << "viewport_fallback_marker_scale=" << m_FallbackGizmoVisualScale << '\n';
-        out << "viewport_show_transform_empties=" << (m_ShowTransformEmpties ? "1" : "0") << '\n';
-        out << "viewport_transform_empty_visual_scale=" << m_TransformEmptyVisualScale << '\n';
-        out << "viewport_show_global_axes_overlay=" << (m_ShowGlobalAxesOverlay ? "1" : "0") << '\n';
-        out << "viewport_show_global_axis_x=" << (m_ShowGlobalAxis[0] ? "1" : "0") << '\n';
-        out << "viewport_show_global_axis_y=" << (m_ShowGlobalAxis[1] ? "1" : "0") << '\n';
-        out << "viewport_show_global_axis_z=" << (m_ShowGlobalAxis[2] ? "1" : "0") << '\n';
-        out << "gizmo_use_temporary_local_axes=" << (m_UseTemporaryLocalAxes ? "1" : "0") << '\n';
-        out << "gizmo_temp_axes_source=" << (m_TemporaryAxesSource == TemporaryAxesSource::ActiveEmpty ? 1 : 0) << '\n';
-        out << "gizmo_temp_axis_atom_a=" << m_TemporaryAxisAtomA << '\n';
-        out << "gizmo_temp_axis_atom_b=" << m_TemporaryAxisAtomB << '\n';
-        out << "gizmo_temp_axis_atom_c=" << m_TemporaryAxisAtomC << '\n';
-        out << "gizmo_axis_color_x_r=" << m_AxisColors[0].r << '\n';
-        out << "gizmo_axis_color_x_g=" << m_AxisColors[0].g << '\n';
-        out << "gizmo_axis_color_x_b=" << m_AxisColors[0].b << '\n';
-        out << "gizmo_axis_color_y_r=" << m_AxisColors[1].r << '\n';
-        out << "gizmo_axis_color_y_g=" << m_AxisColors[1].g << '\n';
-        out << "gizmo_axis_color_y_b=" << m_AxisColors[1].b << '\n';
-        out << "gizmo_axis_color_z_r=" << m_AxisColors[2].r << '\n';
-        out << "gizmo_axis_color_z_g=" << m_AxisColors[2].g << '\n';
-        out << "gizmo_axis_color_z_b=" << m_AxisColors[2].b << '\n';
-        out << "ui_spacing_scale=" << m_UiSpacingScale << '\n';
+        YAML::Node root;
+        root["version"] = 1;
+        root["ui"]["theme"] = ThemeName(m_CurrentTheme);
+        root["ui"]["fontScale"] = m_FontScale;
+        root["ui"]["spacingScale"] = m_UiSpacingScale;
 
+        root["panels"]["showDemoWindow"] = m_ShowDemoWindow;
+        root["panels"]["showLogPanel"] = m_ShowLogPanel;
+        root["panels"]["showStatsPanel"] = m_ShowStatsPanel;
+        root["panels"]["showViewportInfoPanel"] = m_ShowViewportInfoPanel;
+        root["panels"]["showShortcutReferencePanel"] = m_ShowShortcutReferencePanel;
+        root["panels"]["showElementCatalogPanel"] = m_ShowElementCatalogPanel;
+        root["panels"]["showPeriodicTablePanel"] = m_ShowPeriodicTablePanel;
+        root["panels"]["showActionsPanel"] = m_ShowActionsPanel;
+        root["panels"]["showAppearancePanel"] = m_ShowAppearancePanel;
+        root["panels"]["showSettingsPanel"] = m_ShowSettingsPanel;
+        root["panels"]["showSceneOutlinerPanel"] = m_ShowSceneOutlinerPanel;
+        root["panels"]["showObjectPropertiesPanel"] = m_ShowObjectPropertiesPanel;
+        root["panels"]["showRenderPreviewWindow"] = m_ShowRenderPreviewWindow;
+        root["panels"]["viewportSettingsOpen"] = m_ViewportSettingsOpen;
+
+        root["logs"]["filter"] = m_LogFilter;
+        root["logs"]["autoScroll"] = m_LogAutoScroll;
+
+        const glm::vec3 cameraTarget = m_Camera ? m_Camera->GetTarget() : m_CameraTargetPersisted;
+        root["camera"]["orbitSensitivity"] = m_CameraOrbitSensitivity;
+        root["camera"]["panSensitivity"] = m_CameraPanSensitivity;
+        root["camera"]["zoomSensitivity"] = m_CameraZoomSensitivity;
+        root["camera"]["target"] = MakeVec3Node(cameraTarget);
+        root["camera"]["distance"] = m_Camera ? m_Camera->GetDistance() : m_CameraDistancePersisted;
+        root["camera"]["yaw"] = m_Camera ? m_Camera->GetYaw() : m_CameraYawPersisted;
+        root["camera"]["pitch"] = m_Camera ? m_Camera->GetPitch() : m_CameraPitchPersisted;
+        root["camera"]["roll"] = m_Camera ? m_Camera->GetRoll() : m_CameraRollPersisted;
+        root["camera"]["sensitivityMode"] = "relative_v2";
+
+        root["viewport"]["clearColor"] = MakeColorNode(m_SceneSettings.clearColor);
+        root["viewport"]["projectionMode"] = m_ProjectionModeIndex;
+        root["viewport"]["renderScale"] = m_ViewportRenderScale;
+        root["viewport"]["touchpadNavigation"] = m_TouchpadNavigationEnabled;
+        root["viewport"]["cleanViewMode"] = m_CleanViewMode;
+        root["viewport"]["appendImportCollection"] = m_AppendImportToNewCollection;
+
+        root["viewport"]["grid"]["enabled"] = m_SceneSettings.drawGrid;
+        root["viewport"]["grid"]["showCellEdges"] = m_ShowCellEdges;
+        root["viewport"]["grid"]["halfExtent"] = m_SceneSettings.gridHalfExtent;
+        root["viewport"]["grid"]["spacing"] = m_SceneSettings.gridSpacing;
+        root["viewport"]["grid"]["lineWidth"] = m_SceneSettings.gridLineWidth;
+        root["viewport"]["grid"]["origin"] = MakeVec3Node(glm::vec3(m_SceneSettings.gridOrigin.x, m_SceneSettings.gridOrigin.y, 0.0f));
+        root["viewport"]["grid"]["color"] = MakeColorNode(m_SceneSettings.gridColor);
+        root["viewport"]["grid"]["opacity"] = m_SceneSettings.gridOpacity;
+        root["viewport"]["grid"]["cellEdgeColor"] = MakeColorNode(m_CellEdgeColor);
+        root["viewport"]["grid"]["cellEdgeLineWidth"] = m_CellEdgeLineWidth;
+
+        root["viewport"]["lighting"]["direction"] = MakeVec3Node(m_SceneSettings.lightDirection);
+        root["viewport"]["lighting"]["ambientStrength"] = m_SceneSettings.ambientStrength;
+        root["viewport"]["lighting"]["diffuseStrength"] = m_SceneSettings.diffuseStrength;
+        root["viewport"]["lighting"]["color"] = MakeColorNode(m_SceneSettings.lightColor);
+        root["viewport"]["lighting"]["position"] = MakeVec3Node(m_LightPosition);
+
+        root["viewport"]["atoms"]["overrideColorEnabled"] = m_SceneSettings.overrideAtomColor;
+        root["viewport"]["atoms"]["overrideColor"] = MakeColorNode(m_SceneSettings.atomOverrideColor);
+        root["viewport"]["atoms"]["brightness"] = m_SceneSettings.atomBrightness;
+        root["viewport"]["atoms"]["glowStrength"] = m_SceneSettings.atomGlowStrength;
+        root["viewport"]["atoms"]["selectedCustomColor"] = MakeColorNode(m_SelectedAtomCustomColor);
+
+        root["viewport"]["bonds"]["autoGenerate"] = m_AutoBondGenerationEnabled;
+        root["viewport"]["bonds"]["showLengthLabels"] = m_ShowBondLengthLabels;
+        root["viewport"]["bonds"]["renderStyle"] = static_cast<int>(m_BondRenderStyle);
+        root["viewport"]["bonds"]["deleteLabelOnlyMode"] = m_BondLabelDeleteOnlyMode;
+        root["viewport"]["bonds"]["thresholdScale"] = m_BondThresholdScale;
+        root["viewport"]["bonds"]["usePairThresholdOverrides"] = m_BondUsePairThresholdOverrides;
+        root["viewport"]["bonds"]["pairThresholdOverrides"] = SerializePairScaleOverrides(m_BondPairThresholdScaleOverrides);
+        root["viewport"]["bonds"]["lineWidth"] = m_BondLineWidth;
+        root["viewport"]["bonds"]["lineWidthMin"] = m_BondLineWidthMin;
+        root["viewport"]["bonds"]["lineWidthMax"] = m_BondLineWidthMax;
+        root["viewport"]["bonds"]["color"] = MakeColorNode(m_BondColor);
+        root["viewport"]["bonds"]["selectedColor"] = MakeColorNode(m_BondSelectedColor);
+        root["viewport"]["bonds"]["labels"]["textColor"] = MakeColorNode(m_BondLabelTextColor);
+        root["viewport"]["bonds"]["labels"]["backgroundColor"] = MakeColorNode(m_BondLabelBackgroundColor);
+        root["viewport"]["bonds"]["labels"]["borderColor"] = MakeColorNode(m_BondLabelBorderColor);
+        root["viewport"]["bonds"]["labels"]["precision"] = m_BondLabelPrecision;
+
+        root["viewport"]["selection"]["filter"] = static_cast<int>(m_SelectionFilter);
+        root["viewport"]["selection"]["color"] = MakeColorNode(m_SelectionColor);
+        root["viewport"]["selection"]["outlineThickness"] = m_SelectionOutlineThickness;
+        root["viewport"]["selection"]["debugToFile"] = m_SelectionDebugToFile;
+
+        root["viewport"]["input"]["invertViewportZoom"] = m_InvertViewportZoom;
+        root["viewport"]["input"]["invertCircleSelectWheel"] = m_InvertCircleSelectWheel;
+        root["viewport"]["input"]["circleSelectWheelStep"] = m_CircleSelectWheelStep;
+
+        root["viewport"]["cursor"]["show"] = m_Show3DCursor;
+        root["viewport"]["cursor"]["position"] = MakeVec3Node(m_CursorPosition);
+        root["viewport"]["cursor"]["visualScale"] = m_CursorVisualScale;
+        root["viewport"]["cursor"]["snapToGrid"] = m_CursorSnapToGrid;
+
+        root["viewport"]["measurements"]["show"] = m_ShowSelectionMeasurements;
+        root["viewport"]["measurements"]["showDistance"] = m_ShowSelectionDistanceMeasurement;
+        root["viewport"]["measurements"]["showAngle"] = m_ShowSelectionAngleMeasurement;
+        root["viewport"]["measurements"]["showStaticAngleLabels"] = m_ShowStaticAngleLabels;
+        root["viewport"]["measurements"]["precision"] = m_MeasurementPrecision;
+        root["viewport"]["measurements"]["textColor"] = MakeColorNode(m_MeasurementTextColor);
+        root["viewport"]["measurements"]["backgroundColor"] = MakeColorNode(m_MeasurementBackgroundColor);
+
+        root["viewport"]["scene"]["origin"] = MakeVec3Node(m_SceneOriginPosition);
+
+        root["viewport"]["gizmos"]["viewEnabled"] = m_ViewGuizmoEnabled;
+        root["viewport"]["gizmos"]["viewDragMode"] = m_ViewGizmoDragMode;
+        root["viewport"]["gizmos"]["transformSize"] = m_TransformGizmoSize;
+        root["viewport"]["gizmos"]["viewScale"] = m_ViewGizmoScale;
+        root["viewport"]["gizmos"]["offsetRight"] = m_ViewGizmoOffsetRight;
+        root["viewport"]["gizmos"]["offsetTop"] = m_ViewGizmoOffsetTop;
+        root["viewport"]["gizmos"]["rotateStepDegrees"] = m_ViewportRotateStepDeg;
+        root["viewport"]["gizmos"]["fallbackMarkerScale"] = m_FallbackGizmoVisualScale;
+        root["viewport"]["gizmos"]["showTransformEmpties"] = m_ShowTransformEmpties;
+        root["viewport"]["gizmos"]["transformEmptyVisualScale"] = m_TransformEmptyVisualScale;
+        root["viewport"]["gizmos"]["showGlobalAxesOverlay"] = m_ShowGlobalAxesOverlay;
+        root["viewport"]["gizmos"]["showGlobalAxis"]["x"] = m_ShowGlobalAxis[0];
+        root["viewport"]["gizmos"]["showGlobalAxis"]["y"] = m_ShowGlobalAxis[1];
+        root["viewport"]["gizmos"]["showGlobalAxis"]["z"] = m_ShowGlobalAxis[2];
+        root["viewport"]["gizmos"]["useTemporaryLocalAxes"] = m_UseTemporaryLocalAxes;
+        root["viewport"]["gizmos"]["temporaryAxesSource"] = (m_TemporaryAxesSource == TemporaryAxesSource::ActiveEmpty) ? 1 : 0;
+        root["viewport"]["gizmos"]["temporaryAxisAtomA"] = m_TemporaryAxisAtomA;
+        root["viewport"]["gizmos"]["temporaryAxisAtomB"] = m_TemporaryAxisAtomB;
+        root["viewport"]["gizmos"]["temporaryAxisAtomC"] = m_TemporaryAxisAtomC;
+        root["viewport"]["gizmos"]["axisColorX"] = MakeColorNode(m_AxisColors[0]);
+        root["viewport"]["gizmos"]["axisColorY"] = MakeColorNode(m_AxisColors[1]);
+        root["viewport"]["gizmos"]["axisColorZ"] = MakeColorNode(m_AxisColors[2]);
+
+        root["renderImage"]["width"] = m_RenderImageWidth;
+        root["renderImage"]["height"] = m_RenderImageHeight;
+        root["renderImage"]["format"] = static_cast<int>(m_RenderImageFormat);
+        root["renderImage"]["jpegQuality"] = m_RenderJpegQuality;
+        root["renderImage"]["cropEnabled"] = m_RenderCropEnabled;
+        root["renderImage"]["cropRectNormalized"] = MakeArray4Node(m_RenderCropRectNormalized);
+        root["renderImage"]["showBondLengthLabels"] = m_RenderShowBondLengthLabels;
+        root["renderImage"]["bondLabelScaleMultiplier"] = m_RenderBondLabelScaleMultiplier;
+        root["renderImage"]["bondLabelPrecision"] = m_RenderBondLabelPrecision;
+        root["renderImage"]["bondLabelTextColor"] = MakeColorNode(m_RenderBondLabelTextColor);
+        root["renderImage"]["bondLabelBackgroundColor"] = MakeColorNode(m_RenderBondLabelBackgroundColor);
+        root["renderImage"]["bondLabelBorderColor"] = MakeColorNode(m_RenderBondLabelBorderColor);
+        root["renderImage"]["previewLongSideCap"] = m_RenderPreviewLongSideCap;
+        root["renderImage"]["dialogAspectLocked"] = m_RenderDialogAspectLocked;
+
+        root["hotkeys"]["addMenu"] = m_HotkeyAddMenu;
+        root["hotkeys"]["openRender"] = m_HotkeyOpenRender;
+        root["hotkeys"]["toggleSidePanels"] = m_HotkeyToggleSidePanels;
+        root["hotkeys"]["deleteSelection"] = m_HotkeyDeleteSelection;
+        root["hotkeys"]["hideSelection"] = m_HotkeyHideSelection;
+        root["hotkeys"]["boxSelect"] = m_HotkeyBoxSelect;
+        root["hotkeys"]["circleSelect"] = m_HotkeyCircleSelect;
+        root["hotkeys"]["translateModal"] = m_HotkeyTranslateModal;
+        root["hotkeys"]["translateGizmo"] = m_HotkeyTranslateGizmo;
+        root["hotkeys"]["rotateGizmo"] = m_HotkeyRotateGizmo;
+        root["hotkeys"]["scaleGizmo"] = m_HotkeyScaleGizmo;
+        root["elementCatalog"]["selectionSource"] = m_ElementCatalogFollowViewportSelection ? "viewport" : "periodicTable";
+
+        YAML::Emitter emitter;
+        emitter.SetIndent(2);
+        emitter << root;
+        out << emitter.c_str();
+    }
+
+    void EditorLayer::SaveSettings() const
+    {
+        SaveUiSettingsYaml();
+        SaveAtomSettings();
+        ImGuiLayer::SaveCurrentStyle();
         SaveSceneState();
     }
 
@@ -2134,6 +3726,9 @@ namespace ds
             collection.selectable = (getValue(prefix + "selectable") != "0");
             m_Collections.push_back(collection);
         }
+
+        m_ElementColorOverrides = ParseElementColorOverrides(getValue("scene_project_element_color_overrides"));
+        m_ElementScaleOverrides = ParseElementScaleOverrides(getValue("scene_project_element_scale_overrides"));
 
         int emptyCount = 0;
         try
@@ -2427,6 +4022,8 @@ namespace ds
             out << prefix << "visible=" << (collection.visible ? 1 : 0) << '\n';
             out << prefix << "selectable=" << (collection.selectable ? 1 : 0) << '\n';
         }
+        out << "scene_project_element_color_overrides=" << SerializeElementColorOverrides(m_ElementColorOverrides) << '\n';
+        out << "scene_project_element_scale_overrides=" << SerializeElementScaleOverrides(m_ElementScaleOverrides) << '\n';
 
         out << "scene_empty_count=" << m_TransformEmpties.size() << '\n';
         for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)

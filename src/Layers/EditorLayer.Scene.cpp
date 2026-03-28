@@ -452,10 +452,12 @@ namespace ds
         if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
         {
             m_WorkingStructure.atoms[atomIndex].position = m_WorkingStructure.CartesianToDirect(position);
+            m_AutoBondsDirty = true;
             return;
         }
 
         m_WorkingStructure.atoms[atomIndex].position = position;
+        m_AutoBondsDirty = true;
     }
 
     glm::vec3 EditorLayer::ComputeSelectionCenter() const

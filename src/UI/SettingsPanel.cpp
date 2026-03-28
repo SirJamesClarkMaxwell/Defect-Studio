@@ -1,6 +1,7 @@
 #include "UI/SettingsPanel.h"
 
 #include "Layers/EditorLayer.h"
+#include "Layers/ImGuiLayer.h"
 
 #include <imgui.h>
 
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <random>
+#include <string>
 
 #include <glm/vec3.hpp>
 
@@ -33,9 +35,114 @@ namespace ds
     {
         ImGui::Begin("Settings", &editor.m_ShowSettingsPanel);
 
+        auto drawHelpMarker = [](const char *description)
+        {
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            {
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+                ImGui::TextUnformatted(description);
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
+        };
+
         const char *gizmoOperations[] = {"Translate", "Rotate", "Scale"};
         const char *gizmoModes[] = {"Local (selection)", "World", "Relative (surrounding)"};
         const ImGuiTreeNodeFlags defaultOpenFlags = ImGuiTreeNodeFlags_DefaultOpen;
+        auto keyDisplayName = [](std::uint32_t key) -> std::string
+        {
+            if (key == 0u)
+            {
+                return std::string("(unbound)");
+            }
+
+            const char *name = ImGui::GetKeyName(static_cast<ImGuiKey>(key));
+            if (name == nullptr || name[0] == '\0')
+            {
+                return "Key " + std::to_string(key);
+            }
+
+            return std::string(name);
+        };
+        static const ImGuiKey kHotkeyOptions[] = {
+            ImGuiKey_None,
+            ImGuiKey_A, ImGuiKey_B, ImGuiKey_C, ImGuiKey_D, ImGuiKey_E, ImGuiKey_F, ImGuiKey_G,
+            ImGuiKey_H, ImGuiKey_I, ImGuiKey_J, ImGuiKey_K, ImGuiKey_L, ImGuiKey_M, ImGuiKey_N,
+            ImGuiKey_O, ImGuiKey_P, ImGuiKey_Q, ImGuiKey_R, ImGuiKey_S, ImGuiKey_T, ImGuiKey_U,
+            ImGuiKey_V, ImGuiKey_W, ImGuiKey_X, ImGuiKey_Y, ImGuiKey_Z,
+            ImGuiKey_F1, ImGuiKey_F2, ImGuiKey_F3, ImGuiKey_F4, ImGuiKey_F5, ImGuiKey_F6,
+            ImGuiKey_F7, ImGuiKey_F8, ImGuiKey_F9, ImGuiKey_F10, ImGuiKey_F11, ImGuiKey_F12,
+            ImGuiKey_Delete};
+        auto drawHotkeyCombo = [&](const char *label, std::uint32_t &binding, const char *description)
+        {
+            const std::string preview = keyDisplayName(binding);
+            if (ImGui::BeginCombo(label, preview.c_str()))
+            {
+                for (ImGuiKey key : kHotkeyOptions)
+                {
+                    const std::uint32_t keyValue = static_cast<std::uint32_t>(key);
+                    const bool isSelected = (binding == keyValue);
+                    const std::string optionLabel = keyDisplayName(keyValue);
+                    if (ImGui::Selectable(optionLabel.c_str(), isSelected))
+                    {
+                        binding = keyValue;
+                        settingsChanged = true;
+                    }
+                    if (isSelected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            drawHelpMarker(description);
+        };
+        auto resetInputDefaults = [&]()
+        {
+            editor.m_TouchpadNavigationEnabled = true;
+            editor.m_InvertViewportZoom = false;
+            editor.m_InvertCircleSelectWheel = false;
+            editor.m_CircleSelectWheelStep = 4.0f;
+            editor.m_HotkeyAddMenu = static_cast<std::uint32_t>(ImGuiKey_A);
+            editor.m_HotkeyOpenRender = static_cast<std::uint32_t>(ImGuiKey_F12);
+            editor.m_HotkeyToggleSidePanels = static_cast<std::uint32_t>(ImGuiKey_N);
+            editor.m_HotkeyDeleteSelection = static_cast<std::uint32_t>(ImGuiKey_Delete);
+            editor.m_HotkeyHideSelection = static_cast<std::uint32_t>(ImGuiKey_H);
+            editor.m_HotkeyBoxSelect = static_cast<std::uint32_t>(ImGuiKey_B);
+            editor.m_HotkeyCircleSelect = static_cast<std::uint32_t>(ImGuiKey_C);
+            editor.m_HotkeyTranslateModal = static_cast<std::uint32_t>(ImGuiKey_G);
+            editor.m_HotkeyTranslateGizmo = static_cast<std::uint32_t>(ImGuiKey_T);
+            editor.m_HotkeyRotateGizmo = static_cast<std::uint32_t>(ImGuiKey_R);
+            editor.m_HotkeyScaleGizmo = static_cast<std::uint32_t>(ImGuiKey_S);
+            settingsChanged = true;
+        };
+        auto resetDockLayoutDefaults = [&]()
+        {
+            editor.m_ShowDemoWindow = false;
+            editor.m_ShowLogPanel = true;
+            editor.m_ShowStatsPanel = true;
+            editor.m_ShowViewportInfoPanel = true;
+            editor.m_ShowShortcutReferencePanel = false;
+            editor.m_ShowSceneOutlinerPanel = true;
+            editor.m_ShowObjectPropertiesPanel = true;
+            editor.m_ShowActionsPanel = true;
+            editor.m_ShowAppearancePanel = true;
+            editor.m_ViewportSettingsOpen = true;
+            editor.m_ShowRenderPreviewWindow = true;
+            editor.m_ShowSettingsPanel = true;
+            editor.m_RequestDockLayoutReset = true;
+            settingsChanged = true;
+        };
+        auto resetViewportPerformanceDefaults = [&]()
+        {
+            editor.m_RenderScaleMin = 0.25f;
+            editor.m_RenderScaleMax = 1.0f;
+            editor.m_ViewportRenderScale = 1.0f;
+            settingsChanged = true;
+        };
 
         if (ImGui::CollapsingHeader("Gizmo", defaultOpenFlags))
         {
@@ -103,6 +210,8 @@ namespace ds
             {
                 settingsChanged = true;
             }
+            ImGui::SameLine();
+            drawHelpMarker("Temporary local axes let you build a transform frame from selected atoms or an active Empty.\nUseful for defect-local edits when world axes are not convenient.");
 
             if (editor.m_UseTemporaryLocalAxes && ImGui::CollapsingHeader("Temporary Axes & Transform Empty", defaultOpenFlags))
             {
@@ -117,6 +226,7 @@ namespace ds
                 ImGui::SeparatorText("Transform Empty");
                 if (ImGui::Button("Add empty at 3D cursor"))
                 {
+                    editor.PushUndoSnapshot("Add empty at 3D cursor");
                     EditorLayer::TransformEmpty empty;
                     empty.id = GenerateSceneUUID();
                     empty.position = editor.m_CursorPosition;
@@ -139,6 +249,7 @@ namespace ds
                 }
                 if (ImGui::Button("Add empty at selection center") && canAddFromSelection)
                 {
+                    editor.PushUndoSnapshot("Add empty at selection center");
                     EditorLayer::TransformEmpty empty;
                     empty.id = GenerateSceneUUID();
                     empty.position = editor.ComputeSelectionCenter();
@@ -191,6 +302,7 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Delete active empty") && hasActiveEmpty)
                 {
+                    editor.PushUndoSnapshot("Delete active empty");
                     editor.DeleteTransformEmptyAtIndex(editor.m_ActiveTransformEmptyIndex);
                     settingsChanged = true;
                     hasActiveEmpty = editor.HasActiveTransformEmpty();
@@ -203,18 +315,21 @@ namespace ds
 
                     if (ImGui::Button("Move empty to selection center") && canAddFromSelection)
                     {
+                        editor.PushUndoSnapshot("Move empty to selection center");
                         activeEmpty.position = editor.ComputeSelectionCenter();
                         settingsChanged = true;
                     }
                     ImGui::SameLine();
                     if (ImGui::Button("Move empty to 3D cursor"))
                     {
+                        editor.PushUndoSnapshot("Move empty to 3D cursor");
                         activeEmpty.position = editor.m_CursorPosition;
                         settingsChanged = true;
                     }
 
                     if (ImGui::Button("Align empty axes to world"))
                     {
+                        editor.PushUndoSnapshot("Align empty axes to world");
                         activeEmpty.axes = {
                             glm::vec3(1.0f, 0.0f, 0.0f),
                             glm::vec3(0.0f, 1.0f, 0.0f),
@@ -224,6 +339,7 @@ namespace ds
 
                     if (ImGui::Button("Align empty axes from selection") && canAddFromSelection)
                     {
+                        editor.PushUndoSnapshot("Align empty axes from selection");
                         std::array<glm::vec3, 3> axes = activeEmpty.axes;
                         if (editor.ComputeSelectionAxesAround(activeEmpty.position, axes))
                         {
@@ -234,6 +350,7 @@ namespace ds
 
                     if (ImGui::Button("Align empty Z axis to selected atoms") && editor.m_SelectedAtomIndices.size() >= 2)
                     {
+                        editor.PushUndoSnapshot("Align empty Z axis from selected atoms");
                         if (editor.AlignEmptyZAxisFromSelectedAtoms(editor.m_ActiveTransformEmptyIndex))
                         {
                             settingsChanged = true;
@@ -243,6 +360,7 @@ namespace ds
                     ImGui::SameLine();
                     if (ImGui::Button("Selection -> Add empty + tmp transform") && canAddFromSelection)
                     {
+                        editor.PushUndoSnapshot("Create empty from selection");
                         EditorLayer::TransformEmpty empty;
                         empty.id = GenerateSceneUUID();
                         empty.position = editor.ComputeSelectionCenter();
@@ -270,6 +388,8 @@ namespace ds
                 {
                     ImGui::SeparatorText("Selection-axes authoring");
                     ImGui::TextUnformatted("Temporary frame: X = A -> B, C defines frame plane.");
+                    ImGui::SameLine();
+                    drawHelpMarker("A and B define the X axis direction.\nC supplies the reference plane so the remaining axes can be resolved consistently.");
                     ImGui::Text("A=%d  B=%d  C=%d", editor.m_TemporaryAxisAtomA, editor.m_TemporaryAxisAtomB, editor.m_TemporaryAxisAtomC);
 
                     const bool hasAtLeastTwoSelected = editor.m_SelectedAtomIndices.size() >= 2;
@@ -361,6 +481,97 @@ namespace ds
             }
         }
 
+        if (ImGui::CollapsingHeader("Input & Navigation", defaultOpenFlags))
+        {
+            if (ImGui::Checkbox("Touchpad-friendly navigation", &editor.m_TouchpadNavigationEnabled))
+            {
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            drawHelpMarker("Enables Alt+LMB orbit, Alt+Shift+LMB pan and Alt+RMB zoom for laptop / touchpad workflows.");
+
+            if (ImGui::Checkbox("Invert viewport zoom", &editor.m_InvertViewportZoom))
+            {
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            drawHelpMarker("Flips mouse-wheel and touchpad zoom direction in the 3D viewport.");
+
+            if (ImGui::Checkbox("Invert circle-select wheel", &editor.m_InvertCircleSelectWheel))
+            {
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            drawHelpMarker("Reverses how the mouse wheel changes the circle-select radius while the C tool is armed.");
+
+            if (ImGui::SliderFloat("Circle-select wheel step", &editor.m_CircleSelectWheelStep, 1.0f, 32.0f, "%.0f px"))
+            {
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            drawHelpMarker("How much the selection circle grows or shrinks per wheel tick.");
+
+            ImGui::SeparatorText("Hotkeys");
+            drawHotkeyCombo("Add object popup", editor.m_HotkeyAddMenu, "Used together with Shift. Default: Shift+A.");
+            drawHotkeyCombo("Render image dialog", editor.m_HotkeyOpenRender, "Opens the Render Image popup and preview. Default: F12.");
+            drawHotkeyCombo("Toggle side panels", editor.m_HotkeyToggleSidePanels, "Shows or hides the docked workflow sidebars. Default: N.");
+            drawHotkeyCombo("Delete selection", editor.m_HotkeyDeleteSelection, "Deletes the current selection or active bond label. Default: Delete.");
+            drawHotkeyCombo("Hide selection", editor.m_HotkeyHideSelection, "H hides, Alt+same key unhides all scene elements. Default: H.");
+            drawHotkeyCombo("Arm box select", editor.m_HotkeyBoxSelect, "Arms rectangle selection in the viewport. Default: B.");
+            drawHotkeyCombo("Arm circle select", editor.m_HotkeyCircleSelect, "Arms circle selection in the viewport. Default: C.");
+            drawHotkeyCombo("Modal translate", editor.m_HotkeyTranslateModal, "Starts Blender-style modal translate. Default: G.");
+            drawHotkeyCombo("Translate gizmo", editor.m_HotkeyTranslateGizmo, "Switches the transform gizmo to translate mode. Default: T.");
+            drawHotkeyCombo("Rotate gizmo", editor.m_HotkeyRotateGizmo, "Switches the transform gizmo to rotate mode. Default: R.");
+            drawHotkeyCombo("Scale gizmo", editor.m_HotkeyScaleGizmo, "Switches the transform gizmo to scale mode. Default: S.");
+
+            if (ImGui::Button("Reset input defaults"))
+            {
+                resetInputDefaults();
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Windows & Diagnostics", defaultOpenFlags))
+        {
+            if (ImGui::Checkbox("Show log / errors", &editor.m_ShowLogPanel))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Show stats", &editor.m_ShowStatsPanel))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Show viewport info", &editor.m_ShowViewportInfoPanel))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Show shortcuts", &editor.m_ShowShortcutReferencePanel))
+            {
+                settingsChanged = true;
+            }
+            if (ImGui::Checkbox("Show ImGui Demo", &editor.m_ShowDemoWindow))
+            {
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("Profiler");
+#ifdef TRACY_ENABLE
+            ImGui::TextUnformatted("Tracy instrumentation: enabled in this build");
+#else
+            ImGui::TextUnformatted("Tracy instrumentation: disabled in this build");
+#endif
+            ImGui::SameLine();
+            drawHelpMarker("Use the Stats panel for quick frame timing in-app. Tracy captures are available only in builds compiled with TRACY_ENABLE.");
+
+            if (ImGui::Button("Open diagnostics windows"))
+            {
+                editor.m_ShowLogPanel = true;
+                editor.m_ShowStatsPanel = true;
+                editor.m_ShowViewportInfoPanel = true;
+                editor.m_ShowShortcutReferencePanel = true;
+                settingsChanged = true;
+            }
+        }
+
         if (ImGui::CollapsingHeader("Persistence", defaultOpenFlags))
         {
             if (ImGui::Button("Save UI settings"))
@@ -369,6 +580,43 @@ namespace ds
             }
             ImGui::SameLine();
             ImGui::TextUnformatted("(auto-save on change enabled)");
+
+            if (ImGui::Button("Save current ImGui style"))
+            {
+                ImGuiLayer::SaveCurrentStyle();
+            }
+            ImGui::SameLine();
+            drawHelpMarker("Use after tweaking colors, rounding or spacing in the ImGui Demo style editor.");
+
+            if (ImGui::Button("Load saved ImGui style"))
+            {
+                if (ImGuiLayer::LoadSavedStyle())
+                {
+                    settingsChanged = true;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset saved ImGui style"))
+            {
+                ImGuiLayer::ResetSavedStyle();
+                editor.ApplyTheme(editor.m_CurrentTheme);
+                settingsChanged = true;
+            }
+
+            ImGui::SeparatorText("Defaults");
+            if (ImGui::Button("Reset viewport performance"))
+            {
+                resetViewportPerformanceDefaults();
+            }
+            ImGui::SameLine();
+            drawHelpMarker("Restores native viewport rendering scale and the default allowed render-scale range.");
+
+            if (ImGui::Button("Reset dock layout"))
+            {
+                resetDockLayoutDefaults();
+            }
+            ImGui::SameLine();
+            drawHelpMarker("Restores the default Hazel-like docking arrangement and panel visibility.");
         }
 
         ImGui::End();

@@ -12,6 +12,38 @@ namespace ds
 
     namespace
     {
+        std::string BuildShortFileName(std::string_view filePath)
+        {
+            if (filePath.empty())
+            {
+                return {};
+            }
+
+            return std::filesystem::path(filePath).filename().string();
+        }
+
+        std::string BuildShortFunctionName(std::string_view functionName)
+        {
+            if (functionName.empty())
+            {
+                return {};
+            }
+
+            std::string trimmed(functionName);
+            const std::size_t parenPos = trimmed.find('(');
+            if (parenPos != std::string::npos)
+            {
+                trimmed.erase(parenPos);
+            }
+
+            const std::size_t lastSpacePos = trimmed.find_last_of(' ');
+            if (lastSpacePos != std::string::npos && lastSpacePos + 1 < trimmed.size())
+            {
+                trimmed.erase(0, lastSpacePos + 1);
+            }
+
+            return trimmed;
+        }
 
         std::string BuildTimestampNow()
         {
@@ -38,13 +70,15 @@ namespace ds
         return instance;
     }
 
-    void Logger::Log(LogLevel level, std::string_view message)
+    void Logger::Log(LogLevel level, std::string_view message, const std::source_location &location)
     {
         std::scoped_lock lock(m_Mutex);
 
         const std::string timestamp = BuildTimestampNow();
+        const std::string file = BuildShortFileName(location.file_name());
+        const std::string function = BuildShortFunctionName(location.function_name());
         const std::string text(message);
-        m_Entries.push_back(LogEntry{level, timestamp, text});
+        m_Entries.push_back(LogEntry{level, timestamp, file, function, location.line(), text});
         if (level == LogLevel::Error || level == LogLevel::Fatal)
         {
             ++m_ErrorCount;
@@ -72,7 +106,10 @@ namespace ds
                 levelText = "FATAL";
             }
 
-            out << '[' << timestamp << "] [" << levelText << "] " << text << '\n';
+            out << '[' << timestamp << "] [" << levelText << "] "
+                << '[' << file << ':' << location.line() << "] "
+                << '[' << function << "] "
+                << text << '\n';
         }
 
         constexpr std::size_t maxEntries = 2000;
@@ -102,29 +139,29 @@ namespace ds
         return m_ErrorCount;
     }
 
-    void LogTrace(std::string_view message)
+    void LogTrace(std::string_view message, const std::source_location &location)
     {
-        Logger::Get().Log(LogLevel::Trace, message);
+        Logger::Get().Log(LogLevel::Trace, message, location);
     }
 
-    void LogInfo(std::string_view message)
+    void LogInfo(std::string_view message, const std::source_location &location)
     {
-        Logger::Get().Log(LogLevel::Info, message);
+        Logger::Get().Log(LogLevel::Info, message, location);
     }
 
-    void LogWarn(std::string_view message)
+    void LogWarn(std::string_view message, const std::source_location &location)
     {
-        Logger::Get().Log(LogLevel::Warn, message);
+        Logger::Get().Log(LogLevel::Warn, message, location);
     }
 
-    void LogError(std::string_view message)
+    void LogError(std::string_view message, const std::source_location &location)
     {
-        Logger::Get().Log(LogLevel::Error, message);
+        Logger::Get().Log(LogLevel::Error, message, location);
     }
 
-    void LogFatal(std::string_view message)
+    void LogFatal(std::string_view message, const std::source_location &location)
     {
-        Logger::Get().Log(LogLevel::Fatal, message);
+        Logger::Get().Log(LogLevel::Fatal, message, location);
     }
 
 } // namespace ds

@@ -7,7 +7,7 @@
   - render preview / export separation from the main viewport
   - shared bond-label layout and export composition path
   - `EditorLayer` split into multiple `.cpp` files for faster incremental builds
-- Recommended next branch: `task/08-ui-panels-ux`
+- Recommended next branch: `task/09-ui-panels-ux`
 - Build status in this session:
   - `DefectsStudio.sln` builds successfully in `Debug|x64` via direct MSBuild
   - `scripts/Verify-Build.bat` is still not the most reliable source of truth in this environment
@@ -43,16 +43,18 @@ The following items were intentionally moved out of T07 into a later post-refact
 - Multi-viewport support (different defects in different viewports)
 
 See `TODO.md` task:
-- `T11c - Advanced render architecture follow-up`
+- `T12c - Advanced render architecture follow-up`
 
-## Next recommended task: T08
+## Next recommended task: T09
 Goal: clean up editor UX and align the app more closely with the Hazel-style guide.
 
 Recommended first steps:
 1. Define panel taxonomy:
-   - what belongs in `Tools`
+   - what belongs in `Appearance`
    - what belongs in `Settings`
    - what belongs in `Viewport Settings`
+   - what belongs in `Render Image`
+   - keep scene actions separate from scene appearance controls
 2. Apply Hazel-style visual pass:
    - hierarchy left
    - properties right
@@ -88,8 +90,8 @@ I am continuing after the completed T07 pass.
 Please:
 1. read `docs/project-control/TODO.md`, `docs/project-control/SESSION_HANDOFF.md`, and `docs/project-control/hazel-ui-style-guide.md`,
 2. confirm the current branch and git status,
-3. start T08 on `task/08-ui-panels-ux`,
-4. propose a clear split between `Tools`, `Settings`, and `Viewport Settings`,
+3. start T09 on `task/09-ui-panels-ux`,
+4. propose a clear split between `Appearance`, `Settings`, `Viewport Settings`, and `Render Image`,
 5. implement the first Hazel-style UI cleanup pass,
 6. improve the logging window UX,
 7. summarize what was finished and what UI decisions still need owner input.

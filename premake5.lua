@@ -18,6 +18,7 @@ IncludeDir["glad"] = "vendor/glad_gen/include"
 IncludeDir["imguizmo"] = "vendor/imguizmo"
 IncludeDir["imviewguizmo"] = "vendor/imviewguizmo"
 IncludeDir["tracy"] = "vendor/tracy/public"
+IncludeDir["yaml_cpp"] = "vendor/yaml-cpp/include"
 
 filter "action:vs*"
     flags { "MultiProcessorCompile" }
@@ -172,6 +173,46 @@ project "Glad"
         runtime "Release"
         optimize "on"
 
+project "yaml-cpp"
+    location "vendor/yaml-cpp"
+    kind "StaticLib"
+    language "C++"
+    cppdialect "C++latest"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files
+    {
+        "%{prj.location}/include/**.h",
+        "%{prj.location}/src/**.h",
+        "%{prj.location}/src/**.cpp"
+    }
+
+    includedirs
+    {
+        "%{prj.location}/include",
+        "%{prj.location}/src"
+    }
+
+    defines
+    {
+        "YAML_CPP_STATIC_DEFINE",
+        "_CRT_SECURE_NO_WARNINGS"
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+
+    filter "configurations:Debug"
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        runtime "Release"
+        optimize "on"
+
 group ""
 
 project "DefectsStudio"
@@ -201,7 +242,8 @@ project "DefectsStudio"
         IncludeDir["imviewguizmo"],
         IncludeDir["glm"],
         IncludeDir["glad"],
-        IncludeDir["tracy"]
+        IncludeDir["tracy"],
+        IncludeDir["yaml_cpp"]
     }
 
     links
@@ -209,6 +251,7 @@ project "DefectsStudio"
         "GLFW",
         "ImGui",
         "Glad",
+        "yaml-cpp",
         "opengl32.lib"
     }
 
@@ -216,7 +259,8 @@ project "DefectsStudio"
     {
         "IMGUI_ENABLE_DOCKING",
         "IMGUI_IMPL_OPENGL_LOADER_GLAD2",
-        "GLFW_INCLUDE_NONE"
+        "GLFW_INCLUDE_NONE",
+        "YAML_CPP_STATIC_DEFINE"
     }
 
     filter "system:windows"

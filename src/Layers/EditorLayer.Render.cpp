@@ -5,20 +5,52 @@
 
 namespace ds
 {
-    void EditorLayer::DrawPeriodicTableWindow()
+    void EditorLayer::OpenPeriodicTable(PeriodicTableTarget target, bool openedFromContextMenu)
     {
-        if (!m_PeriodicTableOpen)
+        m_PeriodicTableTarget = target;
+        m_PeriodicTableOpenedFromContextMenu = openedFromContextMenu;
+        m_PeriodicTableOpen = true;
+        m_RequestPeriodicTableFocus = true;
+    }
+
+    std::string EditorLayer::ResolvePeriodicTableActiveElement(PeriodicTableTarget target) const
+    {
+        if (target == PeriodicTableTarget::ChangeSelectedAtoms)
         {
+            return NormalizeElementSymbol(std::string(m_ChangeAtomElementBuffer.data()));
+        }
+        if (target == PeriodicTableTarget::ElementAppearanceEditor)
+        {
+            return NormalizeElementSymbol(m_ElementCatalogSelectedSymbol);
+        }
+
+        return NormalizeElementSymbol(std::string(m_AddAtomElementBuffer.data()));
+    }
+
+    void EditorLayer::ApplyPeriodicTableSelection(const char *symbol, PeriodicTableTarget target)
+    {
+        if (target == PeriodicTableTarget::ChangeSelectedAtoms)
+        {
+            std::snprintf(m_PendingChangeAtomElementBuffer.data(), m_PendingChangeAtomElementBuffer.size(), "%s", symbol);
+            m_ChangeAtomTypeConfirmOpen = true;
             return;
         }
 
-        ImGui::SetNextWindowSize(ImVec2(760.0f, 430.0f), ImGuiCond_FirstUseEver);
-        if (!ImGui::Begin("Periodic Table", &m_PeriodicTableOpen))
+        if (target == PeriodicTableTarget::ElementAppearanceEditor)
         {
-            ImGui::End();
+            m_ElementCatalogSelectedSymbol = NormalizeElementSymbol(symbol);
+            m_ShowElementCatalogPanel = true;
             return;
         }
 
+        std::snprintf(m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size(), "%s", symbol);
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Selected element: " + std::string(symbol);
+        m_PeriodicTableOpenedFromContextMenu = false;
+    }
+
+    void EditorLayer::DrawPeriodicTableSelector(const char *instanceId, PeriodicTableTarget target, bool closeAfterSelection)
+    {
         const char *tableRows[7][18] = {
             {"H", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "He"},
             {"Li", "Be", "", "", "", "", "", "", "", "", "", "", "B", "C", "N", "O", "F", "Ne"},
@@ -33,29 +65,9 @@ namespace ds
 
         const float cellWidth = 36.0f;
         const float cellHeight = 32.0f;
+        const std::string activeTargetElement = ResolvePeriodicTableActiveElement(target);
 
-        auto setSelectedElement = [&](const char *symbol)
-        {
-            if (m_PeriodicTableTarget == PeriodicTableTarget::ChangeSelectedAtoms)
-            {
-                std::snprintf(m_PendingChangeAtomElementBuffer.data(), m_PendingChangeAtomElementBuffer.size(), "%s", symbol);
-                m_ChangeAtomTypeConfirmOpen = true;
-            }
-            else
-            {
-                std::snprintf(m_AddAtomElementBuffer.data(), m_AddAtomElementBuffer.size(), "%s", symbol);
-                m_LastStructureOperationFailed = false;
-                m_LastStructureMessage = "Selected element: " + std::string(symbol);
-                m_PeriodicTableOpenedFromContextMenu = false;
-            }
-
-            m_PeriodicTableOpen = false;
-        };
-
-        const std::string activeTargetElement =
-            (m_PeriodicTableTarget == PeriodicTableTarget::ChangeSelectedAtoms)
-                ? std::string(m_ChangeAtomElementBuffer.data())
-                : std::string(m_AddAtomElementBuffer.data());
+        ImGui::PushID(instanceId);
 
         for (int row = 0; row < 7; ++row)
         {
@@ -83,7 +95,16 @@ namespace ds
 
                 if (ImGui::Button(symbol, ImVec2(cellWidth, cellHeight)))
                 {
-                    setSelectedElement(symbol);
+                    const bool closeTransientAddAtomWindow =
+                        target == PeriodicTableTarget::AddAtomEntry &&
+                        !m_ShowPeriodicTablePanel &&
+                        isSelected &&
+                        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                    ApplyPeriodicTableSelection(symbol, target);
+                    if ((closeAfterSelection || closeTransientAddAtomWindow) && !m_ShowPeriodicTablePanel)
+                    {
+                        m_PeriodicTableOpen = false;
+                    }
                 }
 
                 if (isSelected)
@@ -105,9 +126,19 @@ namespace ds
             }
 
             const char *symbol = lanthanoids[i];
+            const bool isSelected = activeTargetElement == symbol;
             if (ImGui::Button(symbol, ImVec2(cellWidth, cellHeight)))
             {
-                setSelectedElement(symbol);
+                const bool closeTransientAddAtomWindow =
+                    target == PeriodicTableTarget::AddAtomEntry &&
+                    !m_ShowPeriodicTablePanel &&
+                    isSelected &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                ApplyPeriodicTableSelection(symbol, target);
+                if ((closeAfterSelection || closeTransientAddAtomWindow) && !m_ShowPeriodicTablePanel)
+                {
+                    m_PeriodicTableOpen = false;
+                }
             }
         }
 
@@ -121,13 +152,61 @@ namespace ds
             }
 
             const char *symbol = actinoids[i];
+            const bool isSelected = activeTargetElement == symbol;
             if (ImGui::Button(symbol, ImVec2(cellWidth, cellHeight)))
             {
-                setSelectedElement(symbol);
+                const bool closeTransientAddAtomWindow =
+                    target == PeriodicTableTarget::AddAtomEntry &&
+                    !m_ShowPeriodicTablePanel &&
+                    isSelected &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                ApplyPeriodicTableSelection(symbol, target);
+                if ((closeAfterSelection || closeTransientAddAtomWindow) && !m_ShowPeriodicTablePanel)
+                {
+                    m_PeriodicTableOpen = false;
+                }
             }
         }
 
+        ImGui::PopID();
+    }
+
+    void EditorLayer::DrawPeriodicTableWindow()
+    {
+        const bool visible = m_ShowPeriodicTablePanel || m_PeriodicTableOpen;
+        if (!visible)
+        {
+            return;
+        }
+
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 430.0f), ImGuiCond_FirstUseEver);
+        if (m_RequestPeriodicTableFocus)
+        {
+            ImGui::SetNextWindowFocus();
+        }
+
+        bool keepWindowOpen = true;
+        if (!ImGui::Begin("Periodic Table", &keepWindowOpen))
+        {
+            ImGui::End();
+            m_RequestPeriodicTableFocus = false;
+            if (!keepWindowOpen)
+            {
+                m_ShowPeriodicTablePanel = false;
+                m_PeriodicTableOpen = false;
+            }
+            return;
+        }
+        m_RequestPeriodicTableFocus = false;
+
+        DrawPeriodicTableSelector("PeriodicTableWindow", m_PeriodicTableTarget, false);
+
         ImGui::End();
+        if (!keepWindowOpen)
+        {
+            m_ShowPeriodicTablePanel = false;
+            m_PeriodicTableOpen = false;
+        }
     }
 
     void EditorLayer::DrawChangeAtomTypeConfirmDialog()
@@ -184,8 +263,7 @@ namespace ds
         }
         else if (cancel)
         {
-            m_PeriodicTableOpen = true;
-            m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
+            OpenPeriodicTable(PeriodicTableTarget::ChangeSelectedAtoms, m_PeriodicTableOpenedFromContextMenu);
             m_ChangeAtomTypeConfirmOpen = false;
             ImGui::CloseCurrentPopup();
         }
