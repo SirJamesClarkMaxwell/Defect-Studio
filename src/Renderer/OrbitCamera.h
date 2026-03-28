@@ -27,6 +27,7 @@ namespace ds
         void SetOrthographicSize(float orthographicSize);
         void SetOrbitState(const glm::vec3 &target, float distance, float yaw, float pitch);
         void SetRoll(float rollRadians);
+        void SetClipPlanes(float nearClip, float farClip);
 
         const glm::mat4 &GetViewMatrix() const { return m_View; }
         const glm::mat4 &GetProjectionMatrix() const { return m_Projection; }
@@ -40,6 +41,8 @@ namespace ds
         float GetYaw() const { return m_Yaw; }
         float GetPitch() const { return m_Pitch; }
         float GetRoll() const { return m_Roll; }
+        float GetNearClip() const { return m_NearClip; }
+        float GetFarClip() const { return m_FarClip; }
 
     private:
         void RecalculateProjection();

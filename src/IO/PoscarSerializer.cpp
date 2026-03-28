@@ -1,6 +1,7 @@
 #include "IO/PoscarSerializer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -58,6 +59,48 @@ namespace ds
             return !outSpecies.empty() || rebuilt.atoms.empty();
         }
 
+        float WrapUnitCoordinate(float value)
+        {
+            float wrapped = static_cast<float>(value - std::floor(value));
+            if (wrapped < 0.0f)
+            {
+                wrapped += 1.0f;
+            }
+            if (wrapped >= 1.0f)
+            {
+                wrapped = 0.0f;
+            }
+            return wrapped;
+        }
+
+        void CanonicalizeDirectStructureTranslation(Structure &structure)
+        {
+            if (structure.atoms.empty())
+            {
+                return;
+            }
+
+            glm::vec3 boundsMin(std::numeric_limits<float>::max());
+            glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+            for (const Atom &atom : structure.atoms)
+            {
+                boundsMin = glm::min(boundsMin, atom.position);
+                boundsMax = glm::max(boundsMax, atom.position);
+            }
+
+            const glm::vec3 boundsCenter = 0.5f * (boundsMin + boundsMax);
+            const glm::vec3 translationToCenter = boundsCenter - glm::vec3(0.5f);
+            if (glm::dot(translationToCenter, translationToCenter) <= 1e-10f)
+            {
+                return;
+            }
+
+            for (Atom &atom : structure.atoms)
+            {
+                atom.position -= translationToCenter;
+            }
+        }
+
     } // namespace
 
     bool PoscarSerializer::WriteToFile(const Structure &structure, const std::string &path, const PoscarWriteOptions &options, std::string &error) const
@@ -107,6 +150,21 @@ namespace ds
         {
             error = conversionError;
             return false;
+        }
+
+        if (options.coordinateMode == CoordinateMode::Direct)
+        {
+            if (options.canonicalizeDirectTranslation)
+            {
+                CanonicalizeDirectStructureTranslation(writable);
+            }
+
+            for (Atom &atom : writable.atoms)
+            {
+                atom.position.x = WrapUnitCoordinate(atom.position.x);
+                atom.position.y = WrapUnitCoordinate(atom.position.y);
+                atom.position.z = WrapUnitCoordinate(atom.position.z);
+            }
         }
 
         std::vector<std::string> species;

@@ -14,6 +14,7 @@ namespace ds
         ~LayerStack();
 
         void PushLayer(Layer *layer);
+        void Clear();
         const std::vector<Layer *> &GetLayers() const { return m_Layers; }
 
     private:

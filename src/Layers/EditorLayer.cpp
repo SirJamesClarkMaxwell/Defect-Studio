@@ -5,6 +5,17 @@ namespace ds
     EditorLayer::EditorLayer()
         : Layer("EditorLayer")
     {
+        std::error_code pathError;
+        std::filesystem::path startupPath = std::filesystem::current_path(pathError);
+        if (pathError)
+        {
+            startupPath = std::filesystem::path(".");
+        }
+        startupPath = startupPath.lexically_normal();
+        m_AppRootPath = startupPath.string();
+        m_ProjectRootPath = m_AppRootPath;
+        m_ProjectName = startupPath.filename().string().empty() ? "Default Project" : startupPath.filename().string();
+
         const char *defaultImportPath = kFallbackStartupImportPath;
         const char *defaultExportPath = "exports/CONTCAR.vasp";
         const char *defaultRenderImagePath = "exports/render.png";
@@ -51,7 +62,7 @@ namespace ds
     void EditorLayer::OnAttach()
     {
         LogInfo("EditorLayer::OnAttach begin");
-        m_ApplyDefaultDockLayoutOnNextFrame = !std::filesystem::exists("config/imgui_layout.ini");
+        m_ApplyDefaultDockLayoutOnNextFrame = !std::filesystem::exists(GetAppRootPath() / "config" / "imgui_layout.ini");
 
         LogInfo("Loading app defaults from config/default.yaml");
         LoadDefaultConfigYaml();
@@ -68,8 +79,11 @@ namespace ds
         LogInfo("Loading UI settings from config/ui_settings.yaml");
         LoadSettings();
 
-        LogInfo("Loading scene state from config/scene_state.ini");
-        LoadSceneState();
+        LogInfo("Loading current project manifest");
+        LoadProjectManifest();
+
+        LogInfo("Migrating legacy project appearance if needed");
+        // The actual migration/load happens after project scene state is loaded.
 
         LogInfo("Applying scene defaults and validation");
         EnsureSceneDefaults();
@@ -111,18 +125,30 @@ namespace ds
         }
         ApplyCameraSensitivity();
 
-        const std::string startupImportPath = std::string(m_ImportPathBuffer.data());
+        const std::filesystem::path startupImportPath = ResolveProjectStructurePath();
         if (!startupImportPath.empty() && std::filesystem::exists(startupImportPath))
         {
-            LogInfo("Attempting startup import: " + startupImportPath);
-            LoadStructureFromPath(startupImportPath);
+            LogInfo("Attempting startup import: " + startupImportPath.string());
+            LoadStructureFromPath(startupImportPath.string());
         }
         else if (!startupImportPath.empty())
         {
             m_LastStructureOperationFailed = true;
-            m_LastStructureMessage = "Startup import skipped: file not found: " + startupImportPath;
+            m_LastStructureMessage = "Startup import skipped: file not found: " + startupImportPath.string();
             LogWarn(m_LastStructureMessage);
         }
+
+        LogInfo("Loading scene state from " + GetProjectSceneStateFilePath().string());
+        LoadSceneState();
+
+        LogInfo("Migrating legacy project appearance if needed");
+        MigrateLegacyProjectAppearanceFromSceneStateIfNeeded();
+
+        LogInfo("Loading project appearance from " + GetProjectAppearanceFilePath().string());
+        LoadProjectAppearanceYaml();
+
+        EnsureSceneDefaults();
+        SyncRenderAppearanceFromViewport();
 
         LogInfo("EditorLayer attached with theme: " + std::string(ThemeName(m_CurrentTheme)) +
                 ", collections=" + std::to_string(m_Collections.size()) +

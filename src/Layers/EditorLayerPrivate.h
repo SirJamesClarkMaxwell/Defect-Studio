@@ -51,6 +51,7 @@
 #endif
 #include <Windows.h>
 #include <commdlg.h>
+#include <ShlObj.h>
 #endif
 
 
@@ -63,6 +64,22 @@ namespace ds
         constexpr float kBasePanSensitivity = 0.18f;
         constexpr float kBaseZoomSensitivity = 0.17f;
         constexpr const char *kSelectionDebugLogPath = "logs/selection_debug.log";
+
+#ifdef _WIN32
+        int CALLBACK BrowseFolderInitialSelectionCallback(HWND hwnd, UINT message, LPARAM, LPARAM userData)
+        {
+            if (message == BFFM_INITIALIZED && userData != 0)
+            {
+                const char *initialPath = reinterpret_cast<const char *>(userData);
+                if (initialPath != nullptr && initialPath[0] != '\0')
+                {
+                    SendMessageA(hwnd, BFFM_SETSELECTIONA, TRUE, userData);
+                }
+            }
+
+            return 0;
+        }
+#endif
 
         std::string NormalizeElementSymbol(const std::string &symbol);
 
@@ -623,7 +640,7 @@ namespace ds
             dialog.nMaxFile = kDialogBufferSize;
             dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 2;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "vasp";
 
             if (GetOpenFileNameA(&dialog) != FALSE)
@@ -685,7 +702,7 @@ namespace ds
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
             dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 1;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "vasp";
 
             if (GetSaveFileNameA(&dialog) != FALSE)
@@ -713,7 +730,7 @@ namespace ds
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
             dialog.lpstrFilter = "PNG image (*.png)\0*.png\0JPEG image (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 1;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "png";
 
             if (GetSaveFileNameA(&dialog) != FALSE)
@@ -725,6 +742,108 @@ namespace ds
             return false;
 #else
             (void)outPath;
+            return false;
+#endif
+        }
+
+        bool OpenNativeYamlDialog(std::string &outPath, const std::string &defaultPath = "project_appearance.yaml")
+        {
+#ifdef _WIN32
+            char pathBuffer[MAX_PATH] = {};
+            std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", defaultPath.c_str());
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer;
+            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFilter = "YAML files (*.yaml;*.yml)\0*.yaml;*.yml\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+            dialog.lpstrDefExt = "yaml";
+
+            if (GetOpenFileNameA(&dialog) != FALSE)
+            {
+                outPath = pathBuffer;
+                return true;
+            }
+
+            return false;
+#else
+            (void)outPath;
+            return false;
+#endif
+        }
+
+        bool SaveNativeYamlDialog(std::string &outPath, const std::string &defaultPath = "project_appearance.yaml")
+        {
+#ifdef _WIN32
+            char pathBuffer[MAX_PATH] = {};
+            std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", defaultPath.c_str());
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer;
+            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFilter = "YAML files (*.yaml;*.yml)\0*.yaml;*.yml\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
+            dialog.lpstrDefExt = "yaml";
+
+            if (GetSaveFileNameA(&dialog) != FALSE)
+            {
+                outPath = pathBuffer;
+                return true;
+            }
+
+            return false;
+#else
+            (void)outPath;
+            return false;
+#endif
+        }
+
+        bool OpenNativeFolderDialog(std::string &outPath, const char *title = "Select folder", const std::string &initialPath = std::string())
+        {
+#ifdef _WIN32
+            std::string initialFolder;
+            BROWSEINFOA browseInfo = {};
+            browseInfo.hwndOwner = nullptr;
+            browseInfo.lpszTitle = title;
+            browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+            if (!initialPath.empty())
+            {
+                std::filesystem::path normalized(initialPath);
+                if (!std::filesystem::exists(normalized))
+                {
+                    normalized = normalized.parent_path();
+                }
+                initialFolder = normalized.string();
+                browseInfo.lpfn = BrowseFolderInitialSelectionCallback;
+                browseInfo.lParam = reinterpret_cast<LPARAM>(initialFolder.c_str());
+            }
+
+            LPITEMIDLIST itemIdList = SHBrowseForFolderA(&browseInfo);
+            if (itemIdList == nullptr)
+            {
+                return false;
+            }
+
+            char folderPath[MAX_PATH] = {};
+            const BOOL success = SHGetPathFromIDListA(itemIdList, folderPath);
+            CoTaskMemFree(itemIdList);
+            if (success == FALSE)
+            {
+                return false;
+            }
+
+            outPath = folderPath;
+            return true;
+#else
+            (void)outPath;
+            (void)title;
+            (void)initialPath;
             return false;
 #endif
         }

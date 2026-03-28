@@ -109,7 +109,428 @@ namespace ds
             return node;
         }
 
+        std::filesystem::path NormalizeFilesystemPath(const std::filesystem::path &path)
+        {
+            std::error_code ec;
+            const std::filesystem::path absolutePath = std::filesystem::absolute(path, ec);
+            if (ec)
+            {
+                return path.lexically_normal();
+            }
+
+            const std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(absolutePath, ec);
+            if (!ec)
+            {
+                return canonicalPath;
+            }
+
+            return absolutePath.lexically_normal();
+        }
+
+        std::filesystem::path NormalizeProjectRootCandidate(const std::filesystem::path &path)
+        {
+            if (path.empty())
+            {
+                return {};
+            }
+
+            std::filesystem::path candidate = NormalizeFilesystemPath(path);
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(candidate, ec))
+            {
+                if (candidate.filename() == "project.yaml")
+                {
+                    candidate = candidate.parent_path();
+                }
+                else
+                {
+                    candidate = candidate.parent_path();
+                }
+            }
+
+            auto hasProjectManifest = [](const std::filesystem::path &root) -> bool
+            {
+                if (root.empty())
+                {
+                    return false;
+                }
+
+                std::error_code existsEc;
+                return std::filesystem::exists(root / "project.yaml", existsEc);
+            };
+
+            if (hasProjectManifest(candidate))
+            {
+                return candidate;
+            }
+
+            std::filesystem::path current = candidate;
+            while (!current.empty())
+            {
+                if (hasProjectManifest(current))
+                {
+                    return current;
+                }
+
+                if (current.filename() == "project" && current.parent_path().filename() == "config")
+                {
+                    const std::filesystem::path inferredRoot = current.parent_path().parent_path();
+                    if (!inferredRoot.empty())
+                    {
+                        return NormalizeFilesystemPath(inferredRoot);
+                    }
+                }
+
+                if (current == current.root_path())
+                {
+                    break;
+                }
+
+                current = current.parent_path();
+            }
+
+            if (candidate.filename() == "project" && candidate.parent_path().filename() == "config")
+            {
+                const std::filesystem::path inferredRoot = candidate.parent_path().parent_path();
+                if (!inferredRoot.empty())
+                {
+                    return NormalizeFilesystemPath(inferredRoot);
+                }
+            }
+
+            if (candidate.filename() == "config")
+            {
+                std::error_code configEc;
+                if (std::filesystem::exists(candidate / "project", configEc))
+                {
+                    const std::filesystem::path inferredRoot = candidate.parent_path();
+                    if (!inferredRoot.empty())
+                    {
+                        return NormalizeFilesystemPath(inferredRoot);
+                    }
+                }
+            }
+
+            return candidate;
+        }
+
+        std::string SerializeProjectPath(const std::filesystem::path &projectRoot, const std::filesystem::path &path)
+        {
+            if (path.empty())
+            {
+                return std::string();
+            }
+
+            const std::filesystem::path normalizedRoot = NormalizeFilesystemPath(projectRoot);
+            const std::filesystem::path normalizedPath = NormalizeFilesystemPath(path);
+            std::error_code ec;
+            const std::filesystem::path relativePath = std::filesystem::relative(normalizedPath, normalizedRoot, ec);
+            const std::string relativeGenericPath = relativePath.generic_string();
+            if (!ec && !relativeGenericPath.empty() && !relativeGenericPath.starts_with("../"))
+            {
+                return relativeGenericPath;
+            }
+
+            return normalizedPath.string();
+        }
+
     } // namespace
+
+    std::filesystem::path EditorLayer::GetAppRootPath() const
+    {
+        if (!m_AppRootPath.empty())
+        {
+            return NormalizeFilesystemPath(m_AppRootPath);
+        }
+
+        return NormalizeFilesystemPath(std::filesystem::path("."));
+    }
+
+    std::filesystem::path EditorLayer::GetAppUiSettingsFilePath() const
+    {
+        return NormalizeFilesystemPath(GetAppRootPath() / kUiSettingsPath);
+    }
+
+    std::filesystem::path EditorLayer::GetProjectRootPath() const
+    {
+        if (!m_ProjectRootPath.empty())
+        {
+            return NormalizeProjectRootCandidate(m_ProjectRootPath);
+        }
+
+        return GetAppRootPath();
+    }
+
+    std::filesystem::path EditorLayer::GetProjectUiSettingsFilePath() const
+    {
+        return NormalizeFilesystemPath(GetProjectRootPath() / kUiSettingsPath);
+    }
+
+    std::filesystem::path EditorLayer::ResolveProjectPath(const std::filesystem::path &relativePath) const
+    {
+        if (relativePath.empty())
+        {
+            return {};
+        }
+
+        if (relativePath.is_absolute())
+        {
+            return NormalizeFilesystemPath(relativePath);
+        }
+
+        return NormalizeFilesystemPath(GetProjectRootPath() / relativePath);
+    }
+
+    std::filesystem::path EditorLayer::GetProjectConfigDirectoryPath() const
+    {
+        return ResolveProjectPath(kProjectConfigDirectory);
+    }
+
+    std::filesystem::path EditorLayer::GetProjectAppearanceFilePath() const
+    {
+        return ResolveProjectPath(kProjectAppearancePath);
+    }
+
+    std::filesystem::path EditorLayer::GetProjectSceneStateFilePath() const
+    {
+        return ResolveProjectPath(kSceneStatePath);
+    }
+
+    std::filesystem::path EditorLayer::GetProjectManifestFilePath() const
+    {
+        return ResolveProjectPath(kProjectManifestPath);
+    }
+
+    std::filesystem::path EditorLayer::ResolveProjectStructurePath() const
+    {
+        if (m_ProjectStructurePath.empty())
+        {
+            const std::string importPath = std::string(m_ImportPathBuffer.data());
+            if (importPath.empty())
+            {
+                return {};
+            }
+            const std::filesystem::path importFilesystemPath(importPath);
+            if (importFilesystemPath.is_absolute())
+            {
+                return NormalizeFilesystemPath(importFilesystemPath);
+            }
+
+            return NormalizeFilesystemPath(GetAppRootPath() / importFilesystemPath);
+        }
+
+        return ResolveProjectPath(m_ProjectStructurePath);
+    }
+
+    void EditorLayer::AddRecentProjectPath(const std::filesystem::path &path)
+    {
+        const std::string normalized = NormalizeProjectRootCandidate(path).string();
+        if (normalized.empty())
+        {
+            return;
+        }
+
+        m_RecentProjectPaths.erase(
+            std::remove(m_RecentProjectPaths.begin(), m_RecentProjectPaths.end(), normalized),
+            m_RecentProjectPaths.end());
+        m_RecentProjectPaths.insert(m_RecentProjectPaths.begin(), normalized);
+        if (m_RecentProjectPaths.size() > kMaxRecentProjects)
+        {
+            m_RecentProjectPaths.resize(kMaxRecentProjects);
+        }
+    }
+
+    void EditorLayer::SaveProjectManifest() const
+    {
+        const std::filesystem::path projectRoot = GetProjectRootPath();
+        std::filesystem::create_directories(projectRoot);
+
+        YAML::Node root;
+        root["version"] = 1;
+        root["project"]["name"] = m_ProjectName.empty() ? projectRoot.filename().string() : m_ProjectName;
+
+        const std::filesystem::path structurePath = ResolveProjectStructurePath();
+        if (!structurePath.empty())
+        {
+            root["project"]["structurePath"] = SerializeProjectPath(projectRoot, structurePath);
+        }
+
+        std::ofstream out(GetProjectManifestFilePath(), std::ios::trunc);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        YAML::Emitter emitter;
+        emitter.SetIndent(2);
+        emitter << root;
+        out << emitter.c_str();
+    }
+
+    void EditorLayer::LoadProjectManifest()
+    {
+        const std::filesystem::path manifestPath = GetProjectManifestFilePath();
+        if (!std::filesystem::exists(manifestPath))
+        {
+            const std::filesystem::path projectRoot = GetProjectRootPath();
+            m_ProjectName = projectRoot.filename().string().empty() ? "Default Project" : projectRoot.filename().string();
+            if (m_ProjectStructurePath.empty())
+            {
+                m_ProjectStructurePath = std::string(m_ImportPathBuffer.data());
+            }
+            return;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(manifestPath.string());
+            const YAML::Node project = root["project"];
+            if (!project)
+            {
+                return;
+            }
+
+            std::string projectName;
+            TryLoadYamlScalar(project, "name", projectName);
+            if (!projectName.empty())
+            {
+                m_ProjectName = projectName;
+            }
+
+            std::string structurePath;
+            TryLoadYamlScalar(project, "structurePath", structurePath);
+            if (!structurePath.empty())
+            {
+                m_ProjectStructurePath = structurePath;
+                const std::filesystem::path resolvedStructurePath = ResolveProjectStructurePath();
+                std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", resolvedStructurePath.string().c_str());
+            }
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("LoadProjectManifest failed: ") + exception.what());
+        }
+    }
+
+    void EditorLayer::ResetProjectSceneState()
+    {
+        m_OriginalStructure.reset();
+        m_WorkingStructure = Structure{};
+        m_HasStructureLoaded = false;
+        m_GeneratedBonds.clear();
+        m_DeletedBondKeys.clear();
+        m_HiddenBondKeys.clear();
+        m_ManualBondKeys.clear();
+        m_HiddenAtomIndices.clear();
+        m_SelectedAtomIndices.clear();
+        m_SelectedBondKeys.clear();
+        m_SelectedBondLabelKey = 0;
+        m_OutlinerAtomSelectionAnchor.reset();
+        m_OutlinerCollectionSelectionAnchor.reset();
+        m_SelectedCollectionIndices.clear();
+        m_AtomNodeIds.clear();
+        m_AtomCollectionIndices.clear();
+        m_AtomColorOverrides.clear();
+        m_TransformEmpties.clear();
+        m_ObjectGroups.clear();
+        m_AngleLabelStates.clear();
+        m_BondLabelStates.clear();
+        m_ProjectStructurePath.clear();
+        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", "");
+        m_Collections.clear();
+        m_ActiveCollectionIndex = 0;
+        m_ActiveGroupIndex = -1;
+        m_SelectedTransformEmptyIndex = -1;
+        m_ActiveTransformEmptyIndex = -1;
+        m_SelectedSpecialNode = SpecialNodeSelection::None;
+        m_AutoBondsDirty = true;
+        ClearSceneHistory();
+        EnsureSceneDefaults();
+    }
+
+    bool EditorLayer::CreateProjectAt(const std::filesystem::path &folderPath)
+    {
+        const std::filesystem::path normalizedProjectRoot = NormalizeProjectRootCandidate(folderPath);
+        std::error_code ec;
+        std::filesystem::create_directories(normalizedProjectRoot / "config" / "project", ec);
+        if (ec)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Create project failed: " + ec.message();
+            LogError(m_LastStructureMessage);
+            return false;
+        }
+
+        SaveSettings();
+        m_ProjectRootPath = normalizedProjectRoot.string();
+        m_LastProjectDialogPath = normalizedProjectRoot.string();
+        m_ProjectName = normalizedProjectRoot.filename().string().empty() ? "Default Project" : normalizedProjectRoot.filename().string();
+        const std::filesystem::path importPathBuffer(m_ImportPathBuffer.data());
+        if (!importPathBuffer.empty())
+        {
+            const std::filesystem::path absoluteImportPath = importPathBuffer.is_absolute()
+                                                                ? NormalizeFilesystemPath(importPathBuffer)
+                                                                : NormalizeFilesystemPath(GetAppRootPath() / importPathBuffer);
+            m_ProjectStructurePath = SerializeProjectPath(normalizedProjectRoot, absoluteImportPath);
+        }
+        else
+        {
+            m_ProjectStructurePath.clear();
+        }
+        AddRecentProjectPath(normalizedProjectRoot);
+        SaveProjectManifest();
+        SaveSceneState();
+        SaveProjectAppearanceYaml();
+        SaveUiSettingsYaml();
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Created project at: " + normalizedProjectRoot.string();
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::OpenProjectAt(const std::filesystem::path &folderPath)
+    {
+        const std::filesystem::path normalizedProjectRoot = NormalizeProjectRootCandidate(folderPath);
+        if (!std::filesystem::exists(normalizedProjectRoot))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Open project failed: folder does not exist.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        SaveSettings();
+        m_ProjectRootPath = normalizedProjectRoot.string();
+        m_LastProjectDialogPath = normalizedProjectRoot.string();
+        AddRecentProjectPath(normalizedProjectRoot);
+        ResetProjectSceneState();
+        LoadProjectManifest();
+
+        bool missingProjectStructure = false;
+        const std::filesystem::path structurePath = ResolveProjectStructurePath();
+        if (!structurePath.empty() && std::filesystem::exists(structurePath))
+        {
+            LoadStructureFromPath(structurePath.string());
+        }
+        else if (!structurePath.empty())
+        {
+            missingProjectStructure = true;
+            LogWarn("Project structure missing: " + structurePath.string());
+        }
+
+        LoadSceneState();
+        MigrateLegacyProjectAppearanceFromSceneStateIfNeeded();
+        LoadProjectAppearanceYaml();
+        EnsureSceneDefaults();
+        SyncRenderAppearanceFromViewport();
+        SaveUiSettingsYaml();
+        m_LastStructureOperationFailed = missingProjectStructure;
+        m_LastStructureMessage = missingProjectStructure
+                                     ? ("Opened project, but structure file is missing: " + structurePath.string())
+                                     : ("Opened project: " + normalizedProjectRoot.string());
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
 
     bool EditorLayer::LoadStructureFromPath(const std::string &path)
     {
@@ -126,9 +547,13 @@ namespace ds
         m_WorkingStructure = parsed;
         m_OriginalStructure = parsed;
         m_HasStructureLoaded = true;
+        m_ProjectStructurePath = SerializeProjectPath(GetProjectRootPath(), std::filesystem::path(path));
+        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", path.c_str());
         EnsureAtomNodeIds();
         m_SelectedAtomIndices.clear();
         m_OutlinerAtomSelectionAnchor.reset();
+        m_OutlinerCollectionSelectionAnchor.reset();
+        m_SelectedCollectionIndices.clear();
         m_SelectedBondKeys.clear();
         m_DeletedBondKeys.clear();
         m_HiddenBondKeys.clear();
@@ -246,6 +671,8 @@ namespace ds
         m_AutoBondsDirty = true;
         m_SelectedAtomIndices.clear();
         m_OutlinerAtomSelectionAnchor.reset();
+        m_OutlinerCollectionSelectionAnchor.reset();
+        m_SelectedCollectionIndices.clear();
         m_SelectedBondKeys.clear();
         m_SelectedBondLabelKey = 0;
         EnsureAtomCollectionAssignments();
@@ -282,6 +709,71 @@ namespace ds
 
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "Exported structure to: " + path;
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const
+    {
+        if (!m_HasStructureLoaded)
+        {
+            return false;
+        }
+
+        if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return false;
+        }
+
+        outStructure = m_WorkingStructure;
+        outStructure.atoms.clear();
+        outStructure.atoms.reserve(m_WorkingStructure.atoms.size());
+
+        for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+        {
+            if (ResolveAtomCollectionIndex(atomIndex) == collectionIndex)
+            {
+                outStructure.atoms.push_back(m_WorkingStructure.atoms[atomIndex]);
+            }
+        }
+
+        if (outStructure.atoms.empty())
+        {
+            return false;
+        }
+
+        outStructure.RebuildSpeciesFromAtoms();
+        const std::string baseTitle = m_WorkingStructure.title.empty() ? "Generated by DefectsStudio" : m_WorkingStructure.title;
+        outStructure.title = baseTitle + " - " + m_Collections[static_cast<std::size_t>(collectionIndex)].name;
+        return true;
+    }
+
+    bool EditorLayer::ExportCollectionToPath(int collectionIndex, const std::string &path, CoordinateMode mode, int precision)
+    {
+        Structure collectionStructure;
+        if (!BuildCollectionExportStructure(collectionIndex, collectionStructure))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Export collection failed: collection has no atoms or is invalid.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        PoscarWriteOptions options;
+        options.coordinateMode = mode;
+        options.precision = precision;
+
+        std::string error;
+        if (!m_PoscarSerializer.WriteToFile(collectionStructure, path, options, error))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Export collection failed: " + error;
+            LogError(m_LastStructureMessage);
+            return false;
+        }
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Exported collection '" + m_Collections[static_cast<std::size_t>(collectionIndex)].name + "' to: " + path;
         LogInfo(m_LastStructureMessage);
         return true;
     }
@@ -1173,12 +1665,17 @@ namespace ds
 
     void EditorLayer::PushUndoSnapshot(std::string label)
     {
+        PushUndoSnapshot(std::move(label), CaptureSceneSnapshot());
+    }
+
+    void EditorLayer::PushUndoSnapshot(std::string label, const EditorSceneSnapshot &snapshot)
+    {
         if (m_SuspendUndoCapture)
         {
             return;
         }
 
-        m_UndoStack.push_back(EditorSceneHistoryEntry{std::move(label), CaptureSceneSnapshot()});
+        m_UndoStack.push_back(EditorSceneHistoryEntry{std::move(label), snapshot});
         if (m_UndoStack.size() > kMaxSceneHistoryEntries)
         {
             m_UndoStack.erase(m_UndoStack.begin(), m_UndoStack.begin() + static_cast<std::ptrdiff_t>(m_UndoStack.size() - kMaxSceneHistoryEntries));
@@ -3061,6 +3558,26 @@ namespace ds
             m_CursorVisualScale = 0.05f;
         if (m_CursorVisualScale > 2.0f)
             m_CursorVisualScale = 2.0f;
+        if (m_CursorFocusDistanceFactor < 0.25f)
+            m_CursorFocusDistanceFactor = 0.25f;
+        if (m_CursorFocusDistanceFactor > 2.50f)
+            m_CursorFocusDistanceFactor = 2.50f;
+        if (m_CursorFocusMinDistance < 0.10f)
+            m_CursorFocusMinDistance = 0.10f;
+        if (m_CursorFocusMinDistance > 20.0f)
+            m_CursorFocusMinDistance = 20.0f;
+        if (m_CursorFocusSelectionPadding < 1.0f)
+            m_CursorFocusSelectionPadding = 1.0f;
+        if (m_CursorFocusSelectionPadding > 8.0f)
+            m_CursorFocusSelectionPadding = 8.0f;
+        if (m_CameraClipNearPadding < 0.5f)
+            m_CameraClipNearPadding = 0.5f;
+        if (m_CameraClipNearPadding > 8.0f)
+            m_CameraClipNearPadding = 8.0f;
+        if (m_CameraClipFarPadding < 1.0f)
+            m_CameraClipFarPadding = 1.0f;
+        if (m_CameraClipFarPadding > 12.0f)
+            m_CameraClipFarPadding = 12.0f;
         if (m_ViewportRenderScale < 0.25f)
             m_ViewportRenderScale = 0.25f;
         if (m_ViewportRenderScale > 1.0f)
@@ -3093,6 +3610,8 @@ namespace ds
             m_TransformEmptyVisualScale = 0.06f;
         if (m_TransformEmptyVisualScale > 0.55f)
             m_TransformEmptyVisualScale = 0.55f;
+        if (m_LastProjectDialogPath.empty())
+            m_LastProjectDialogPath = GetProjectRootPath().string();
         if (m_SceneSettings.atomGlowStrength < 0.0f)
             m_SceneSettings.atomGlowStrength = 0.0f;
         if (m_SceneSettings.atomGlowStrength > 0.60f)
@@ -3174,15 +3693,30 @@ namespace ds
 
     void EditorLayer::LoadUiSettingsYaml()
     {
-        if (!std::filesystem::exists(kUiSettingsPath))
+        const std::filesystem::path appSettingsPath = GetAppUiSettingsFilePath();
+        if (!std::filesystem::exists(appSettingsPath))
         {
-            SaveUiSettingsYaml();
-            return;
+            SaveUiSettingsYamlToPath(appSettingsPath, true);
+        }
+        else
+        {
+            LoadUiSettingsYamlFromPath(appSettingsPath, true);
         }
 
+        const std::filesystem::path projectSettingsPath = GetProjectUiSettingsFilePath();
+        if (projectSettingsPath != appSettingsPath && std::filesystem::exists(projectSettingsPath))
+        {
+            LoadUiSettingsYamlFromPath(projectSettingsPath, false);
+        }
+
+        SanitizeLoadedUiState();
+    }
+
+    void EditorLayer::LoadUiSettingsYamlFromPath(const std::filesystem::path &settingsPath, bool includeProjectState)
+    {
         try
         {
-            const YAML::Node root = YAML::LoadFile(kUiSettingsPath);
+            const YAML::Node root = YAML::LoadFile(settingsPath.string());
 
             const YAML::Node ui = root["ui"];
             const YAML::Node panels = root["panels"];
@@ -3192,6 +3726,7 @@ namespace ds
             const YAML::Node render = root["renderImage"];
             const YAML::Node hotkeys = root["hotkeys"];
             const YAML::Node elementCatalog = root["elementCatalog"];
+            const YAML::Node projects = root["projects"];
 
             if (ui)
             {
@@ -3241,6 +3776,11 @@ namespace ds
                 TryLoadYamlScalar(camera, "orbitSensitivity", m_CameraOrbitSensitivity);
                 TryLoadYamlScalar(camera, "panSensitivity", m_CameraPanSensitivity);
                 TryLoadYamlScalar(camera, "zoomSensitivity", m_CameraZoomSensitivity);
+                TryLoadYamlScalar(camera, "cursorFocusDistanceFactor", m_CursorFocusDistanceFactor);
+                TryLoadYamlScalar(camera, "cursorFocusMinDistance", m_CursorFocusMinDistance);
+                TryLoadYamlScalar(camera, "cursorFocusSelectionPadding", m_CursorFocusSelectionPadding);
+                TryLoadYamlScalar(camera, "clipNearPadding", m_CameraClipNearPadding);
+                TryLoadYamlScalar(camera, "clipFarPadding", m_CameraClipFarPadding);
                 TryLoadYamlVec3(camera["target"], m_CameraTargetPersisted);
                 TryLoadYamlScalar(camera, "distance", m_CameraDistancePersisted);
                 TryLoadYamlScalar(camera, "yaw", m_CameraYawPersisted);
@@ -3289,6 +3829,7 @@ namespace ds
 
                 const YAML::Node bonds = viewport["bonds"];
                 TryLoadYamlScalar(bonds, "autoGenerate", m_AutoBondGenerationEnabled);
+                TryLoadYamlScalar(bonds, "autoRecalculateOnEdit", m_AutoRecalculateBondsOnEdit);
                 TryLoadYamlScalar(bonds, "showLengthLabels", m_ShowBondLengthLabels);
                 TryLoadYamlScalar(bonds, "deleteLabelOnlyMode", m_BondLabelDeleteOnlyMode);
                 TryLoadYamlScalar(bonds, "thresholdScale", m_BondThresholdScale);
@@ -3326,6 +3867,7 @@ namespace ds
                 TryLoadYamlScalar(input, "invertViewportZoom", m_InvertViewportZoom);
                 TryLoadYamlScalar(input, "invertCircleSelectWheel", m_InvertCircleSelectWheel);
                 TryLoadYamlScalar(input, "circleSelectWheelStep", m_CircleSelectWheelStep);
+                TryLoadYamlScalar(input, "duplicateAppliesOffset", m_DuplicateAppliesOffset);
 
                 const YAML::Node cursor = viewport["cursor"];
                 TryLoadYamlScalar(cursor, "show", m_Show3DCursor);
@@ -3420,21 +3962,94 @@ namespace ds
                 {
                     m_ElementCatalogFollowViewportSelection = false;
                 }
+
+                std::string selectedSymbol;
+                TryLoadYamlScalar(elementCatalog, "selectedSymbol", selectedSymbol);
+                if (!selectedSymbol.empty())
+                {
+                    m_ElementCatalogSelectedSymbol = selectedSymbol;
+                }
+            }
+
+            const YAML::Node sceneOutliner = root["sceneOutliner"];
+            if (sceneOutliner)
+            {
+                const YAML::Node treeOpenStates = sceneOutliner["treeOpenStates"];
+                if (treeOpenStates && treeOpenStates.IsMap())
+                {
+                    m_OutlinerTreeOpenStates.clear();
+                    for (const auto &entry : treeOpenStates)
+                    {
+                        if (!entry.first.IsScalar())
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            m_OutlinerTreeOpenStates[entry.first.as<std::string>()] = entry.second.as<bool>();
+                        }
+                        catch (const YAML::Exception &)
+                        {
+                        }
+                    }
+                }
+            }
+
+            if (includeProjectState && projects)
+            {
+                std::string currentRoot;
+                TryLoadYamlScalar(projects, "currentRoot", currentRoot);
+                if (!currentRoot.empty())
+                {
+                    m_ProjectRootPath = NormalizeProjectRootCandidate(currentRoot).string();
+                }
+
+                std::string projectName;
+                TryLoadYamlScalar(projects, "name", projectName);
+                if (!projectName.empty())
+                {
+                    m_ProjectName = projectName;
+                }
+
+                std::string lastDialogPath;
+                TryLoadYamlScalar(projects, "lastDialogPath", lastDialogPath);
+                if (!lastDialogPath.empty())
+                {
+                    m_LastProjectDialogPath = NormalizeFilesystemPath(lastDialogPath).string();
+                }
+
+                const YAML::Node recent = projects["recent"];
+                if (recent && recent.IsSequence())
+                {
+                    m_RecentProjectPaths.clear();
+                    for (const YAML::Node &entry : recent)
+                    {
+                        if (!entry.IsScalar())
+                        {
+                            continue;
+                        }
+                        AddRecentProjectPath(entry.as<std::string>());
+                    }
+                }
             }
         }
         catch (const YAML::Exception &exception)
         {
-            LogWarn(std::string("LoadUiSettingsYaml failed: ") + exception.what());
+            LogWarn(std::string("LoadUiSettingsYaml failed for ") + settingsPath.string() + ": " + exception.what());
         }
-
-        SanitizeLoadedUiState();
     }
 
-    void EditorLayer::SaveUiSettingsYaml() const
+    void EditorLayer::SaveUiSettingsYamlToPath(const std::filesystem::path &settingsPath, bool includeProjectState) const
     {
-        std::filesystem::create_directories("config");
+        if (settingsPath.empty())
+        {
+            return;
+        }
 
-        std::ofstream out(kUiSettingsPath, std::ios::trunc);
+        std::filesystem::create_directories(settingsPath.parent_path());
+
+        std::ofstream out(settingsPath, std::ios::trunc);
         if (!out.is_open())
         {
             return;
@@ -3468,6 +4083,11 @@ namespace ds
         root["camera"]["orbitSensitivity"] = m_CameraOrbitSensitivity;
         root["camera"]["panSensitivity"] = m_CameraPanSensitivity;
         root["camera"]["zoomSensitivity"] = m_CameraZoomSensitivity;
+        root["camera"]["cursorFocusDistanceFactor"] = m_CursorFocusDistanceFactor;
+        root["camera"]["cursorFocusMinDistance"] = m_CursorFocusMinDistance;
+        root["camera"]["cursorFocusSelectionPadding"] = m_CursorFocusSelectionPadding;
+        root["camera"]["clipNearPadding"] = m_CameraClipNearPadding;
+        root["camera"]["clipFarPadding"] = m_CameraClipFarPadding;
         root["camera"]["target"] = MakeVec3Node(cameraTarget);
         root["camera"]["distance"] = m_Camera ? m_Camera->GetDistance() : m_CameraDistancePersisted;
         root["camera"]["yaw"] = m_Camera ? m_Camera->GetYaw() : m_CameraYawPersisted;
@@ -3506,6 +4126,7 @@ namespace ds
         root["viewport"]["atoms"]["selectedCustomColor"] = MakeColorNode(m_SelectedAtomCustomColor);
 
         root["viewport"]["bonds"]["autoGenerate"] = m_AutoBondGenerationEnabled;
+        root["viewport"]["bonds"]["autoRecalculateOnEdit"] = m_AutoRecalculateBondsOnEdit;
         root["viewport"]["bonds"]["showLengthLabels"] = m_ShowBondLengthLabels;
         root["viewport"]["bonds"]["renderStyle"] = static_cast<int>(m_BondRenderStyle);
         root["viewport"]["bonds"]["deleteLabelOnlyMode"] = m_BondLabelDeleteOnlyMode;
@@ -3530,6 +4151,7 @@ namespace ds
         root["viewport"]["input"]["invertViewportZoom"] = m_InvertViewportZoom;
         root["viewport"]["input"]["invertCircleSelectWheel"] = m_InvertCircleSelectWheel;
         root["viewport"]["input"]["circleSelectWheelStep"] = m_CircleSelectWheelStep;
+        root["viewport"]["input"]["duplicateAppliesOffset"] = m_DuplicateAppliesOffset;
 
         root["viewport"]["cursor"]["show"] = m_Show3DCursor;
         root["viewport"]["cursor"]["position"] = MakeVec3Node(m_CursorPosition);
@@ -3596,6 +4218,25 @@ namespace ds
         root["hotkeys"]["rotateGizmo"] = m_HotkeyRotateGizmo;
         root["hotkeys"]["scaleGizmo"] = m_HotkeyScaleGizmo;
         root["elementCatalog"]["selectionSource"] = m_ElementCatalogFollowViewportSelection ? "viewport" : "periodicTable";
+        root["elementCatalog"]["selectedSymbol"] = m_ElementCatalogSelectedSymbol;
+        YAML::Node outlinerTreeOpenStates(YAML::NodeType::Map);
+        for (const auto &[key, isOpen] : m_OutlinerTreeOpenStates)
+        {
+            outlinerTreeOpenStates[key] = isOpen;
+        }
+        root["sceneOutliner"]["treeOpenStates"] = outlinerTreeOpenStates;
+        if (includeProjectState)
+        {
+            root["projects"]["currentRoot"] = GetProjectRootPath().string();
+            root["projects"]["name"] = m_ProjectName;
+            root["projects"]["lastDialogPath"] = m_LastProjectDialogPath;
+            YAML::Node recentProjects(YAML::NodeType::Sequence);
+            for (const std::string &recentPath : m_RecentProjectPaths)
+            {
+                recentProjects.push_back(recentPath);
+            }
+            root["projects"]["recent"] = recentProjects;
+        }
 
         YAML::Emitter emitter;
         emitter.SetIndent(2);
@@ -3603,24 +4244,280 @@ namespace ds
         out << emitter.c_str();
     }
 
+    void EditorLayer::SaveUiSettingsYaml() const
+    {
+        const std::filesystem::path appSettingsPath = GetAppUiSettingsFilePath();
+        SaveUiSettingsYamlToPath(appSettingsPath, true);
+
+        const std::filesystem::path projectSettingsPath = GetProjectUiSettingsFilePath();
+        if (projectSettingsPath != appSettingsPath)
+        {
+            SaveUiSettingsYamlToPath(projectSettingsPath, false);
+        }
+    }
+
+    void EditorLayer::LoadProjectAppearanceYaml()
+    {
+        const std::filesystem::path projectAppearancePath = GetProjectAppearanceFilePath();
+        if (!std::filesystem::exists(projectAppearancePath))
+        {
+            return;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(projectAppearancePath.string());
+            const YAML::Node elements = root["elements"];
+            if (!elements || !elements.IsMap())
+            {
+                m_ElementColorOverrides.clear();
+                m_ElementScaleOverrides.clear();
+                return;
+            }
+
+            std::unordered_map<std::string, glm::vec3> colorOverrides;
+            std::unordered_map<std::string, float> scaleOverrides;
+            for (const auto &entry : elements)
+            {
+                const std::string element = NormalizeElementSymbol(entry.first.as<std::string>());
+                if (element.empty())
+                {
+                    continue;
+                }
+
+                const YAML::Node visualOverrides = entry.second["visualOverrides"] ? entry.second["visualOverrides"] : entry.second["visual"];
+                if (!visualOverrides)
+                {
+                    continue;
+                }
+
+                glm::vec3 color(0.0f);
+                TryLoadYamlVec3(visualOverrides["color"], color);
+                if (visualOverrides["color"])
+                {
+                    colorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                }
+
+                float scale = 1.0f;
+                TryLoadYamlScalar(visualOverrides, "scale", scale);
+                if (visualOverrides["scale"])
+                {
+                    scaleOverrides[element] = std::clamp(scale, 0.1f, 4.0f);
+                }
+            }
+
+            m_ElementColorOverrides = std::move(colorOverrides);
+            m_ElementScaleOverrides = std::move(scaleOverrides);
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("LoadProjectAppearanceYaml failed: ") + exception.what());
+        }
+    }
+
+    void EditorLayer::SaveProjectAppearanceYaml() const
+    {
+        std::filesystem::create_directories(GetProjectConfigDirectoryPath());
+
+        YAML::Node root;
+        root["version"] = 1;
+
+        std::unordered_set<std::string> elementKeys;
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            elementKeys.insert(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            elementKeys.insert(element);
+        }
+
+        std::vector<std::string> sortedKeys(elementKeys.begin(), elementKeys.end());
+        std::sort(sortedKeys.begin(), sortedKeys.end());
+        for (const std::string &element : sortedKeys)
+        {
+            root["elements"][element]["identity"]["symbol"] = element;
+            const auto colorIt = m_ElementColorOverrides.find(element);
+            if (colorIt != m_ElementColorOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["color"] = MakeColorNode(glm::clamp(colorIt->second, glm::vec3(0.0f), glm::vec3(1.0f)));
+            }
+
+            const auto scaleIt = m_ElementScaleOverrides.find(element);
+            if (scaleIt != m_ElementScaleOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["scale"] = std::clamp(scaleIt->second, 0.1f, 4.0f);
+            }
+        }
+
+        std::ofstream out(GetProjectAppearanceFilePath(), std::ios::trunc);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        YAML::Emitter emitter;
+        emitter.SetIndent(2);
+        emitter << root;
+        out << emitter.c_str();
+    }
+
+    void EditorLayer::MigrateLegacyProjectAppearanceFromSceneStateIfNeeded()
+    {
+        if (std::filesystem::exists(GetProjectAppearanceFilePath()))
+        {
+            return;
+        }
+
+        if (m_ElementColorOverrides.empty() && m_ElementScaleOverrides.empty())
+        {
+            return;
+        }
+
+        SaveProjectAppearanceYaml();
+        LogInfo("MigrateLegacyProjectAppearanceFromSceneStateIfNeeded: created " + GetProjectAppearanceFilePath().string() + " from legacy scene state overrides");
+    }
+
+    void EditorLayer::ResetProjectAppearanceOverrides()
+    {
+        m_ElementColorOverrides.clear();
+        m_ElementScaleOverrides.clear();
+    }
+
+    bool EditorLayer::ImportProjectAppearanceOverrides(const std::string &path)
+    {
+        if (path.empty())
+        {
+            return false;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(path);
+            const YAML::Node elements = root["elements"];
+            if (!elements || !elements.IsMap())
+            {
+                return false;
+            }
+
+            std::unordered_map<std::string, glm::vec3> importedColors;
+            std::unordered_map<std::string, float> importedScales;
+            for (const auto &entry : elements)
+            {
+                const std::string element = NormalizeElementSymbol(entry.first.as<std::string>());
+                if (element.empty())
+                {
+                    continue;
+                }
+
+                const YAML::Node visualOverrides = entry.second["visualOverrides"] ? entry.second["visualOverrides"] : entry.second["visual"];
+                if (!visualOverrides)
+                {
+                    continue;
+                }
+
+                glm::vec3 color(0.0f);
+                TryLoadYamlVec3(visualOverrides["color"], color);
+                if (visualOverrides["color"])
+                {
+                    importedColors[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                }
+
+                float scale = 1.0f;
+                TryLoadYamlScalar(visualOverrides, "scale", scale);
+                if (visualOverrides["scale"])
+                {
+                    importedScales[element] = std::clamp(scale, 0.1f, 4.0f);
+                }
+            }
+
+            m_ElementColorOverrides = std::move(importedColors);
+            m_ElementScaleOverrides = std::move(importedScales);
+            return true;
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("ImportProjectAppearanceOverrides failed: ") + exception.what());
+            return false;
+        }
+    }
+
+    bool EditorLayer::ExportProjectAppearanceOverrides(const std::string &path) const
+    {
+        if (path.empty())
+        {
+            return false;
+        }
+
+        YAML::Node root;
+        root["version"] = 1;
+
+        std::unordered_set<std::string> elementKeys;
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            elementKeys.insert(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            elementKeys.insert(element);
+        }
+
+        std::vector<std::string> sortedKeys(elementKeys.begin(), elementKeys.end());
+        std::sort(sortedKeys.begin(), sortedKeys.end());
+        for (const std::string &element : sortedKeys)
+        {
+            root["elements"][element]["identity"]["symbol"] = element;
+            const auto colorIt = m_ElementColorOverrides.find(element);
+            if (colorIt != m_ElementColorOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["color"] = MakeColorNode(glm::clamp(colorIt->second, glm::vec3(0.0f), glm::vec3(1.0f)));
+            }
+
+            const auto scaleIt = m_ElementScaleOverrides.find(element);
+            if (scaleIt != m_ElementScaleOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["scale"] = std::clamp(scaleIt->second, 0.1f, 4.0f);
+            }
+        }
+
+        std::ofstream out(path, std::ios::trunc);
+        if (!out.is_open())
+        {
+            return false;
+        }
+
+        YAML::Emitter emitter;
+        emitter.SetIndent(2);
+        emitter << root;
+        out << emitter.c_str();
+        return true;
+    }
+
     void EditorLayer::SaveSettings() const
     {
         SaveUiSettingsYaml();
         SaveAtomSettings();
+        SaveProjectManifest();
+        SaveProjectAppearanceYaml();
         ImGuiLayer::SaveCurrentStyle();
         SaveSceneState();
     }
 
     void EditorLayer::LoadSceneState()
     {
-        std::ifstream in(kSceneStatePath);
+        const std::filesystem::path sceneStatePath = GetProjectSceneStateFilePath();
+        std::ifstream in(sceneStatePath);
         if (!in.is_open())
         {
-            LogInfo("LoadSceneState: no scene state file found at config/scene_state.ini");
+            LogInfo("LoadSceneState: no scene state file found at " + sceneStatePath.string());
             return;
         }
 
-        LogInfo("LoadSceneState: parsing config/scene_state.ini");
+        LogInfo("LoadSceneState: parsing " + sceneStatePath.string());
 
         std::unordered_map<std::string, std::string> values;
         std::string line;
@@ -3997,9 +4894,9 @@ namespace ds
 
     void EditorLayer::SaveSceneState() const
     {
-        std::filesystem::create_directories("config");
+        std::filesystem::create_directories(GetProjectSceneStateFilePath().parent_path());
 
-        std::ofstream out(kSceneStatePath, std::ios::trunc);
+        std::ofstream out(GetProjectSceneStateFilePath(), std::ios::trunc);
         if (!out.is_open())
         {
             return;
@@ -4022,9 +4919,6 @@ namespace ds
             out << prefix << "visible=" << (collection.visible ? 1 : 0) << '\n';
             out << prefix << "selectable=" << (collection.selectable ? 1 : 0) << '\n';
         }
-        out << "scene_project_element_color_overrides=" << SerializeElementColorOverrides(m_ElementColorOverrides) << '\n';
-        out << "scene_project_element_scale_overrides=" << SerializeElementScaleOverrides(m_ElementScaleOverrides) << '\n';
-
         out << "scene_empty_count=" << m_TransformEmpties.size() << '\n';
         for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
         {

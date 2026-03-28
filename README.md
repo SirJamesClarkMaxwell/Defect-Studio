@@ -31,6 +31,7 @@ The app currently includes:
 
 - 3D visualization of atomic structures
 - POSCAR / CONTCAR import and export
+- explicit project workflow with project-root manifests
 - multi-file structure loading through collections
 - instanced atom rendering
 - auto and manual bonds
@@ -41,6 +42,8 @@ The app currently includes:
 - dockable Periodic Table and `Element Catalog`
 - per-element atom defaults with YAML-backed config
 - YAML-backed app / UI config migration from legacy INI files
+- project-local editor / viewport settings overrides
+- project-local element appearance overrides
 - undo / redo for core scene edit actions
 - shortcut reference panel and customizable input behavior
 - persistent ImGui layout and core UI settings
@@ -64,8 +67,7 @@ Near-term and mid-term roadmap items are tracked in:
 Planned future areas include:
 
 ### UI / UX
-- editing workflow polish (selection completion, transform undo/redo, copy / duplicate / multi-edit actions)
-- project-level appearance override workflow cleanup
+- volumetric workflow and data-view tooling
 - continued panel / workflow refinement after the large T09 pass
 
 ### Rendering
@@ -153,13 +155,20 @@ The project currently uses a split config model:
 
 - `config/default.yaml` - app-level defaults such as the startup sample
 - `config/atom_settings.yaml` - global per-element defaults and future atom catalog data
-- `config/ui_settings.yaml` - persisted editor and viewport UI state
+- `config/ui_settings.yaml` - global editor and viewport defaults
+
+Project roots now also persist their own local state:
+
+- `PROJECT_ROOT/project.yaml` - project manifest
+- `PROJECT_ROOT/config/ui_settings.yaml` - project-local UI / viewport / hotkey overrides
+- `PROJECT_ROOT/config/project/project_appearance.yaml` - per-project element color / size overrides
+- `PROJECT_ROOT/config/scene_state.ini` - scene topology and scene-specific editor state
 
 Current default startup sample:
 
 - `assets/samples/reduced_diamond_bulk.vasp`
 
-Project-specific appearance overrides still exist, but are planned to be separated more cleanly from scene state in a follow-up task.
+This means the app can keep global defaults for the whole installation, while each project can override look-and-feel and editing preferences locally.
 
 ---
 

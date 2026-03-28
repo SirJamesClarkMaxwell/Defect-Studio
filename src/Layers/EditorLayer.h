@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -75,6 +76,13 @@ namespace ds
             AtomsAndBonds = 1,
             BondsOnly = 2,
             BondLabelsOnly = 3
+        };
+
+        enum class SelectionStrokeMode
+        {
+            Replace = 0,
+            Add = 1,
+            Subtract = 2
         };
 
         enum class BondRenderStyle
@@ -254,6 +262,39 @@ namespace ds
             std::unordered_map<std::string, float> elementScales;
         };
 
+        struct ClipboardAtom
+        {
+            SceneUUID sourceAtomId = 0;
+            std::string element;
+            glm::vec3 positionCartesian = glm::vec3(0.0f);
+            int collectionIndex = 0;
+            bool hasCustomColorOverride = false;
+            glm::vec3 customColorOverride = glm::vec3(0.0f);
+        };
+
+        struct ClipboardEmpty
+        {
+            SceneUUID sourceId = 0;
+            TransformEmpty empty;
+        };
+
+        enum class ClipboardPayloadKind
+        {
+            None = 0,
+            Selection = 1,
+            Collection = 2
+        };
+
+        struct EditorClipboard
+        {
+            ClipboardPayloadKind kind = ClipboardPayloadKind::None;
+            std::string label;
+            int sourceCollectionIndex = 0;
+            glm::vec3 sourcePivot = glm::vec3(0.0f);
+            std::vector<ClipboardAtom> atoms;
+            std::vector<ClipboardEmpty> empties;
+        };
+
         static constexpr const char *kDefaultConfigPath = "config/default.yaml";
         static constexpr const char *kUiSettingsPath = "config/ui_settings.yaml";
         static constexpr const char *kLegacyUiSettingsPath = "config/ui_settings.ini";
@@ -262,7 +303,11 @@ namespace ds
         static constexpr const char *kAtomSettingsPath = "config/atom_settings.yaml";
         static constexpr const char *kLegacyAtomSettingsPath = "config/atom_catalog.yaml";
         static constexpr const char *kLegacyAtomSettingsIniPath = "config/atom_settings.ini";
+        static constexpr const char *kProjectConfigDirectory = "config/project";
+        static constexpr const char *kProjectAppearancePath = "config/project/project_appearance.yaml";
+        static constexpr const char *kProjectManifestPath = "project.yaml";
         static constexpr const char *kFallbackStartupImportPath = "assets/samples/reduced_diamond_bulk.vasp";
+        static constexpr std::size_t kMaxRecentProjects = 8;
 
         void ApplyTheme(ThemePreset preset);
         void ApplyFontScale(float scale);
@@ -277,6 +322,11 @@ namespace ds
         void SaveAtomSettingsYaml() const;
         void LoadUiSettingsYaml();
         void SaveUiSettingsYaml() const;
+        void LoadUiSettingsYamlFromPath(const std::filesystem::path &settingsPath, bool includeProjectState);
+        void SaveUiSettingsYamlToPath(const std::filesystem::path &settingsPath, bool includeProjectState) const;
+        void LoadProjectAppearanceYaml();
+        void SaveProjectAppearanceYaml() const;
+        void MigrateLegacyProjectAppearanceFromSceneStateIfNeeded();
         void SanitizeLoadedUiState();
         void LoadAtomSettings();
         void SaveAtomSettings() const;
@@ -287,21 +337,40 @@ namespace ds
         void SyncRenderAppearanceFromViewport();
         glm::vec3 ResolveElementColor(const std::string &element) const;
         float ResolveElementVisualScale(const std::string &element) const;
+        SelectionStrokeMode ResolveSelectionStrokeMode(bool additiveSelection) const;
+        std::filesystem::path GetAppRootPath() const;
+        std::filesystem::path GetAppUiSettingsFilePath() const;
+        std::filesystem::path GetProjectRootPath() const;
+        std::filesystem::path GetProjectUiSettingsFilePath() const;
+        std::filesystem::path ResolveProjectPath(const std::filesystem::path &relativePath) const;
+        std::filesystem::path GetProjectConfigDirectoryPath() const;
+        std::filesystem::path GetProjectAppearanceFilePath() const;
+        std::filesystem::path GetProjectSceneStateFilePath() const;
+        std::filesystem::path GetProjectManifestFilePath() const;
+        std::filesystem::path ResolveProjectStructurePath() const;
+        void AddRecentProjectPath(const std::filesystem::path &path);
+        void SaveProjectManifest() const;
+        void LoadProjectManifest();
+        bool CreateProjectAt(const std::filesystem::path &folderPath);
+        bool OpenProjectAt(const std::filesystem::path &folderPath);
+        void ResetProjectSceneState();
         void EnsureElementAppearanceSelection();
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool AppendStructureFromPathAsCollection(const std::string &path);
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
+        bool BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const;
+        bool ExportCollectionToPath(int collectionIndex, const std::string &path, CoordinateMode mode, int precision);
         bool AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode);
         bool ApplyElementToSelectedAtoms(const std::string &elementInput, std::size_t *outChangedCount = nullptr);
         bool IsAtomSelected(std::size_t index) const;
         bool IsAtomHidden(std::size_t index) const;
         void ToggleInteractionMode();
         void HandleViewportSelection();
-        void SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
-        void SelectBondsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection);
-        void SelectAtomsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection);
-        void SelectBondsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection);
+        void SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, SelectionStrokeMode strokeMode);
+        void SelectBondsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, SelectionStrokeMode strokeMode);
+        void SelectAtomsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, SelectionStrokeMode strokeMode);
+        void SelectBondsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, SelectionStrokeMode strokeMode);
         void AppendSelectionDebugLog(const std::string &message) const;
         bool PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const;
         bool PickBondAtScreenPoint(const glm::vec2 &mousePos, std::uint64_t &outBondKey) const;
@@ -320,6 +389,7 @@ namespace ds
         void EnsureSceneDefaults();
         void DeleteTransformEmptyAtIndex(int emptyIndex);
         bool AlignEmptyZAxisFromSelectedAtoms(int emptyIndex);
+        bool AlignEmptyAxesToCameraView(int emptyIndex);
         std::array<glm::vec3, 3> ResolveTransformAxes(const glm::vec3 &pivot) const;
         bool BuildAxesFromPoints(const std::vector<glm::vec3> &points, const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const;
         bool ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const;
@@ -338,9 +408,22 @@ namespace ds
         void DrawRenderPreviewWindow(bool &settingsChanged);
         void DrawElementAppearanceWindow(bool &settingsChanged);
         void ApplyDefaultDockLayout(unsigned int dockspaceId);
+        bool HasClipboardPayload() const;
+        bool CopyCurrentSelectionToClipboard();
+        bool CopyCollectionToClipboard(int collectionIndex);
+        bool PasteClipboard(bool applyPlacementOffset = true);
+        bool DuplicateCurrentSelection();
+        bool DuplicateCollection(int collectionIndex);
+        bool ExtractSelectionToNewCollection();
+        bool DeleteCollectionAtIndex(int collectionIndex, std::string *outStatusMessage = nullptr);
+        void BeginCollectionRename(int collectionIndex);
+        void ResetProjectAppearanceOverrides();
+        bool ImportProjectAppearanceOverrides(const std::string &path);
+        bool ExportProjectAppearanceOverrides(const std::string &path) const;
         EditorSceneSnapshot CaptureSceneSnapshot() const;
         void RestoreSceneSnapshot(const EditorSceneSnapshot &snapshot);
         void PushUndoSnapshot(std::string label);
+        void PushUndoSnapshot(std::string label, const EditorSceneSnapshot &snapshot);
         bool UndoSceneEdit();
         bool RedoSceneEdit();
         void ClearSceneHistory();
@@ -366,6 +449,8 @@ namespace ds
         float ResolveBondThresholdScaleForPair(const std::string &elementA, const std::string &elementB) const;
         void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll = std::nullopt);
         void UpdateCameraOrbitTransition(float deltaTime);
+        bool SelectAllVisibleByCurrentFilter();
+        bool FocusCameraOnCursor(float distanceFactorMultiplier = 1.0f, bool persistAdjustment = false);
 
         bool m_ShowDemoWindow = false;
         bool m_ShowLogPanel = true;
@@ -395,6 +480,11 @@ namespace ds
         std::optional<Structure> m_OriginalStructure;
         Structure m_WorkingStructure;
         bool m_HasStructureLoaded = false;
+        std::string m_AppRootPath;
+        std::string m_ProjectRootPath;
+        std::string m_ProjectName = "Default Project";
+        std::string m_ProjectStructurePath;
+        std::vector<std::string> m_RecentProjectPaths;
 
         std::array<char, 512> m_ImportPathBuffer = {};
         std::array<char, 512> m_ExportPathBuffer = {};
@@ -437,6 +527,7 @@ namespace ds
         bool m_ReopenViewportSelectionContextMenu = false;
         bool m_ShowAddAtomDialog = false;
         bool m_AutoBondGenerationEnabled = true;
+        bool m_AutoRecalculateBondsOnEdit = true;
         bool m_AutoBondsDirty = true;
         bool m_ShowBondLengthLabels = true;
         float m_BondThresholdScale = 1.12f;
@@ -486,7 +577,10 @@ namespace ds
         std::vector<SceneUUID> m_AtomNodeIds;
         std::vector<int> m_AtomCollectionIndices;
         std::vector<std::size_t> m_SelectedAtomIndices;
+        std::unordered_set<int> m_SelectedCollectionIndices;
+        std::unordered_map<std::string, bool> m_OutlinerTreeOpenStates;
         std::optional<std::size_t> m_OutlinerAtomSelectionAnchor;
+        std::optional<std::size_t> m_OutlinerCollectionSelectionAnchor;
         InteractionMode m_InteractionMode = InteractionMode::Navigate;
         glm::vec3 m_SelectionColor = glm::vec3(0.95f, 0.85f, 0.25f);
         float m_SelectionOutlineThickness = 2.0f;
@@ -540,6 +634,7 @@ namespace ds
         bool m_ShowAppearancePanel = true;
         bool m_RenameCollectionDialogOpen = false;
         std::array<char, 128> m_RenameCollectionBuffer = {};
+        int m_RenameCollectionTargetIndex = -1;
         bool m_GizmoConsumedMouseThisFrame = false;
         bool m_FallbackGizmoDragging = false;
         float m_FallbackGizmoVisualScale = 2.0f;
@@ -553,6 +648,8 @@ namespace ds
         int m_TranslateEmptyIndex = -1;
         glm::vec3 m_TranslateEmptyInitialPosition = glm::vec3(0.0f);
         glm::vec3 m_TranslateCurrentOffset = glm::vec3(0.0f);
+        std::string m_TranslateTypedDistanceBuffer;
+        bool m_TranslateTypedDistanceActive = false;
         bool m_RotateModeActive = false;
         int m_RotateConstraintAxis = -1;
         glm::vec2 m_RotateLastMousePos = glm::vec2(0.0f, 0.0f);
@@ -585,11 +682,15 @@ namespace ds
         glm::vec3 m_CursorPosition = glm::vec3(0.0f, 0.0f, 0.0f);
         glm::vec3 m_CursorColor = glm::vec3(0.22f, 0.95f, 0.95f);
         float m_CursorVisualScale = 0.20f;
+        float m_CursorFocusDistanceFactor = 1.00f;
+        float m_CursorFocusMinDistance = 1.5f;
+        float m_CursorFocusSelectionPadding = 2.2f;
         bool m_CursorSnapToGrid = true;
         bool m_TouchpadNavigationEnabled = true;
         bool m_InvertViewportZoom = false;
         bool m_InvertCircleSelectWheel = false;
         float m_CircleSelectWheelStep = 4.0f;
+        bool m_DuplicateAppliesOffset = false;
         bool m_AppendImportToNewCollection = true;
 
         bool m_HasPersistedCameraState = false;
@@ -649,8 +750,11 @@ namespace ds
         float m_SelectionOutlineMax = 8.0f;
         float m_ViewportRenderScale = 1.0f;
         float m_UiSpacingScale = 1.0f;
+        float m_CameraClipNearPadding = 2.4f;
+        float m_CameraClipFarPadding = 5.0f;
         int m_ProjectionModeIndex = 0;
         bool m_ViewportSettingsOpen = true;
+        std::string m_LastProjectDialogPath;
         std::uint32_t m_HotkeyAddMenu = 0;
         std::uint32_t m_HotkeyOpenRender = 0;
         std::uint32_t m_HotkeyToggleSidePanels = 0;
@@ -666,10 +770,15 @@ namespace ds
         std::unique_ptr<IRenderBackend> m_RenderBackend;
         std::unique_ptr<IRenderBackend> m_RenderPreviewBackend;
         std::unique_ptr<OrbitCamera> m_Camera;
+        EditorClipboard m_EditorClipboard;
         static constexpr std::size_t kMaxSceneHistoryEntries = 64;
         std::vector<EditorSceneHistoryEntry> m_UndoStack;
         std::vector<EditorSceneHistoryEntry> m_RedoStack;
         bool m_SuspendUndoCapture = false;
+        bool m_PendingTransformUndoValid = false;
+        bool m_PendingTransformUndoDirty = false;
+        std::string m_PendingTransformUndoLabel;
+        EditorSceneSnapshot m_PendingTransformUndoSnapshot;
     };
 
 } // namespace ds

@@ -4,6 +4,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cmath>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -294,18 +295,35 @@ namespace ds
         RecalculateView();
     }
 
+    void OrbitCamera::SetClipPlanes(float nearClip, float farClip)
+    {
+        nearClip = glm::clamp(nearClip, 0.0005f, 100.0f);
+        farClip = std::max(farClip, nearClip + 0.05f);
+
+        if (std::abs(m_NearClip - nearClip) <= 1e-6f && std::abs(m_FarClip - farClip) <= 1e-4f)
+        {
+            return;
+        }
+
+        m_NearClip = nearClip;
+        m_FarClip = farClip;
+        RecalculateProjection();
+    }
+
     void OrbitCamera::RecalculateProjection()
     {
         const float aspect = m_ViewportWidth / m_ViewportHeight;
+        const float effectiveNear = glm::clamp(m_NearClip, 0.0005f, 100.0f);
+        const float effectiveFar = std::max(m_FarClip, effectiveNear + 0.05f);
         if (m_ProjectionMode == ProjectionMode::Orthographic)
         {
             const float halfHeight = m_OrthographicSize;
             const float halfWidth = m_OrthographicSize * aspect;
-            m_Projection = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, m_NearClip, m_FarClip);
+            m_Projection = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, effectiveNear, effectiveFar);
             return;
         }
 
-        m_Projection = glm::perspective(glm::radians(m_FovYDegrees), aspect, m_NearClip, m_FarClip);
+        m_Projection = glm::perspective(glm::radians(m_FovYDegrees), aspect, effectiveNear, effectiveFar);
     }
 
     void OrbitCamera::RecalculateView()
