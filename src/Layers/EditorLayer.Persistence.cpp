@@ -127,6 +127,93 @@ namespace ds
             return absolutePath.lexically_normal();
         }
 
+        std::filesystem::path NormalizeProjectRootCandidate(const std::filesystem::path &path)
+        {
+            if (path.empty())
+            {
+                return {};
+            }
+
+            std::filesystem::path candidate = NormalizeFilesystemPath(path);
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(candidate, ec))
+            {
+                if (candidate.filename() == "project.yaml")
+                {
+                    candidate = candidate.parent_path();
+                }
+                else
+                {
+                    candidate = candidate.parent_path();
+                }
+            }
+
+            auto hasProjectManifest = [](const std::filesystem::path &root) -> bool
+            {
+                if (root.empty())
+                {
+                    return false;
+                }
+
+                std::error_code existsEc;
+                return std::filesystem::exists(root / "project.yaml", existsEc);
+            };
+
+            if (hasProjectManifest(candidate))
+            {
+                return candidate;
+            }
+
+            std::filesystem::path current = candidate;
+            while (!current.empty())
+            {
+                if (hasProjectManifest(current))
+                {
+                    return current;
+                }
+
+                if (current.filename() == "project" && current.parent_path().filename() == "config")
+                {
+                    const std::filesystem::path inferredRoot = current.parent_path().parent_path();
+                    if (!inferredRoot.empty())
+                    {
+                        return NormalizeFilesystemPath(inferredRoot);
+                    }
+                }
+
+                if (current == current.root_path())
+                {
+                    break;
+                }
+
+                current = current.parent_path();
+            }
+
+            if (candidate.filename() == "project" && candidate.parent_path().filename() == "config")
+            {
+                const std::filesystem::path inferredRoot = candidate.parent_path().parent_path();
+                if (!inferredRoot.empty())
+                {
+                    return NormalizeFilesystemPath(inferredRoot);
+                }
+            }
+
+            if (candidate.filename() == "config")
+            {
+                std::error_code configEc;
+                if (std::filesystem::exists(candidate / "project", configEc))
+                {
+                    const std::filesystem::path inferredRoot = candidate.parent_path();
+                    if (!inferredRoot.empty())
+                    {
+                        return NormalizeFilesystemPath(inferredRoot);
+                    }
+                }
+            }
+
+            return candidate;
+        }
+
         std::string SerializeProjectPath(const std::filesystem::path &projectRoot, const std::filesystem::path &path)
         {
             if (path.empty())
@@ -159,14 +246,24 @@ namespace ds
         return NormalizeFilesystemPath(std::filesystem::path("."));
     }
 
+    std::filesystem::path EditorLayer::GetAppUiSettingsFilePath() const
+    {
+        return NormalizeFilesystemPath(GetAppRootPath() / kUiSettingsPath);
+    }
+
     std::filesystem::path EditorLayer::GetProjectRootPath() const
     {
         if (!m_ProjectRootPath.empty())
         {
-            return NormalizeFilesystemPath(m_ProjectRootPath);
+            return NormalizeProjectRootCandidate(m_ProjectRootPath);
         }
 
         return GetAppRootPath();
+    }
+
+    std::filesystem::path EditorLayer::GetProjectUiSettingsFilePath() const
+    {
+        return NormalizeFilesystemPath(GetProjectRootPath() / kUiSettingsPath);
     }
 
     std::filesystem::path EditorLayer::ResolveProjectPath(const std::filesystem::path &relativePath) const
@@ -227,7 +324,7 @@ namespace ds
 
     void EditorLayer::AddRecentProjectPath(const std::filesystem::path &path)
     {
-        const std::string normalized = NormalizeFilesystemPath(path).string();
+        const std::string normalized = NormalizeProjectRootCandidate(path).string();
         if (normalized.empty())
         {
             return;
@@ -353,7 +450,7 @@ namespace ds
 
     bool EditorLayer::CreateProjectAt(const std::filesystem::path &folderPath)
     {
-        const std::filesystem::path normalizedProjectRoot = NormalizeFilesystemPath(folderPath);
+        const std::filesystem::path normalizedProjectRoot = NormalizeProjectRootCandidate(folderPath);
         std::error_code ec;
         std::filesystem::create_directories(normalizedProjectRoot / "config" / "project", ec);
         if (ec)
@@ -393,7 +490,7 @@ namespace ds
 
     bool EditorLayer::OpenProjectAt(const std::filesystem::path &folderPath)
     {
-        const std::filesystem::path normalizedProjectRoot = NormalizeFilesystemPath(folderPath);
+        const std::filesystem::path normalizedProjectRoot = NormalizeProjectRootCandidate(folderPath);
         if (!std::filesystem::exists(normalizedProjectRoot))
         {
             m_LastStructureOperationFailed = true;
@@ -3596,15 +3693,30 @@ namespace ds
 
     void EditorLayer::LoadUiSettingsYaml()
     {
-        if (!std::filesystem::exists(kUiSettingsPath))
+        const std::filesystem::path appSettingsPath = GetAppUiSettingsFilePath();
+        if (!std::filesystem::exists(appSettingsPath))
         {
-            SaveUiSettingsYaml();
-            return;
+            SaveUiSettingsYamlToPath(appSettingsPath, true);
+        }
+        else
+        {
+            LoadUiSettingsYamlFromPath(appSettingsPath, true);
         }
 
+        const std::filesystem::path projectSettingsPath = GetProjectUiSettingsFilePath();
+        if (projectSettingsPath != appSettingsPath && std::filesystem::exists(projectSettingsPath))
+        {
+            LoadUiSettingsYamlFromPath(projectSettingsPath, false);
+        }
+
+        SanitizeLoadedUiState();
+    }
+
+    void EditorLayer::LoadUiSettingsYamlFromPath(const std::filesystem::path &settingsPath, bool includeProjectState)
+    {
         try
         {
-            const YAML::Node root = YAML::LoadFile(kUiSettingsPath);
+            const YAML::Node root = YAML::LoadFile(settingsPath.string());
 
             const YAML::Node ui = root["ui"];
             const YAML::Node panels = root["panels"];
@@ -3850,15 +3962,47 @@ namespace ds
                 {
                     m_ElementCatalogFollowViewportSelection = false;
                 }
+
+                std::string selectedSymbol;
+                TryLoadYamlScalar(elementCatalog, "selectedSymbol", selectedSymbol);
+                if (!selectedSymbol.empty())
+                {
+                    m_ElementCatalogSelectedSymbol = selectedSymbol;
+                }
             }
 
-            if (projects)
+            const YAML::Node sceneOutliner = root["sceneOutliner"];
+            if (sceneOutliner)
+            {
+                const YAML::Node treeOpenStates = sceneOutliner["treeOpenStates"];
+                if (treeOpenStates && treeOpenStates.IsMap())
+                {
+                    m_OutlinerTreeOpenStates.clear();
+                    for (const auto &entry : treeOpenStates)
+                    {
+                        if (!entry.first.IsScalar())
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            m_OutlinerTreeOpenStates[entry.first.as<std::string>()] = entry.second.as<bool>();
+                        }
+                        catch (const YAML::Exception &)
+                        {
+                        }
+                    }
+                }
+            }
+
+            if (includeProjectState && projects)
             {
                 std::string currentRoot;
                 TryLoadYamlScalar(projects, "currentRoot", currentRoot);
                 if (!currentRoot.empty())
                 {
-                    m_ProjectRootPath = NormalizeFilesystemPath(currentRoot).string();
+                    m_ProjectRootPath = NormalizeProjectRootCandidate(currentRoot).string();
                 }
 
                 std::string projectName;
@@ -3892,17 +4036,20 @@ namespace ds
         }
         catch (const YAML::Exception &exception)
         {
-            LogWarn(std::string("LoadUiSettingsYaml failed: ") + exception.what());
+            LogWarn(std::string("LoadUiSettingsYaml failed for ") + settingsPath.string() + ": " + exception.what());
         }
-
-        SanitizeLoadedUiState();
     }
 
-    void EditorLayer::SaveUiSettingsYaml() const
+    void EditorLayer::SaveUiSettingsYamlToPath(const std::filesystem::path &settingsPath, bool includeProjectState) const
     {
-        std::filesystem::create_directories("config");
+        if (settingsPath.empty())
+        {
+            return;
+        }
 
-        std::ofstream out(kUiSettingsPath, std::ios::trunc);
+        std::filesystem::create_directories(settingsPath.parent_path());
+
+        std::ofstream out(settingsPath, std::ios::trunc);
         if (!out.is_open())
         {
             return;
@@ -4071,20 +4218,42 @@ namespace ds
         root["hotkeys"]["rotateGizmo"] = m_HotkeyRotateGizmo;
         root["hotkeys"]["scaleGizmo"] = m_HotkeyScaleGizmo;
         root["elementCatalog"]["selectionSource"] = m_ElementCatalogFollowViewportSelection ? "viewport" : "periodicTable";
-        root["projects"]["currentRoot"] = GetProjectRootPath().string();
-        root["projects"]["name"] = m_ProjectName;
-        root["projects"]["lastDialogPath"] = m_LastProjectDialogPath;
-        YAML::Node recentProjects(YAML::NodeType::Sequence);
-        for (const std::string &recentPath : m_RecentProjectPaths)
+        root["elementCatalog"]["selectedSymbol"] = m_ElementCatalogSelectedSymbol;
+        YAML::Node outlinerTreeOpenStates(YAML::NodeType::Map);
+        for (const auto &[key, isOpen] : m_OutlinerTreeOpenStates)
         {
-            recentProjects.push_back(recentPath);
+            outlinerTreeOpenStates[key] = isOpen;
         }
-        root["projects"]["recent"] = recentProjects;
+        root["sceneOutliner"]["treeOpenStates"] = outlinerTreeOpenStates;
+        if (includeProjectState)
+        {
+            root["projects"]["currentRoot"] = GetProjectRootPath().string();
+            root["projects"]["name"] = m_ProjectName;
+            root["projects"]["lastDialogPath"] = m_LastProjectDialogPath;
+            YAML::Node recentProjects(YAML::NodeType::Sequence);
+            for (const std::string &recentPath : m_RecentProjectPaths)
+            {
+                recentProjects.push_back(recentPath);
+            }
+            root["projects"]["recent"] = recentProjects;
+        }
 
         YAML::Emitter emitter;
         emitter.SetIndent(2);
         emitter << root;
         out << emitter.c_str();
+    }
+
+    void EditorLayer::SaveUiSettingsYaml() const
+    {
+        const std::filesystem::path appSettingsPath = GetAppUiSettingsFilePath();
+        SaveUiSettingsYamlToPath(appSettingsPath, true);
+
+        const std::filesystem::path projectSettingsPath = GetProjectUiSettingsFilePath();
+        if (projectSettingsPath != appSettingsPath)
+        {
+            SaveUiSettingsYamlToPath(projectSettingsPath, false);
+        }
     }
 
     void EditorLayer::LoadProjectAppearanceYaml()

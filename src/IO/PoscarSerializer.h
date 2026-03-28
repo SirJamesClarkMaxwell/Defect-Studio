@@ -12,6 +12,7 @@ namespace ds
         CoordinateMode coordinateMode = CoordinateMode::Direct;
         int precision = 8;
         bool forceSelectiveDynamics = false;
+        bool canonicalizeDirectTranslation = true;
     };
 
     class PoscarSerializer

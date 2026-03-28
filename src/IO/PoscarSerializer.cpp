@@ -73,6 +73,34 @@ namespace ds
             return wrapped;
         }
 
+        void CanonicalizeDirectStructureTranslation(Structure &structure)
+        {
+            if (structure.atoms.empty())
+            {
+                return;
+            }
+
+            glm::vec3 boundsMin(std::numeric_limits<float>::max());
+            glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+            for (const Atom &atom : structure.atoms)
+            {
+                boundsMin = glm::min(boundsMin, atom.position);
+                boundsMax = glm::max(boundsMax, atom.position);
+            }
+
+            const glm::vec3 boundsCenter = 0.5f * (boundsMin + boundsMax);
+            const glm::vec3 translationToCenter = boundsCenter - glm::vec3(0.5f);
+            if (glm::dot(translationToCenter, translationToCenter) <= 1e-10f)
+            {
+                return;
+            }
+
+            for (Atom &atom : structure.atoms)
+            {
+                atom.position -= translationToCenter;
+            }
+        }
+
     } // namespace
 
     bool PoscarSerializer::WriteToFile(const Structure &structure, const std::string &path, const PoscarWriteOptions &options, std::string &error) const
@@ -126,6 +154,11 @@ namespace ds
 
         if (options.coordinateMode == CoordinateMode::Direct)
         {
+            if (options.canonicalizeDirectTranslation)
+            {
+                CanonicalizeDirectStructureTranslation(writable);
+            }
+
             for (Atom &atom : writable.atoms)
             {
                 atom.position.x = WrapUnitCoordinate(atom.position.x);

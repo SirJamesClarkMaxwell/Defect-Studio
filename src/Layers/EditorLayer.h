@@ -322,6 +322,8 @@ namespace ds
         void SaveAtomSettingsYaml() const;
         void LoadUiSettingsYaml();
         void SaveUiSettingsYaml() const;
+        void LoadUiSettingsYamlFromPath(const std::filesystem::path &settingsPath, bool includeProjectState);
+        void SaveUiSettingsYamlToPath(const std::filesystem::path &settingsPath, bool includeProjectState) const;
         void LoadProjectAppearanceYaml();
         void SaveProjectAppearanceYaml() const;
         void MigrateLegacyProjectAppearanceFromSceneStateIfNeeded();
@@ -337,7 +339,9 @@ namespace ds
         float ResolveElementVisualScale(const std::string &element) const;
         SelectionStrokeMode ResolveSelectionStrokeMode(bool additiveSelection) const;
         std::filesystem::path GetAppRootPath() const;
+        std::filesystem::path GetAppUiSettingsFilePath() const;
         std::filesystem::path GetProjectRootPath() const;
+        std::filesystem::path GetProjectUiSettingsFilePath() const;
         std::filesystem::path ResolveProjectPath(const std::filesystem::path &relativePath) const;
         std::filesystem::path GetProjectConfigDirectoryPath() const;
         std::filesystem::path GetProjectAppearanceFilePath() const;

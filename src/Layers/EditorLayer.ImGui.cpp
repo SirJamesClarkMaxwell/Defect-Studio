@@ -66,6 +66,43 @@ namespace ds
 
             return std::string(name);
         };
+        bool openRecentProjectPopupRequested = false;
+        auto createProjectViaDialog = [&]() -> bool
+        {
+            std::string projectFolder;
+            if (!OpenNativeFolderDialog(projectFolder, "Create DefectsStudio project", m_LastProjectDialogPath))
+            {
+                return false;
+            }
+
+            return CreateProjectAt(projectFolder);
+        };
+        auto openProjectViaDialog = [&]() -> bool
+        {
+            std::string projectFolder;
+            if (!OpenNativeFolderDialog(projectFolder, "Open DefectsStudio project", m_LastProjectDialogPath))
+            {
+                return false;
+            }
+
+            return OpenProjectAt(projectFolder);
+        };
+        const bool allowProjectShortcutKeys = !io.WantTextInput && !ImGui::IsAnyItemActive();
+        if (allowProjectShortcutKeys)
+        {
+            if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N, false))
+            {
+                settingsChanged |= createProjectViaDialog();
+            }
+            if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_O, false))
+            {
+                settingsChanged |= openProjectViaDialog();
+            }
+            if (io.KeyCtrl && io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_O, false) && !m_RecentProjectPaths.empty())
+            {
+                openRecentProjectPopupRequested = true;
+            }
+        }
 
         {
             ImGuiStyle &style = ImGui::GetStyle();
@@ -177,25 +214,22 @@ namespace ds
 
                 ImGui::Separator();
 
-                if (ImGui::MenuItem("Create Project..."))
+                if (ImGui::MenuItem("Create Project...", "Ctrl+Shift+N"))
                 {
-                    std::string projectFolder;
-                    if (OpenNativeFolderDialog(projectFolder, "Create DefectsStudio project", m_LastProjectDialogPath))
-                    {
-                        settingsChanged |= CreateProjectAt(projectFolder);
-                    }
+                    settingsChanged |= createProjectViaDialog();
                 }
 
-                if (ImGui::MenuItem("Open Project..."))
+                if (ImGui::MenuItem("Open Project...", "Ctrl+Shift+O"))
                 {
-                    std::string projectFolder;
-                    if (OpenNativeFolderDialog(projectFolder, "Open DefectsStudio project", m_LastProjectDialogPath))
-                    {
-                        settingsChanged |= OpenProjectAt(projectFolder);
-                    }
+                    settingsChanged |= openProjectViaDialog();
                 }
 
-                if (ImGui::BeginMenu("Open Recent Project"))
+                if (ImGui::MenuItem("Open Recent Project...", "Ctrl+Alt+O", false, !m_RecentProjectPaths.empty()))
+                {
+                    openRecentProjectPopupRequested = true;
+                }
+
+                if (ImGui::BeginMenu("Recent Projects"))
                 {
                     if (m_RecentProjectPaths.empty())
                     {
@@ -360,6 +394,48 @@ namespace ds
             }
 
             ImGui::EndMenuBar();
+        }
+
+        if (openRecentProjectPopupRequested)
+        {
+            ImGui::OpenPopup("Open Recent Project");
+        }
+
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 320.0f), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal("Open Recent Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            if (m_RecentProjectPaths.empty())
+            {
+                ImGui::TextDisabled("No recent projects saved yet.");
+            }
+            else
+            {
+                ImGui::TextDisabled("Pick a recent project root:");
+                ImGui::Separator();
+                for (std::size_t recentIndex = 0; recentIndex < m_RecentProjectPaths.size(); ++recentIndex)
+                {
+                    const std::string &recentProjectPath = m_RecentProjectPaths[recentIndex];
+                    const std::filesystem::path recentPath(recentProjectPath);
+                    const std::string visibleLabel = recentPath.filename().string().empty() ? recentProjectPath : recentPath.filename().string();
+                    const std::string popupLabel = visibleLabel + "##RecentProject_" + std::to_string(recentIndex);
+                    if (ImGui::Selectable(popupLabel.c_str(), false, ImGuiSelectableFlags_SpanAvailWidth))
+                    {
+                        settingsChanged |= OpenProjectAt(recentProjectPath);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                    {
+                        ImGui::SetTooltip("%s", recentProjectPath.c_str());
+                    }
+                }
+            }
+
+            ImGui::Separator();
+            if (ImGui::Button("Close", ImVec2(120.0f, 0.0f)))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
 
         ImGui::Begin("Viewport");
@@ -5742,6 +5818,31 @@ namespace ds
                 m_OutlinerCollectionSelectionAnchor = static_cast<std::size_t>(m_ActiveCollectionIndex);
                 settingsChanged = true;
             }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            {
+                ImGui::SetTooltip("Add a new collection.");
+            }
+
+            ImGui::SameLine();
+            const bool canDuplicateCollection =
+                m_ActiveCollectionIndex >= 0 &&
+                m_ActiveCollectionIndex < static_cast<int>(m_Collections.size());
+            if (!canDuplicateCollection)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Duplicate active collection") && canDuplicateCollection)
+            {
+                settingsChanged |= DuplicateCollection(m_ActiveCollectionIndex);
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Duplicate the active collection.\nShortcut: Ctrl+D while Scene Outliner is focused.");
+            }
+            if (!canDuplicateCollection)
+            {
+                ImGui::EndDisabled();
+            }
 
             ImGui::SameLine();
             const bool canDeleteCollection =
@@ -5756,6 +5857,10 @@ namespace ds
             {
                 PushUndoSnapshot("Delete collection");
                 settingsChanged |= DeleteCollectionAtIndex(m_ActiveCollectionIndex);
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Delete the active collection.\nShortcut: Delete while Scene Outliner is focused.");
             }
             if (!canDeleteCollection)
             {
@@ -5821,12 +5926,30 @@ namespace ds
             const bool canRenameCollection =
                 m_ActiveCollectionIndex >= 0 &&
                 m_ActiveCollectionIndex < static_cast<int>(m_Collections.size());
+            const bool outlinerWindowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             if (canRenameCollection &&
-                ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                outlinerWindowFocused &&
                 ImGui::IsKeyPressed(ImGuiKey_F2, false) &&
                 !ImGui::IsAnyItemActive())
             {
                 BeginCollectionRename(m_ActiveCollectionIndex);
+            }
+            if (canRenameCollection &&
+                outlinerWindowFocused &&
+                !ImGui::IsAnyItemActive() &&
+                io.KeyCtrl &&
+                ImGui::IsKeyPressed(ImGuiKey_D, false))
+            {
+                settingsChanged |= DuplicateCollection(m_ActiveCollectionIndex);
+            }
+            if (canRenameCollection &&
+                outlinerWindowFocused &&
+                !ImGui::IsAnyItemActive() &&
+                isConfiguredKeyPressed(m_HotkeyDeleteSelection) &&
+                m_Collections.size() > 1)
+            {
+                PushUndoSnapshot("Delete collection");
+                settingsChanged |= DeleteCollectionAtIndex(m_ActiveCollectionIndex);
             }
 
             if (m_RenameCollectionDialogOpen)
@@ -5897,7 +6020,7 @@ namespace ds
             }
 
             ImGui::SeparatorText("Collections");
-            ImGui::TextDisabled("Tip: press F2 to rename the active collection.");
+            ImGui::TextDisabled("Tip: F2 rename, Ctrl+D duplicate, Delete remove active collection.");
 
             auto selectAtomRangeInCollection = [&](std::size_t collectionIndex, std::size_t anchorIndex, std::size_t clickedIndex, bool additive)
             {
@@ -5969,6 +6092,19 @@ namespace ds
                 }
             };
 
+            auto resolveCollectionRangeAnchor = [&](std::size_t clickedCollectionIndex) -> std::size_t
+            {
+                if (m_OutlinerCollectionSelectionAnchor.has_value())
+                {
+                    return *m_OutlinerCollectionSelectionAnchor;
+                }
+                if (m_ActiveCollectionIndex >= 0 && m_ActiveCollectionIndex < static_cast<int>(m_Collections.size()))
+                {
+                    return static_cast<std::size_t>(m_ActiveCollectionIndex);
+                }
+                return clickedCollectionIndex;
+            };
+
             auto trimOutlinerName = [](std::string value) -> std::string
             {
                 const std::string whitespace = " \t\r\n";
@@ -6027,10 +6163,10 @@ namespace ds
                 {
                     m_ActiveCollectionIndex = collectionIndexInt;
                     const bool additiveCollectionSelection = io.KeyCtrl;
-                    const bool rangeCollectionSelection = io.KeyShift && m_OutlinerCollectionSelectionAnchor.has_value();
+                    const bool rangeCollectionSelection = io.KeyShift;
                     if (rangeCollectionSelection)
                     {
-                        selectCollectionRange(*m_OutlinerCollectionSelectionAnchor, collectionIndex, additiveCollectionSelection);
+                        selectCollectionRange(resolveCollectionRangeAnchor(collectionIndex), collectionIndex, additiveCollectionSelection);
                     }
                     else if (additiveCollectionSelection)
                     {
@@ -6042,6 +6178,9 @@ namespace ds
                     }
                     m_OutlinerCollectionSelectionAnchor = collectionIndex;
                 }
+                const ImVec2 collectionRowRectMin = ImGui::GetItemRectMin();
+                ImVec2 collectionRowRectMax = ImGui::GetItemRectMax();
+                const ImGuiID collectionRowId = ImGui::GetItemID();
                 if (ImGui::BeginPopupContextItem("##CollectionContextMenu"))
                 {
                     m_ActiveCollectionIndex = collectionIndexInt;
@@ -6073,11 +6212,11 @@ namespace ds
                             settingsChanged |= ExportCollectionToPath(static_cast<int>(collectionIndex), selectedPath, exportMode, m_ExportPrecision);
                         }
                     }
-                    if (ImGui::MenuItem("Duplicate"))
+                    if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
                     {
                         settingsChanged |= DuplicateCollection(collectionIndexInt);
                     }
-                    if (ImGui::MenuItem("Delete", nullptr, false, m_Collections.size() > 1))
+                    if (ImGui::MenuItem("Delete", "Delete", false, m_Collections.size() > 1))
                     {
                         PushUndoSnapshot("Delete collection");
                         settingsChanged |= DeleteCollectionAtIndex(collectionIndexInt);
@@ -6088,10 +6227,47 @@ namespace ds
                 {
                     ImGui::SameLine(0.0f, 6.0f);
                     ImGui::TextDisabled("[active]");
+                    const ImVec2 activeRectMax = ImGui::GetItemRectMax();
+                    collectionRowRectMax.x = std::max(collectionRowRectMax.x, activeRectMax.x);
+                    collectionRowRectMax.y = std::max(collectionRowRectMax.y, activeRectMax.y);
                 }
 
-                if (ImGui::BeginDragDropTarget())
+                ImRect collectionDropRect(collectionRowRectMin, collectionRowRectMax);
+                if (ImGui::BeginDragDropTargetCustom(collectionDropRect, collectionRowId))
                 {
+                    if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("DS_ATOM_INDEX_LIST"))
+                    {
+                        const std::size_t atomCount = payload->DataSize / sizeof(std::uint64_t);
+                        if (atomCount > 0 && payload->DataSize == atomCount * sizeof(std::uint64_t))
+                        {
+                            const auto *atomIndices = static_cast<const std::uint64_t *>(payload->Data);
+                            bool anyCollectionChange = false;
+                            for (std::size_t i = 0; i < atomCount; ++i)
+                            {
+                                const std::size_t atomIndex = static_cast<std::size_t>(atomIndices[i]);
+                                if (atomIndex < m_AtomCollectionIndices.size() &&
+                                    m_AtomCollectionIndices[atomIndex] != collectionIndexInt)
+                                {
+                                    anyCollectionChange = true;
+                                    break;
+                                }
+                            }
+
+                            if (anyCollectionChange)
+                            {
+                                PushUndoSnapshot("Move atoms to collection");
+                                for (std::size_t i = 0; i < atomCount; ++i)
+                                {
+                                    const std::size_t atomIndex = static_cast<std::size_t>(atomIndices[i]);
+                                    if (atomIndex < m_AtomCollectionIndices.size())
+                                    {
+                                        m_AtomCollectionIndices[atomIndex] = collectionIndexInt;
+                                    }
+                                }
+                                settingsChanged = true;
+                            }
+                        }
+                    }
                     if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("DS_EMPTY_INDEX"))
                     {
                         if (payload->DataSize == sizeof(int))
@@ -6352,6 +6528,29 @@ namespace ds
                                     {
                                         m_OutlinerAtomSelectionAnchor = atomIndex;
                                     }
+                                }
+                                if (!hidden && selectableAtom && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+                                {
+                                    std::vector<std::uint64_t> draggedAtomIndices;
+                                    if (isSelected && !m_SelectedAtomIndices.empty())
+                                    {
+                                        draggedAtomIndices.reserve(m_SelectedAtomIndices.size());
+                                        for (std::size_t selectedAtomIndex : m_SelectedAtomIndices)
+                                        {
+                                            draggedAtomIndices.push_back(static_cast<std::uint64_t>(selectedAtomIndex));
+                                        }
+                                    }
+                                    else
+                                    {
+                                        draggedAtomIndices.push_back(static_cast<std::uint64_t>(atomIndex));
+                                    }
+
+                                    ImGui::SetDragDropPayload(
+                                        "DS_ATOM_INDEX_LIST",
+                                        draggedAtomIndices.data(),
+                                        draggedAtomIndices.size() * sizeof(std::uint64_t));
+                                    ImGui::Text("Move %zu atom(s)", draggedAtomIndices.size());
+                                    ImGui::EndDragDropSource();
                                 }
                                 if (ImGui::BeginPopupContextItem())
                                 {
@@ -6636,6 +6835,9 @@ namespace ds
             drawShortcutSection("File & Layout", {
                                                   {"Ctrl+O", "Open POSCAR / CONTCAR"},
                                                   {"Ctrl+S", "Export POSCAR / CONTCAR"},
+                                                  {"Ctrl+Shift+N", "Create a project by choosing a project root folder"},
+                                                  {"Ctrl+Shift+O", "Open a project by choosing its project root folder"},
+                                                  {"Ctrl+Alt+O", "Open the recent-project popup"},
                                                   {renderShortcut.c_str(), "Open Render Image and Render Preview"},
                                                   {panelsShortcut.c_str(), "Toggle side panels"},
                                                   {"Ctrl+Z", "Undo last core scene edit"},
@@ -6667,6 +6869,7 @@ namespace ds
                                                   {deleteShortcut.c_str(), "Delete current selection"},
                                                   {"Ctrl+C / Ctrl+V", "Copy and paste selection with internal editor clipboard"},
                                                   {"Ctrl+D", "Duplicate current selection"},
+                                                  {"Ctrl+D / Delete", "Duplicate or delete the active collection while Scene Outliner is focused"},
                                                   {". / Shift+. / Alt+.", "Focus camera on current selection, or the 3D cursor if nothing is selected; Shift stores a closer distance, Alt a farther one"},
                                                   {"F2", "Rename active collection in Scene Outliner"},
                                                   {"Mouse Wheel", "Zoom viewport / adjust circle radius while C-select"},
