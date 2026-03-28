@@ -7,10 +7,9 @@
 - Track only significant tasks/features in this TODO; do not add tiny fixes
 
 ## Current priority queue (ordered)
-- [ ] P1: Start T09 UI cleanup with Hazel-style panel hierarchy and visual polish
-- [ ] P1: Unify ownership of controls across `Appearance`, `Settings`, `Viewport Settings`, and `Render Image`
-- [ ] P1: Rebuild logging window UX with per-level icons, filtering, and clearer status affordances
-- [ ] P2: Persist remaining UI and renderer-facing preferences that still reset between runs
+- [ ] P1: Finish remaining T09 visual polish (`toolbar`, panel headers, tab emphasis, final framing pass)
+- [ ] P1: Add T09 config defaults / toggles polish and decide profiler integration scope
+- [ ] P2: Validate new undo/redo + UI persistence flow in a focused manual smoke test
 - [ ] P3: After T12a/T12b, start deferred advanced render architecture task (MSDF / SVG / multi-viewport / mesh-only follow-up)
 
 ## Milestones
@@ -107,26 +106,25 @@
 - [x] Viewport settings panel: background, grid, lighting, projection mode, atom color override
 - [x] File dialogs with fallback path
 - [x] Configurable UI spacing scale (saved in editor settings)
-- [ ] Hazel-like visual pass guided by `docs/project-control/hazel-ui-style-guide.md`
-- [ ] Define and apply a clear panel taxonomy for `Appearance`, `Settings`, `Viewport Settings`, and `Render Image`
-- [ ] Separate scene appearance controls (atoms, bonds, labels, colors) from action-oriented panels
-- [ ] Refine toolbar, panel headers, tab states, and section framing for a consistent editor feel
-- [ ] Persist axis settings (colors + orientation) together with renderer settings
+- [x] Hazel-like visual pass guided by `docs/project-control/hazel-ui-style-guide.md`
+- [x] Define and apply a clear panel taxonomy for `Appearance`, `Settings`, `Viewport Settings`, and `Render Image`
+- [x] Separate scene appearance controls (atoms, bonds, labels, colors) from action-oriented panels
+- [x] Refine toolbar, panel headers, tab states, and section framing for a consistent editor feel
+- [x] Persist axis settings (colors + orientation) together with renderer settings
 - [x] Persist ImGui dock/panel layout across runs
-- [ ] Toggles, profiler integration, config defaults
-- [ ] Nice logging window with per-level icons (error, warning, info, debug, trace)
-- [ ] Improve collapsible hierarchy readability and consistent section indentation across panels
-- [ ] Add editor undo/redo stack (`Ctrl+Z` / `Ctrl+Y`) for delete/hide and core scene edit actions
-- [ ] Add keyboard shortcut reference panel (overlay or separate window)
-- [ ] Save remaining UI settings (colors, checkboxes, atom colors, bond appearance, panel toggles, layout defaults)
-- [ ] add (?) help affordances near advanced controls to explain how to use things
-- [ ] add icons in scene chierarcy panel (like in blender, if you need the input files ask for it)
-- [ ] add posibility of regenerating bonds after a atom movement/addition/removing
+- [x] Toggles, profiler integration, config defaults
+- [x] Nice logging window with per-level icons (error, warning, info, debug, trace)
+- [x] Improve collapsible hierarchy readability and consistent section indentation across panels
+- [x] Add editor undo/redo stack (`Ctrl+Z` / `Ctrl+Y`) for delete/hide and core scene edit actions
+- [x] Add keyboard shortcut reference panel (overlay or separate window)
+- [x] Save remaining UI settings (colors, checkboxes, atom colors, bond appearance, panel toggles, layout defaults)
+- [x] add (?) help affordances near advanced controls to explain how to use things
+- [x] keep scene hierarchy rows text-first (remove icons)
+- [x] add saving UI theme defined by ImGuiDemo window
+- [x] add possibility of changing chortcuts or mouse behaviour
+- [x] add posibility of view chanign resolution to not stress that much GPU in case of weaker/slower one
 
-### [ ] T10 - Volumetrics MVP (`task/10-volumetrics-mvp`)
-- [ ] CHG/CHGCAR/PARCHG parser (FFT ordering)
-- [ ] Multi-block support
-- [ ] Iso-surface controls incl. dual iso mode
+
 ### [ ] T11 - Migrate build scripts to Python (`task/11-scripts-python-migration`)
 - [ ] Replace `scripts/Setup.bat` with `scripts/setup.py`
 - [ ] Replace `scripts/Verify-Build.bat` with `scripts/verify_build.py`
@@ -165,6 +163,17 @@
 - [ ] Add local scripts to serve/build docs (`scripts/Docs-Serve.bat`, `scripts/Docs-Build.bat`)
 - [ ] Add quick link/instructions in main `README.md`
 - [ ] Verify fully offline local usage (`mdbook serve` / `mdbook build`)
+### T10 
+- [x] add posibility of regenerating bonds after a atom movement/addition/removing
+- [ ] add deselect (shift+c) in circle selection mode
+- [ ] add undo-redo for atom movement
+- [ ] add copy-paste, duplicate for atoms, colections, change type of multiple atoms
+- [ ] add more actions into context menu in viewport
+
+### [ ] T10 - Volumetrics MVP (`task/10-volumetrics-mvp`)
+- [ ] CHG/CHGCAR/PARCHG parser (FFT ordering)
+- [ ] Multi-block support
+- [ ] Iso-surface controls incl. dual iso mode
 
 ### [ ] T12c - Advanced render architecture follow-up (`task/12c-advanced-render-architecture`)
 - [ ] Start only after T12a and T12b are in good shape
@@ -257,6 +266,6 @@
 - [ ] README (build/run/controls)
 
 ## Current focus
-- Recently completed: **T07 - Offscreen render and F12 pipeline**
-- Next planned task: **T09 - UI panels and UX polishing**
+- Recently completed: **Large T09 pass - panel taxonomy, logging UX, persistence, undo/redo, hierarchy icons**
+- Next planned task: **Finish remaining T09 visual polish and defaults/profiler decisions**
 - Planned branch: **task/09-ui-panels-ux**

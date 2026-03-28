@@ -87,7 +87,8 @@ namespace ds
         enum class PeriodicTableTarget
         {
             AddAtomEntry = 0,
-            ChangeSelectedAtoms = 1
+            ChangeSelectedAtoms = 1,
+            ElementAppearanceEditor = 2
         };
 
         enum class RenderImageFormat
@@ -197,6 +198,7 @@ namespace ds
             std::uint64_t selectedBondLabelKey = 0;
             std::unordered_map<std::string, AngleLabelState> angleLabelStates;
             std::unordered_map<std::string, glm::vec3> elementColorOverrides;
+            std::unordered_map<std::string, float> elementScaleOverrides;
             std::unordered_map<SceneUUID, glm::vec3> atomColorOverrides;
             std::vector<std::size_t> selectedAtomIndices;
             std::optional<std::size_t> outlinerAtomSelectionAnchor;
@@ -249,6 +251,7 @@ namespace ds
             glm::vec3 defaultOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
             float defaultSize = 0.30f;
             std::unordered_map<std::string, glm::vec3> elementColors;
+            std::unordered_map<std::string, float> elementScales;
         };
 
         static constexpr const char *kDefaultConfigPath = "config/default.yaml";
@@ -257,7 +260,8 @@ namespace ds
         static constexpr const char *kLegacyEditorSettingsPath = "config/editor_ui_settings.ini";
         static constexpr const char *kSceneStatePath = "config/scene_state.ini";
         static constexpr const char *kAtomSettingsPath = "config/atom_settings.yaml";
-        static constexpr const char *kLegacyAtomSettingsPath = "config/atom_settings.ini";
+        static constexpr const char *kLegacyAtomSettingsPath = "config/atom_catalog.yaml";
+        static constexpr const char *kLegacyAtomSettingsIniPath = "config/atom_settings.ini";
         static constexpr const char *kFallbackStartupImportPath = "assets/samples/reduced_diamond_bulk.vasp";
 
         void ApplyTheme(ThemePreset preset);
@@ -281,6 +285,9 @@ namespace ds
         void SaveSceneState() const;
         void LoadSceneState();
         void SyncRenderAppearanceFromViewport();
+        glm::vec3 ResolveElementColor(const std::string &element) const;
+        float ResolveElementVisualScale(const std::string &element) const;
+        void EnsureElementAppearanceSelection();
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool AppendStructureFromPathAsCollection(const std::string &path);
@@ -321,10 +328,15 @@ namespace ds
         void EnsureAtomNodeIds();
         bool PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const;
         void Set3DCursorFromScreenPoint(const glm::vec2 &mousePos);
+        void OpenPeriodicTable(PeriodicTableTarget target, bool openedFromContextMenu = false);
+        std::string ResolvePeriodicTableActiveElement(PeriodicTableTarget target) const;
+        void ApplyPeriodicTableSelection(const char *symbol, PeriodicTableTarget target);
+        void DrawPeriodicTableSelector(const char *instanceId, PeriodicTableTarget target, bool closeAfterSelection);
         void DrawPeriodicTableWindow();
         void DrawChangeAtomTypeConfirmDialog();
         void DrawRenderImageDialog(bool &settingsChanged);
         void DrawRenderPreviewWindow(bool &settingsChanged);
+        void DrawElementAppearanceWindow(bool &settingsChanged);
         void ApplyDefaultDockLayout(unsigned int dockspaceId);
         EditorSceneSnapshot CaptureSceneSnapshot() const;
         void RestoreSceneSnapshot(const EditorSceneSnapshot &snapshot);
@@ -360,6 +372,7 @@ namespace ds
         bool m_ShowStatsPanel = true;
         bool m_ShowViewportInfoPanel = true;
         bool m_ShowShortcutReferencePanel = false;
+        bool m_ShowElementCatalogPanel = false;
         ThemePreset m_CurrentTheme = ThemePreset::Dark;
         float m_FontScale = 1.0f;
         int m_LogFilter = 0;
@@ -414,7 +427,9 @@ namespace ds
         glm::vec3 m_AddAtomPosition = glm::vec3(0.0f);
         float m_AddAtomUniformPositionValue = 0.0f;
         int m_AddAtomCoordinateModeIndex = 1;
+        bool m_ShowPeriodicTablePanel = false;
         bool m_PeriodicTableOpen = false;
+        bool m_RequestPeriodicTableFocus = false;
         PeriodicTableTarget m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
         std::array<char, 16> m_PendingChangeAtomElementBuffer = {};
         bool m_ChangeAtomTypeConfirmOpen = false;
@@ -458,7 +473,10 @@ namespace ds
         bool m_ShowStaticAngleLabels = true;
         glm::vec3 m_SelectedAtomCustomColor = glm::vec3(0.95f, 0.42f, 0.42f);
         std::unordered_map<std::string, glm::vec3> m_ElementColorOverrides;
+        std::unordered_map<std::string, float> m_ElementScaleOverrides;
         std::unordered_map<SceneUUID, glm::vec3> m_AtomColorOverrides;
+        std::string m_ElementCatalogSelectedSymbol = "C";
+        bool m_ElementCatalogFollowViewportSelection = false;
         std::size_t m_LastLoggedBondCount = std::numeric_limits<std::size_t>::max();
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;
@@ -520,6 +538,8 @@ namespace ds
         bool m_BlockSelectionThisFrame = false;
         bool m_ShowActionsPanel = true;
         bool m_ShowAppearancePanel = true;
+        bool m_RenameCollectionDialogOpen = false;
+        std::array<char, 128> m_RenameCollectionBuffer = {};
         bool m_GizmoConsumedMouseThisFrame = false;
         bool m_FallbackGizmoDragging = false;
         float m_FallbackGizmoVisualScale = 2.0f;

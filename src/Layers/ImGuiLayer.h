@@ -12,6 +12,11 @@ namespace ds
         ImGuiLayer();
         ~ImGuiLayer() override = default;
 
+        static bool LoadSavedStyle();
+        static void SaveCurrentStyle();
+        static void ResetSavedStyle();
+        static ::ImFont *GetUIFont();
+        static ::ImFont *GetMonospaceFont();
         static ::ImFont *GetBondLabelFont();
 
         void OnAttach() override;

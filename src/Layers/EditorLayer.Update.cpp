@@ -20,7 +20,7 @@ namespace ds
         const bool transformModeActive = m_TranslateModeActive || m_RotateModeActive;
         const bool allowCameraInput = m_ViewportHovered && m_ViewportFocused && !transformModeActive;
         const float scrollDelta = ApplicationContext::Get().ConsumeScrollDelta();
-        m_Camera->OnUpdate(deltaTime, allowCameraInput, allowCameraInput ? scrollDelta : 0.0f, m_TouchpadNavigationEnabled);
+        m_Camera->OnUpdate(deltaTime, allowCameraInput, allowCameraInput ? scrollDelta : 0.0f, m_TouchpadNavigationEnabled, m_InvertViewportZoom);
 
         if (allowCameraInput && (ImGui::IsMouseDown(ImGuiMouseButton_Middle) || std::abs(scrollDelta) > 0.0001f))
         {
@@ -72,12 +72,7 @@ namespace ds
                 atomCartesianPositions.push_back(position);
 
                 const std::string elementKey = NormalizeElementSymbol(atom.element);
-                glm::vec3 atomColor = ColorFromElement(elementKey);
-                const auto elementOverrideIt = m_ElementColorOverrides.find(elementKey);
-                if (elementOverrideIt != m_ElementColorOverrides.end())
-                {
-                    atomColor = glm::clamp(elementOverrideIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
-                }
+                glm::vec3 atomColor = ResolveElementColor(elementKey);
                 if (m_SceneSettings.overrideAtomColor)
                 {
                     atomColor = m_SceneSettings.atomOverrideColor;
@@ -224,7 +219,7 @@ namespace ds
                 const std::vector<glm::vec3> &positions = entry.second;
                 std::vector<glm::vec3> &colors = atomColorsByElement[elementKey];
                 SceneRenderSettings elementSettings = m_SceneSettings;
-                elementSettings.atomScale = m_SceneSettings.atomScale * ElementRadiusScale(elementKey);
+                elementSettings.atomScale = m_SceneSettings.atomScale * ElementRadiusScale(elementKey) * ResolveElementVisualScale(elementKey);
                 m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), positions, colors, elementSettings);
             }
 
@@ -451,7 +446,7 @@ namespace ds
                     const std::vector<glm::vec3> &positions = entry.second;
                     std::vector<glm::vec3> &colors = atomColorsByElement[elementKey];
                     SceneRenderSettings elementSettings = previewSceneSettings;
-                    elementSettings.atomScale = previewSceneSettings.atomScale * ElementRadiusScale(elementKey);
+                    elementSettings.atomScale = previewSceneSettings.atomScale * ElementRadiusScale(elementKey) * ResolveElementVisualScale(elementKey);
                     m_RenderPreviewBackend->RenderAtomsScene(previewCamera.GetViewProjectionMatrix(), positions, colors, elementSettings);
                 }
 

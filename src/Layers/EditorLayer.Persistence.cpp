@@ -648,9 +648,121 @@ namespace ds
         }
 
         m_AtomDefaults.elementColors = std::move(sanitizedElementColors);
+        std::unordered_map<std::string, float> sanitizedElementScales;
+        sanitizedElementScales.reserve(m_AtomDefaults.elementScales.size());
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            const std::string normalizedElement = NormalizeElementSymbol(element);
+            if (normalizedElement.empty())
+            {
+                continue;
+            }
+
+            sanitizedElementScales[normalizedElement] = std::clamp(scale, 0.1f, 4.0f);
+        }
+
+        m_AtomDefaults.elementScales = std::move(sanitizedElementScales);
         m_SceneSettings.atomScale = m_AtomDefaults.defaultSize;
         m_SceneSettings.atomOverrideColor = m_AtomDefaults.defaultOverrideColor;
-        m_ElementColorOverrides = m_AtomDefaults.elementColors;
+    }
+
+    glm::vec3 EditorLayer::ResolveElementColor(const std::string &element) const
+    {
+        const std::string normalizedElement = NormalizeElementSymbol(element);
+        if (normalizedElement.empty())
+        {
+            return glm::clamp(ColorFromElement(element), glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        const auto projectOverrideIt = m_ElementColorOverrides.find(normalizedElement);
+        if (projectOverrideIt != m_ElementColorOverrides.end())
+        {
+            return glm::clamp(projectOverrideIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        const auto catalogColorIt = m_AtomDefaults.elementColors.find(normalizedElement);
+        if (catalogColorIt != m_AtomDefaults.elementColors.end())
+        {
+            return glm::clamp(catalogColorIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        return glm::clamp(ColorFromElement(normalizedElement), glm::vec3(0.0f), glm::vec3(1.0f));
+    }
+
+    float EditorLayer::ResolveElementVisualScale(const std::string &element) const
+    {
+        const std::string normalizedElement = NormalizeElementSymbol(element);
+        if (normalizedElement.empty())
+        {
+            return 1.0f;
+        }
+
+        const auto projectOverrideIt = m_ElementScaleOverrides.find(normalizedElement);
+        if (projectOverrideIt != m_ElementScaleOverrides.end())
+        {
+            return std::clamp(projectOverrideIt->second, 0.1f, 4.0f);
+        }
+
+        const auto catalogScaleIt = m_AtomDefaults.elementScales.find(normalizedElement);
+        if (catalogScaleIt != m_AtomDefaults.elementScales.end())
+        {
+            return std::clamp(catalogScaleIt->second, 0.1f, 4.0f);
+        }
+
+        return 1.0f;
+    }
+
+    void EditorLayer::EnsureElementAppearanceSelection()
+    {
+        m_ElementCatalogSelectedSymbol = NormalizeElementSymbol(m_ElementCatalogSelectedSymbol);
+        if (!m_ElementCatalogSelectedSymbol.empty())
+        {
+            return;
+        }
+
+        std::unordered_set<std::string> availableSymbols;
+        if (m_HasStructureLoaded)
+        {
+            for (const std::string &element : m_WorkingStructure.species)
+            {
+                const std::string normalized = NormalizeElementSymbol(element);
+                if (!normalized.empty())
+                {
+                    availableSymbols.insert(normalized);
+                }
+            }
+        }
+
+        for (const auto &[element, color] : m_AtomDefaults.elementColors)
+        {
+            (void)color;
+            availableSymbols.insert(element);
+        }
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            (void)scale;
+            availableSymbols.insert(element);
+        }
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            availableSymbols.insert(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            availableSymbols.insert(element);
+        }
+
+        if (!availableSymbols.empty())
+        {
+            std::vector<std::string> symbols(availableSymbols.begin(), availableSymbols.end());
+            std::sort(symbols.begin(), symbols.end());
+            m_ElementCatalogSelectedSymbol = symbols.front();
+            return;
+        }
+
+        m_ElementCatalogSelectedSymbol = "C";
     }
 
     void EditorLayer::LoadDefaultConfigYaml()
@@ -692,14 +804,66 @@ namespace ds
 
     void EditorLayer::MigrateLegacyAtomIniIfNeeded()
     {
-        if (std::filesystem::exists(kAtomSettingsPath) || !std::filesystem::exists(kLegacyAtomSettingsPath))
+        if (std::filesystem::exists(kAtomSettingsPath))
         {
             return;
         }
 
-        LoadLegacyAtomSettingsIni(kLegacyAtomSettingsPath);
+        if (std::filesystem::exists(kLegacyAtomSettingsPath))
+        {
+            try
+            {
+                const YAML::Node root = YAML::LoadFile(kLegacyAtomSettingsPath);
+                const YAML::Node defaults = root["defaults"];
+                if (defaults)
+                {
+                    TryLoadYamlVec3(defaults["overrideColor"], m_AtomDefaults.defaultOverrideColor);
+                    TryLoadYamlScalar(defaults, "atomScale", m_AtomDefaults.defaultSize);
+                }
+
+                const YAML::Node elements = root["elements"];
+                if (elements && elements.IsMap())
+                {
+                    m_AtomDefaults.elementColors.clear();
+                    m_AtomDefaults.elementScales.clear();
+                    for (const auto &entry : elements)
+                    {
+                        const std::string element = NormalizeElementSymbol(entry.first.as<std::string>());
+                        if (element.empty())
+                        {
+                            continue;
+                        }
+
+                        glm::vec3 color = ColorFromElement(element);
+                        const YAML::Node visual = entry.second["visual"];
+                        if (visual)
+                        {
+                            TryLoadYamlVec3(visual["color"], color);
+                            float scale = 1.0f;
+                            TryLoadYamlScalar(visual, "scale", scale);
+                            m_AtomDefaults.elementScales[element] = scale;
+                        }
+
+                        m_AtomDefaults.elementColors[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                    }
+                }
+            }
+            catch (const YAML::Exception &exception)
+            {
+                LogWarn(std::string("MigrateLegacyAtomIniIfNeeded: failed to read config/atom_catalog.yaml: ") + exception.what());
+            }
+        }
+        else if (std::filesystem::exists(kLegacyAtomSettingsIniPath))
+        {
+            LoadLegacyAtomSettingsIni(kLegacyAtomSettingsIniPath);
+        }
+        else
+        {
+            return;
+        }
+
         SaveAtomSettingsYaml();
-        LogInfo("MigrateLegacyAtomIniIfNeeded: migrated config/atom_settings.ini to config/atom_settings.yaml");
+        LogInfo("MigrateLegacyAtomIniIfNeeded: created config/atom_settings.yaml from legacy atom settings");
     }
 
     void EditorLayer::LoadLegacyAtomSettingsIni(const std::string &path)
@@ -798,6 +962,7 @@ namespace ds
             }
 
             std::unordered_map<std::string, glm::vec3> elementColors;
+            std::unordered_map<std::string, float> elementScales;
             if (elements && elements.IsMap())
             {
                 for (const auto &entry : elements)
@@ -809,10 +974,17 @@ namespace ds
                     }
 
                     glm::vec3 color = ColorFromElement(element);
-                    const YAML::Node visual = entry.second["visual"];
+                    const YAML::Node visual = entry.second["visualDefaults"] ? entry.second["visualDefaults"] : entry.second["visual"];
                     if (visual)
                     {
-                        TryLoadYamlVec3(visual["color"], color);
+                        TryLoadYamlVec3(visual["defaultColor"] ? visual["defaultColor"] : visual["color"], color);
+                        float scale = 1.0f;
+                        TryLoadYamlScalar(visual, "defaultScale", scale);
+                        if (!visual["defaultScale"])
+                        {
+                            TryLoadYamlScalar(visual, "scale", scale);
+                        }
+                        elementScales[element] = std::clamp(scale, 0.1f, 4.0f);
                     }
 
                     elementColors[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
@@ -820,6 +992,7 @@ namespace ds
             }
 
             m_AtomDefaults.elementColors = std::move(elementColors);
+            m_AtomDefaults.elementScales = std::move(elementScales);
             ApplyAtomDefaultsToSceneSettings();
         }
         catch (const YAML::Exception &exception)
@@ -844,31 +1017,45 @@ namespace ds
             return;
         }
 
-        const glm::vec3 defaultOverrideColor = glm::clamp(m_SceneSettings.atomOverrideColor, glm::vec3(0.0f), glm::vec3(1.0f));
-        const float defaultSize = std::clamp(m_SceneSettings.atomScale, 0.05f, 1.25f);
+        const glm::vec3 defaultOverrideColor = glm::clamp(m_AtomDefaults.defaultOverrideColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        const float defaultSize = std::clamp(m_AtomDefaults.defaultSize, 0.05f, 1.25f);
         YAML::Node root;
         root["version"] = 1;
         root["defaults"]["overrideColor"] = MakeColorNode(defaultOverrideColor);
         root["defaults"]["atomScale"] = defaultSize;
+        root["defaults"]["fallbackVisual"]["color"] = MakeColorNode(defaultOverrideColor);
+        root["defaults"]["fallbackVisual"]["scale"] = 1.0f;
 
-        std::vector<std::string> elementKeys;
-        elementKeys.reserve(m_ElementColorOverrides.size());
-        for (const auto &[element, color] : m_ElementColorOverrides)
+        std::unordered_set<std::string> elementKeySet;
+        for (const auto &[element, color] : m_AtomDefaults.elementColors)
         {
             (void)color;
-            elementKeys.push_back(element);
+            elementKeySet.insert(element);
         }
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            (void)scale;
+            elementKeySet.insert(element);
+        }
+        std::vector<std::string> elementKeys(elementKeySet.begin(), elementKeySet.end());
         std::sort(elementKeys.begin(), elementKeys.end());
 
         for (const std::string &element : elementKeys)
         {
-            const auto it = m_ElementColorOverrides.find(element);
-            if (it == m_ElementColorOverrides.end())
+            const auto colorIt = m_AtomDefaults.elementColors.find(element);
+            if (colorIt == m_AtomDefaults.elementColors.end())
             {
                 continue;
             }
 
-            root["elements"][element]["visual"]["color"] = MakeColorNode(glm::clamp(it->second, glm::vec3(0.0f), glm::vec3(1.0f)));
+            root["elements"][element]["identity"]["symbol"] = element;
+            root["elements"][element]["visualDefaults"]["defaultColor"] = MakeColorNode(glm::clamp(colorIt->second, glm::vec3(0.0f), glm::vec3(1.0f)));
+            const auto scaleIt = m_AtomDefaults.elementScales.find(element);
+            root["elements"][element]["visualDefaults"]["defaultScale"] = (scaleIt != m_AtomDefaults.elementScales.end())
+                                                                              ? std::clamp(scaleIt->second, 0.1f, 4.0f)
+                                                                              : 1.0f;
+            root["elements"][element]["chemistry"] = YAML::Node(YAML::NodeType::Map);
+            root["elements"][element]["crystal"] = YAML::Node(YAML::NodeType::Map);
         }
 
         YAML::Emitter emitter;
@@ -918,6 +1105,7 @@ namespace ds
         snapshot.selectedBondLabelKey = m_SelectedBondLabelKey;
         snapshot.angleLabelStates = m_AngleLabelStates;
         snapshot.elementColorOverrides = m_ElementColorOverrides;
+        snapshot.elementScaleOverrides = m_ElementScaleOverrides;
         snapshot.atomColorOverrides = m_AtomColorOverrides;
         snapshot.selectedAtomIndices = m_SelectedAtomIndices;
         snapshot.outlinerAtomSelectionAnchor = m_OutlinerAtomSelectionAnchor;
@@ -953,6 +1141,7 @@ namespace ds
         m_SelectedBondLabelKey = snapshot.selectedBondLabelKey;
         m_AngleLabelStates = snapshot.angleLabelStates;
         m_ElementColorOverrides = snapshot.elementColorOverrides;
+        m_ElementScaleOverrides = snapshot.elementScaleOverrides;
         m_AtomColorOverrides = snapshot.atomColorOverrides;
         m_SelectedAtomIndices = snapshot.selectedAtomIndices;
         m_OutlinerAtomSelectionAnchor = snapshot.outlinerAtomSelectionAnchor;
@@ -2974,6 +3163,7 @@ namespace ds
         LoadLegacyUiSettingsIni(legacyPath);
         LoadAtomSettingsYaml();
         SaveUiSettingsYaml();
+        SaveSceneState();
         LogInfo("MigrateLegacyUiIniIfNeeded: migrated " + legacyPath + " to config/ui_settings.yaml");
     }
 
@@ -3001,6 +3191,7 @@ namespace ds
             const YAML::Node viewport = root["viewport"];
             const YAML::Node render = root["renderImage"];
             const YAML::Node hotkeys = root["hotkeys"];
+            const YAML::Node elementCatalog = root["elementCatalog"];
 
             if (ui)
             {
@@ -3028,6 +3219,8 @@ namespace ds
                 TryLoadYamlScalar(panels, "showStatsPanel", m_ShowStatsPanel);
                 TryLoadYamlScalar(panels, "showViewportInfoPanel", m_ShowViewportInfoPanel);
                 TryLoadYamlScalar(panels, "showShortcutReferencePanel", m_ShowShortcutReferencePanel);
+                TryLoadYamlScalar(panels, "showElementCatalogPanel", m_ShowElementCatalogPanel);
+                TryLoadYamlScalar(panels, "showPeriodicTablePanel", m_ShowPeriodicTablePanel);
                 TryLoadYamlScalar(panels, "showActionsPanel", m_ShowActionsPanel);
                 TryLoadYamlScalar(panels, "showAppearancePanel", m_ShowAppearancePanel);
                 TryLoadYamlScalar(panels, "showSettingsPanel", m_ShowSettingsPanel);
@@ -3088,6 +3281,8 @@ namespace ds
                 TryLoadYamlVec3(lighting["position"], m_LightPosition);
 
                 const YAML::Node atoms = viewport["atoms"];
+                TryLoadYamlScalar(atoms, "overrideColorEnabled", m_SceneSettings.overrideAtomColor);
+                TryLoadYamlVec3(atoms["overrideColor"], m_SceneSettings.atomOverrideColor);
                 TryLoadYamlScalar(atoms, "brightness", m_SceneSettings.atomBrightness);
                 TryLoadYamlScalar(atoms, "glowStrength", m_SceneSettings.atomGlowStrength);
                 TryLoadYamlVec3(atoms["selectedCustomColor"], m_SelectedAtomCustomColor);
@@ -3212,6 +3407,20 @@ namespace ds
                 TryLoadYamlScalar(hotkeys, "rotateGizmo", m_HotkeyRotateGizmo);
                 TryLoadYamlScalar(hotkeys, "scaleGizmo", m_HotkeyScaleGizmo);
             }
+
+            if (elementCatalog)
+            {
+                std::string selectionSource;
+                TryLoadYamlScalar(elementCatalog, "selectionSource", selectionSource);
+                if (selectionSource == "viewport")
+                {
+                    m_ElementCatalogFollowViewportSelection = true;
+                }
+                else if (selectionSource == "periodicTable")
+                {
+                    m_ElementCatalogFollowViewportSelection = false;
+                }
+            }
         }
         catch (const YAML::Exception &exception)
         {
@@ -3242,6 +3451,8 @@ namespace ds
         root["panels"]["showStatsPanel"] = m_ShowStatsPanel;
         root["panels"]["showViewportInfoPanel"] = m_ShowViewportInfoPanel;
         root["panels"]["showShortcutReferencePanel"] = m_ShowShortcutReferencePanel;
+        root["panels"]["showElementCatalogPanel"] = m_ShowElementCatalogPanel;
+        root["panels"]["showPeriodicTablePanel"] = m_ShowPeriodicTablePanel;
         root["panels"]["showActionsPanel"] = m_ShowActionsPanel;
         root["panels"]["showAppearancePanel"] = m_ShowAppearancePanel;
         root["panels"]["showSettingsPanel"] = m_ShowSettingsPanel;
@@ -3288,6 +3499,8 @@ namespace ds
         root["viewport"]["lighting"]["color"] = MakeColorNode(m_SceneSettings.lightColor);
         root["viewport"]["lighting"]["position"] = MakeVec3Node(m_LightPosition);
 
+        root["viewport"]["atoms"]["overrideColorEnabled"] = m_SceneSettings.overrideAtomColor;
+        root["viewport"]["atoms"]["overrideColor"] = MakeColorNode(m_SceneSettings.atomOverrideColor);
         root["viewport"]["atoms"]["brightness"] = m_SceneSettings.atomBrightness;
         root["viewport"]["atoms"]["glowStrength"] = m_SceneSettings.atomGlowStrength;
         root["viewport"]["atoms"]["selectedCustomColor"] = MakeColorNode(m_SelectedAtomCustomColor);
@@ -3382,6 +3595,7 @@ namespace ds
         root["hotkeys"]["translateGizmo"] = m_HotkeyTranslateGizmo;
         root["hotkeys"]["rotateGizmo"] = m_HotkeyRotateGizmo;
         root["hotkeys"]["scaleGizmo"] = m_HotkeyScaleGizmo;
+        root["elementCatalog"]["selectionSource"] = m_ElementCatalogFollowViewportSelection ? "viewport" : "periodicTable";
 
         YAML::Emitter emitter;
         emitter.SetIndent(2);
@@ -3512,6 +3726,9 @@ namespace ds
             collection.selectable = (getValue(prefix + "selectable") != "0");
             m_Collections.push_back(collection);
         }
+
+        m_ElementColorOverrides = ParseElementColorOverrides(getValue("scene_project_element_color_overrides"));
+        m_ElementScaleOverrides = ParseElementScaleOverrides(getValue("scene_project_element_scale_overrides"));
 
         int emptyCount = 0;
         try
@@ -3805,6 +4022,8 @@ namespace ds
             out << prefix << "visible=" << (collection.visible ? 1 : 0) << '\n';
             out << prefix << "selectable=" << (collection.selectable ? 1 : 0) << '\n';
         }
+        out << "scene_project_element_color_overrides=" << SerializeElementColorOverrides(m_ElementColorOverrides) << '\n';
+        out << "scene_project_element_scale_overrides=" << SerializeElementScaleOverrides(m_ElementScaleOverrides) << '\n';
 
         out << "scene_empty_count=" << m_TransformEmpties.size() << '\n';
         for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)

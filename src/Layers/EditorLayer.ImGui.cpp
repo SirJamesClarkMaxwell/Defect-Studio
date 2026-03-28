@@ -28,6 +28,8 @@ namespace ds
         ImGui::DockBuilderDockWindow("Properties", rightDockId);
         ImGui::DockBuilderDockWindow("Appearance", rightDockId);
         ImGui::DockBuilderDockWindow("Actions", rightDockId);
+        ImGui::DockBuilderDockWindow("Element Catalog", rightDockId);
+        ImGui::DockBuilderDockWindow("Periodic Table", rightDockId);
         ImGui::DockBuilderDockWindow("Viewport Settings", rightUtilityDockId);
         ImGui::DockBuilderDockWindow("Render Preview", rightUtilityDockId);
         ImGui::DockBuilderDockWindow("Settings", rightUtilityDockId);
@@ -205,6 +207,22 @@ namespace ds
                 {
                     settingsChanged = true;
                 }
+                if (ImGui::MenuItem("Element Catalog", nullptr, &m_ShowElementCatalogPanel))
+                {
+                    settingsChanged = true;
+                }
+                if (ImGui::MenuItem("Periodic Table", nullptr, &m_ShowPeriodicTablePanel))
+                {
+                    if (m_ShowPeriodicTablePanel)
+                    {
+                        m_RequestPeriodicTableFocus = true;
+                    }
+                    else
+                    {
+                        m_PeriodicTableOpen = false;
+                    }
+                    settingsChanged = true;
+                }
                 if (ImGui::MenuItem("Scene Outliner", nullptr, &m_ShowSceneOutlinerPanel))
                 {
                     settingsChanged = true;
@@ -248,6 +266,8 @@ namespace ds
                     m_ShowObjectPropertiesPanel = true;
                     m_ShowActionsPanel = true;
                     m_ShowAppearancePanel = true;
+                    m_ShowPeriodicTablePanel = false;
+                    m_PeriodicTableOpen = false;
                     m_ViewportSettingsOpen = true;
                     m_ShowRenderPreviewWindow = true;
                     m_ShowSettingsPanel = true;
@@ -3111,9 +3131,7 @@ namespace ds
                         ImGui::SameLine();
                         if (ImGui::SmallButton("Table"))
                         {
-                            m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
-                            m_PeriodicTableOpenedFromContextMenu = true;
-                            m_PeriodicTableOpen = true;
+                            OpenPeriodicTable(PeriodicTableTarget::ChangeSelectedAtoms, true);
                         }
                         ImGui::SameLine();
                         if (ImGui::SmallButton("Apply"))
@@ -3402,9 +3420,7 @@ namespace ds
 
                             if (ImGui::MenuItem("Periodic table..."))
                             {
-                                m_PeriodicTableTarget = PeriodicTableTarget::ChangeSelectedAtoms;
-                                m_PeriodicTableOpenedFromContextMenu = true;
-                                m_PeriodicTableOpen = true;
+                                OpenPeriodicTable(PeriodicTableTarget::ChangeSelectedAtoms, true);
                             }
 
                             if (ImGui::MenuItem("Apply"))
@@ -4416,11 +4432,18 @@ namespace ds
                         }
                     }
 
-                    if (ImGui::CollapsingHeader("Per-element colors", defaultOpenFlags))
+                    if (ImGui::CollapsingHeader("Per-element project overrides", defaultOpenFlags))
                     {
+                        if (ImGui::Button("Open Element Catalog"))
+                        {
+                            EnsureElementAppearanceSelection();
+                            m_ShowElementCatalogPanel = true;
+                            settingsChanged = true;
+                        }
+
                         if (!m_HasStructureLoaded || m_WorkingStructure.species.empty())
                         {
-                            ImGui::TextDisabled("Load structure to edit per-element colors.");
+                            ImGui::TextDisabled("Load structure to edit project overrides for element colors and sizes.");
                         }
                         else
                         {
@@ -4436,25 +4459,63 @@ namespace ds
                                     continue;
                                 }
 
-                                glm::vec3 color = ColorFromElement(element);
-                                const auto overrideIt = m_ElementColorOverrides.find(element);
-                                if (overrideIt != m_ElementColorOverrides.end())
+                                ImGui::PushID(element.c_str());
+
+                                bool hasColorOverride = (m_ElementColorOverrides.find(element) != m_ElementColorOverrides.end());
+                                glm::vec3 color = ResolveElementColor(element);
+                                if (ImGui::Checkbox("##OverrideColor", &hasColorOverride))
                                 {
-                                    color = overrideIt->second;
+                                    if (hasColorOverride)
+                                    {
+                                        m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                                    }
+                                    else
+                                    {
+                                        m_ElementColorOverrides.erase(element);
+                                    }
+                                    settingsChanged = true;
                                 }
 
-                                std::string label = element + "##AppearanceElementColor_" + element;
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(element.c_str());
+                                ImGui::SameLine(0.0f, 12.0f);
+                                std::string label = "Color##AppearanceElementColor_" + element;
                                 if (ImGui::ColorEdit3(label.c_str(), &color.x,
                                                       ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
                                 {
                                     m_ElementColorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
                                     settingsChanged = true;
                                 }
+
+                                ImGui::SameLine();
+                                bool hasScaleOverride = (m_ElementScaleOverrides.find(element) != m_ElementScaleOverrides.end());
+                                if (ImGui::Checkbox("Project size##OverrideScale", &hasScaleOverride))
+                                {
+                                    if (hasScaleOverride)
+                                    {
+                                        m_ElementScaleOverrides[element] = ResolveElementVisualScale(element);
+                                    }
+                                    else
+                                    {
+                                        m_ElementScaleOverrides.erase(element);
+                                    }
+                                    settingsChanged = true;
+                                }
+
+                                float scale = ResolveElementVisualScale(element);
+                                if (ImGui::SliderFloat(("Scale##AppearanceElementScale_" + element).c_str(), &scale, 0.1f, 4.0f, "%.2fx"))
+                                {
+                                    m_ElementScaleOverrides[element] = std::clamp(scale, 0.1f, 4.0f);
+                                    settingsChanged = true;
+                                }
+
+                                ImGui::PopID();
                             }
 
-                            if (ImGui::Button("Reset per-element colors"))
+                            if (ImGui::Button("Clear project element overrides"))
                             {
                                 m_ElementColorOverrides.clear();
+                                m_ElementScaleOverrides.clear();
                                 settingsChanged = true;
                             }
                         }
@@ -4477,9 +4538,7 @@ namespace ds
                         ImGui::SameLine();
                         if (ImGui::Button("Periodic table"))
                         {
-                            m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                            m_PeriodicTableOpenedFromContextMenu = false;
-                            m_PeriodicTableOpen = true;
+                            OpenPeriodicTable(PeriodicTableTarget::AddAtomEntry);
                         }
                         ImGui::DragFloat3("Position", &m_AddAtomPosition.x, 0.01f, -1000.0f, 1000.0f, "%.5f");
                         ImGui::Combo("Input coordinates", &m_AddAtomCoordinateModeIndex, inputCoordinateModes, IM_ARRAYSIZE(inputCoordinateModes));
@@ -5373,7 +5432,82 @@ namespace ds
                 ImGui::EndDisabled();
             }
 
+            const bool canRenameCollection =
+                m_ActiveCollectionIndex >= 0 &&
+                m_ActiveCollectionIndex < static_cast<int>(m_Collections.size());
+            if (canRenameCollection &&
+                ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                ImGui::IsKeyPressed(ImGuiKey_F2, false) &&
+                !ImGui::IsAnyItemActive())
+            {
+                const std::string &activeName = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].name;
+                std::snprintf(m_RenameCollectionBuffer.data(), m_RenameCollectionBuffer.size(), "%s", activeName.c_str());
+                m_RenameCollectionDialogOpen = true;
+            }
+
+            if (m_RenameCollectionDialogOpen)
+            {
+                ImGui::OpenPopup("Rename Collection");
+                m_RenameCollectionDialogOpen = false;
+            }
+
+            if (ImGui::BeginPopupModal("Rename Collection", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                if (ImGui::IsWindowAppearing())
+                {
+                    ImGui::SetKeyboardFocusHere();
+                }
+
+                bool confirmRename = ImGui::InputText(
+                    "Name",
+                    m_RenameCollectionBuffer.data(),
+                    m_RenameCollectionBuffer.size(),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+                auto trimCollectionName = [](std::string value) -> std::string
+                {
+                    const std::string whitespace = " \t\r\n";
+                    const std::size_t first = value.find_first_not_of(whitespace);
+                    if (first == std::string::npos)
+                    {
+                        return std::string();
+                    }
+
+                    const std::size_t last = value.find_last_not_of(whitespace);
+                    return value.substr(first, last - first + 1);
+                };
+
+                if (ImGui::Button("Rename"))
+                {
+                    confirmRename = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel"))
+                {
+                    ImGui::CloseCurrentPopup();
+                }
+
+                if (confirmRename && canRenameCollection)
+                {
+                    const std::string trimmedName = trimCollectionName(std::string(m_RenameCollectionBuffer.data()));
+                    if (!trimmedName.empty())
+                    {
+                        SceneCollection &collection = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)];
+                        if (trimmedName != collection.name)
+                        {
+                            PushUndoSnapshot("Rename collection");
+                            collection.name = trimmedName;
+                            settingsChanged = true;
+                        }
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+
+                ImGui::EndPopup();
+            }
+
             ImGui::SeparatorText("Collections");
+            ImGui::TextDisabled("Tip: press F2 to rename the active collection.");
 
             auto selectAtomRangeInCollection = [&](std::size_t collectionIndex, std::size_t anchorIndex, std::size_t clickedIndex, bool additive)
             {
@@ -5414,9 +5548,15 @@ namespace ds
                 SceneCollection &collection = m_Collections[collectionIndex];
                 ImGui::PushID(static_cast<int>(collectionIndex));
 
-                ImGui::Checkbox("##visible", &collection.visible);
+                if (ImGui::Checkbox("##visible", &collection.visible))
+                {
+                    settingsChanged = true;
+                }
                 ImGui::SameLine();
-                ImGui::Checkbox("##selectable", &collection.selectable);
+                if (ImGui::Checkbox("##selectable", &collection.selectable))
+                {
+                    settingsChanged = true;
+                }
                 ImGui::SameLine();
                 drawOutlinerIcon(OutlinerIconKind::Collection, IM_COL32(255, 174, 43, 220));
                 ImGui::SameLine(0.0f, 6.0f);
@@ -5792,6 +5932,7 @@ namespace ds
             drawShortcutSection("Scene Tools", {
                                                   {addMenuShortcut.c_str(), "Open Add Scene Object popup"},
                                                   {deleteShortcut.c_str(), "Delete current selection"},
+                                                  {"F2", "Rename active collection in Scene Outliner"},
                                                   {"Mouse Wheel", "Zoom viewport / adjust circle radius while C-select"},
                                                   {"MMB / Shift+MMB", "Orbit / pan viewport"},
                                                   {"Alt+LMB / Alt+Shift+LMB", "Touchpad orbit / pan mode"}});
@@ -6156,6 +6297,7 @@ namespace ds
         DrawChangeAtomTypeConfirmDialog();
         DrawRenderImageDialog(settingsChanged);
         DrawRenderPreviewWindow(settingsChanged);
+        DrawElementAppearanceWindow(settingsChanged);
 
         if (m_ShowAddAtomDialog)
         {
@@ -6169,9 +6311,7 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Periodic table"))
                 {
-                    m_PeriodicTableTarget = PeriodicTableTarget::AddAtomEntry;
-                    m_PeriodicTableOpenedFromContextMenu = false;
-                    m_PeriodicTableOpen = true;
+                    OpenPeriodicTable(PeriodicTableTarget::AddAtomEntry);
                 }
 
                 DrawColoredVec3Control("Position", m_AddAtomPosition, 0.01f, -1000.0f, 1000.0f, "%.5f");
@@ -6234,6 +6374,292 @@ namespace ds
         {
             SaveSettings();
         }
+    }
+
+    void EditorLayer::DrawElementAppearanceWindow(bool &settingsChanged)
+    {
+        if (!m_ShowElementCatalogPanel)
+        {
+            return;
+        }
+
+        EnsureElementAppearanceSelection();
+
+        std::unordered_set<std::string> symbolSet;
+        auto addSymbol = [&](const std::string &rawSymbol)
+        {
+            const std::string normalized = NormalizeElementSymbol(rawSymbol);
+            if (!normalized.empty())
+            {
+                symbolSet.insert(normalized);
+            }
+        };
+
+        for (const auto &[element, color] : m_AtomDefaults.elementColors)
+        {
+            (void)color;
+            addSymbol(element);
+        }
+        for (const auto &[element, scale] : m_AtomDefaults.elementScales)
+        {
+            (void)scale;
+            addSymbol(element);
+        }
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            addSymbol(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            addSymbol(element);
+        }
+        addSymbol(m_ElementCatalogSelectedSymbol);
+        if (m_HasStructureLoaded)
+        {
+            for (const std::string &element : m_WorkingStructure.species)
+            {
+                addSymbol(element);
+            }
+            for (const Atom &atom : m_WorkingStructure.atoms)
+            {
+                addSymbol(atom.element);
+            }
+        }
+
+        std::vector<std::string> symbols(symbolSet.begin(), symbolSet.end());
+        std::sort(symbols.begin(), symbols.end());
+        if (symbols.empty())
+        {
+            symbols.push_back("C");
+        }
+
+        if (std::find(symbols.begin(), symbols.end(), m_ElementCatalogSelectedSymbol) == symbols.end())
+        {
+            m_ElementCatalogSelectedSymbol = symbols.front();
+        }
+
+        std::string selectedAtomElement;
+        if (m_HasStructureLoaded && !m_SelectedAtomIndices.empty())
+        {
+            const std::size_t atomIndex = m_SelectedAtomIndices.back();
+            if (atomIndex < m_WorkingStructure.atoms.size())
+            {
+                selectedAtomElement = NormalizeElementSymbol(m_WorkingStructure.atoms[atomIndex].element);
+            }
+        }
+
+        if (m_ElementCatalogFollowViewportSelection && !selectedAtomElement.empty())
+        {
+            m_ElementCatalogSelectedSymbol = selectedAtomElement;
+        }
+
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 640.0f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Element Catalog", &m_ShowElementCatalogPanel))
+        {
+            ImGui::End();
+            return;
+        }
+
+        ImGui::TextWrapped("Global element defaults come from atom_settings.yaml. Project-specific color and size overrides are stored with the current scene state.");
+
+        ImGui::SeparatorText("Selection source");
+        if (ImGui::RadioButton("Periodic table", !m_ElementCatalogFollowViewportSelection))
+        {
+            m_ElementCatalogFollowViewportSelection = false;
+            settingsChanged = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Viewport selection", m_ElementCatalogFollowViewportSelection))
+        {
+            m_ElementCatalogFollowViewportSelection = true;
+            if (!selectedAtomElement.empty())
+            {
+                m_ElementCatalogSelectedSymbol = selectedAtomElement;
+            }
+            if (!m_ShowPeriodicTablePanel)
+            {
+                m_PeriodicTableOpen = false;
+            }
+            settingsChanged = true;
+        }
+
+        if (m_ElementCatalogFollowViewportSelection)
+        {
+            if (!selectedAtomElement.empty())
+            {
+                ImGui::TextDisabled("Following selected viewport atom: %s", selectedAtomElement.c_str());
+            }
+            else
+            {
+                ImGui::TextDisabled("Select an atom in the viewport to drive the catalog selection.");
+            }
+        }
+
+        if (m_ElementCatalogFollowViewportSelection)
+        {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::BeginCombo("Element", m_ElementCatalogSelectedSymbol.c_str()))
+        {
+            for (const std::string &symbol : symbols)
+            {
+                const bool isSelected = (symbol == m_ElementCatalogSelectedSymbol);
+                if (ImGui::Selectable(symbol.c_str(), isSelected))
+                {
+                    m_ElementCatalogSelectedSymbol = symbol;
+                }
+                if (isSelected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (m_ElementCatalogFollowViewportSelection)
+        {
+            ImGui::EndDisabled();
+        }
+
+        if (!m_ElementCatalogFollowViewportSelection && !selectedAtomElement.empty())
+        {
+            if (ImGui::Button("Use selected atom element"))
+            {
+                m_ElementCatalogSelectedSymbol = selectedAtomElement;
+            }
+        }
+
+        if (!m_ElementCatalogFollowViewportSelection)
+        {
+            ImGui::SeparatorText("Periodic table");
+            ImGui::BeginChild("ElementCatalogPeriodicTable", ImVec2(0.0f, 320.0f), true);
+            DrawPeriodicTableSelector("ElementCatalogInline", PeriodicTableTarget::ElementAppearanceEditor, false);
+            ImGui::EndChild();
+        }
+
+        const std::string element = m_ElementCatalogSelectedSymbol;
+        const glm::vec3 proceduralColor = glm::clamp(ColorFromElement(element), glm::vec3(0.0f), glm::vec3(1.0f));
+        glm::vec3 catalogColor = proceduralColor;
+        if (const auto it = m_AtomDefaults.elementColors.find(element); it != m_AtomDefaults.elementColors.end())
+        {
+            catalogColor = glm::clamp(it->second, glm::vec3(0.0f), glm::vec3(1.0f));
+        }
+
+        float catalogScale = 1.0f;
+        if (const auto it = m_AtomDefaults.elementScales.find(element); it != m_AtomDefaults.elementScales.end())
+        {
+            catalogScale = std::clamp(it->second, 0.1f, 4.0f);
+        }
+
+        glm::vec3 resolvedColor = ResolveElementColor(element);
+        float resolvedScale = ResolveElementVisualScale(element);
+        int usageCount = 0;
+        if (m_HasStructureLoaded)
+        {
+            for (const Atom &atom : m_WorkingStructure.atoms)
+            {
+                if (NormalizeElementSymbol(atom.element) == element)
+                {
+                    ++usageCount;
+                }
+            }
+        }
+
+        ImGui::SeparatorText("Resolved appearance");
+        ImGui::ColorButton(
+            "##ResolvedElementColor",
+            ImVec4(resolvedColor.x, resolvedColor.y, resolvedColor.z, 1.0f),
+            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+            ImVec2(28.0f, 28.0f));
+        ImGui::SameLine();
+        ImGui::Text("%s", element.c_str());
+        ImGui::TextDisabled("Effective size multiplier: %.2fx", resolvedScale);
+        if (usageCount > 0)
+        {
+            ImGui::TextDisabled("Atoms in current structure: %d", usageCount);
+        }
+        else
+        {
+            ImGui::TextDisabled("This element is not used in the currently loaded structure.");
+        }
+
+        ImGui::SeparatorText("Catalog defaults (global app)");
+        if (ImGui::ColorEdit3("Default color", &catalogColor.x,
+                              ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+        {
+            m_AtomDefaults.elementColors[element] = glm::clamp(catalogColor, glm::vec3(0.0f), glm::vec3(1.0f));
+            settingsChanged = true;
+        }
+        if (ImGui::SliderFloat("Default size", &catalogScale, 0.1f, 4.0f, "%.2fx"))
+        {
+            m_AtomDefaults.elementScales[element] = std::clamp(catalogScale, 0.1f, 4.0f);
+            settingsChanged = true;
+        }
+        if (ImGui::Button("Reset catalog defaults for element"))
+        {
+            m_AtomDefaults.elementColors.erase(element);
+            m_AtomDefaults.elementScales.erase(element);
+            settingsChanged = true;
+        }
+        ImGui::TextDisabled("Fallback after reset: procedural palette + 1.00x size.");
+
+        ImGui::SeparatorText("Project overrides");
+        bool hasProjectColorOverride = (m_ElementColorOverrides.find(element) != m_ElementColorOverrides.end());
+        if (ImGui::Checkbox("Override color in current project", &hasProjectColorOverride))
+        {
+            if (hasProjectColorOverride)
+            {
+                m_ElementColorOverrides[element] = resolvedColor;
+            }
+            else
+            {
+                m_ElementColorOverrides.erase(element);
+            }
+            settingsChanged = true;
+        }
+        if (hasProjectColorOverride)
+        {
+            glm::vec3 projectColor = m_ElementColorOverrides[element];
+            if (ImGui::ColorEdit3("Project color", &projectColor.x,
+                                  ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel))
+            {
+                m_ElementColorOverrides[element] = glm::clamp(projectColor, glm::vec3(0.0f), glm::vec3(1.0f));
+                settingsChanged = true;
+            }
+        }
+
+        bool hasProjectScaleOverride = (m_ElementScaleOverrides.find(element) != m_ElementScaleOverrides.end());
+        if (ImGui::Checkbox("Override size in current project", &hasProjectScaleOverride))
+        {
+            if (hasProjectScaleOverride)
+            {
+                m_ElementScaleOverrides[element] = resolvedScale;
+            }
+            else
+            {
+                m_ElementScaleOverrides.erase(element);
+            }
+            settingsChanged = true;
+        }
+        if (hasProjectScaleOverride)
+        {
+            float projectScale = m_ElementScaleOverrides[element];
+            if (ImGui::SliderFloat("Project size", &projectScale, 0.1f, 4.0f, "%.2fx"))
+            {
+                m_ElementScaleOverrides[element] = std::clamp(projectScale, 0.1f, 4.0f);
+                settingsChanged = true;
+            }
+        }
+
+        if (ImGui::Button("Clear project overrides"))
+        {
+            m_ElementColorOverrides.erase(element);
+            m_ElementScaleOverrides.erase(element);
+            settingsChanged = true;
+        }
+
+        ImGui::End();
     }
 
 

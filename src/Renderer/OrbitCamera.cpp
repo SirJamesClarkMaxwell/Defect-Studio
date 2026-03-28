@@ -48,7 +48,7 @@ namespace ds
         m_ZoomSensitivity = zoom;
     }
 
-    void OrbitCamera::OnUpdate(float deltaTime, bool allowInput, float scrollDelta, bool touchpadNavigationEnabled)
+    void OrbitCamera::OnUpdate(float deltaTime, bool allowInput, float scrollDelta, bool touchpadNavigationEnabled, bool invertZoom)
     {
         GLFWwindow *window = ApplicationContext::Get().GetWindow();
 
@@ -79,11 +79,12 @@ namespace ds
             m_LastMousePos = mousePos;
         }
 
-        if (scrollDelta != 0.0f)
+        const float effectiveScrollDelta = invertZoom ? -scrollDelta : scrollDelta;
+        if (effectiveScrollDelta != 0.0f)
         {
             if (m_ProjectionMode == ProjectionMode::Orthographic)
             {
-                float zoomFactor = 1.0f - scrollDelta * 0.12f * m_ZoomSensitivity;
+                float zoomFactor = 1.0f - effectiveScrollDelta * 0.12f * m_ZoomSensitivity;
                 if (zoomFactor < 0.1f)
                     zoomFactor = 0.1f;
                 if (zoomFactor > 4.0f)
@@ -100,7 +101,7 @@ namespace ds
             else
             {
                 const float zoomFromWheel = 0.9f * m_Distance * m_ZoomSensitivity;
-                m_Distance -= scrollDelta * zoomFromWheel;
+                m_Distance -= effectiveScrollDelta * zoomFromWheel;
                 if (m_Distance < 0.5f)
                     m_Distance = 0.5f;
                 if (m_Distance > 100.0f)
@@ -148,7 +149,8 @@ namespace ds
 
         if (touchpadZoom)
         {
-            m_Distance += delta.y * 0.020f * m_Distance * m_ZoomSensitivity;
+            const float touchpadZoomDelta = invertZoom ? -delta.y : delta.y;
+            m_Distance += touchpadZoomDelta * 0.020f * m_Distance * m_ZoomSensitivity;
             if (m_Distance < 0.5f)
                 m_Distance = 0.5f;
             if (m_Distance > 100.0f)

@@ -20,7 +20,7 @@ namespace ds
 
         void SetViewportSize(float width, float height);
         void SetSensitivity(float orbit, float pan, float zoom);
-        void OnUpdate(float deltaTime, bool allowInput, float scrollDelta, bool touchpadNavigationEnabled = false);
+        void OnUpdate(float deltaTime, bool allowInput, float scrollDelta, bool touchpadNavigationEnabled = false, bool invertZoom = false);
         void FrameBounds(const glm::vec3 &boundsMin, const glm::vec3 &boundsMax);
         void SetProjectionMode(ProjectionMode mode);
         void SetPerspectiveFovDegrees(float fovDegrees);

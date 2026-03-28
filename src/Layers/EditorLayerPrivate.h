@@ -306,6 +306,87 @@ namespace ds
             return out.str();
         }
 
+        std::unordered_map<std::string, float> ParseElementScaleOverrides(const std::string &encoded)
+        {
+            std::unordered_map<std::string, float> overrides;
+            if (encoded.empty())
+            {
+                return overrides;
+            }
+
+            std::size_t cursor = 0;
+            while (cursor <= encoded.size())
+            {
+                const std::size_t sep = encoded.find(';', cursor);
+                const std::string token = (sep == std::string::npos)
+                                              ? encoded.substr(cursor)
+                                              : encoded.substr(cursor, sep - cursor);
+                if (!token.empty())
+                {
+                    const std::size_t eq = token.find(':');
+                    if (eq != std::string::npos)
+                    {
+                        const std::string element = NormalizeElementSymbol(token.substr(0, eq));
+                        const std::string value = token.substr(eq + 1);
+                        if (!element.empty())
+                        {
+                            try
+                            {
+                                overrides[element] = std::clamp(std::stof(value), 0.1f, 4.0f);
+                            }
+                            catch (...)
+                            {
+                            }
+                        }
+                    }
+                }
+
+                if (sep == std::string::npos)
+                {
+                    break;
+                }
+                cursor = sep + 1;
+            }
+
+            return overrides;
+        }
+
+        std::string SerializeElementScaleOverrides(const std::unordered_map<std::string, float> &overrides)
+        {
+            if (overrides.empty())
+            {
+                return std::string();
+            }
+
+            std::vector<std::string> keys;
+            keys.reserve(overrides.size());
+            for (const auto &[key, value] : overrides)
+            {
+                (void)value;
+                keys.push_back(key);
+            }
+            std::sort(keys.begin(), keys.end());
+
+            std::ostringstream out;
+            out << std::fixed << std::setprecision(4);
+            for (std::size_t i = 0; i < keys.size(); ++i)
+            {
+                const auto it = overrides.find(keys[i]);
+                if (it == overrides.end())
+                {
+                    continue;
+                }
+                if (i > 0)
+                {
+                    out << ';';
+                }
+
+                out << keys[i] << ':' << std::clamp(it->second, 0.1f, 4.0f);
+            }
+
+            return out.str();
+        }
+
         std::string BuildDebugTimestampNow()
         {
             const auto now = std::chrono::system_clock::now();
