@@ -102,9 +102,13 @@ namespace ds
             std::uint32_t width = 1920;
             std::uint32_t height = 1080;
             RenderImageFormat format = RenderImageFormat::Png;
-            bool useWhiteBackground = false;
-            bool overrideAtomColor = false;
-            glm::vec3 atomOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
+            SceneRenderSettings sceneSettings;
+            bool showBondLengthLabels = true;
+            float bondLabelScaleMultiplier = 1.0f;
+            glm::vec3 bondLabelTextColor = glm::vec3(0.84f, 0.88f, 0.93f);
+            glm::vec3 bondLabelBackgroundColor = glm::vec3(0.08f, 0.09f, 0.12f);
+            glm::vec3 bondLabelBorderColor = glm::vec3(0.72f, 0.76f, 0.88f);
+            int bondLabelPrecision = 3;
             bool useCrop = false;
             std::array<float, 4> cropRectNormalized = {0.0f, 0.0f, 1.0f, 1.0f};
         };
@@ -171,6 +175,19 @@ namespace ds
             std::size_t atomC = 0;
         };
 
+        struct BondLabelLayoutItem
+        {
+            std::uint64_t key = 0;
+            std::string text;
+            glm::vec2 textPos = glm::vec2(0.0f);
+            glm::vec2 textSize = glm::vec2(0.0f);
+            glm::vec2 boxMin = glm::vec2(0.0f);
+            glm::vec2 boxMax = glm::vec2(0.0f);
+            float fontSize = 0.0f;
+            float depthToCamera = 0.0f;
+            bool selected = false;
+        };
+
         struct CameraPreset
         {
             std::string name;
@@ -197,6 +214,7 @@ namespace ds
         void LoadSettings();
         void SaveSceneState() const;
         void LoadSceneState();
+        void SyncRenderAppearanceFromViewport();
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool AppendStructureFromPathAsCollection(const std::string &path);
@@ -240,11 +258,23 @@ namespace ds
         void DrawPeriodicTableWindow();
         void DrawChangeAtomTypeConfirmDialog();
         void DrawRenderImageDialog(bool &settingsChanged);
+        void DrawRenderPreviewWindow(bool &settingsChanged);
         bool SaveCurrentFrameAsImage(
             const std::string &outputPath,
             std::uint32_t width,
             std::uint32_t height,
             RenderImageFormat format,
+            bool useCrop,
+            const std::array<float, 4> &cropRectNormalized) const;
+        std::vector<BondLabelLayoutItem> BuildBondLabelLayout(
+            const OrbitCamera &camera,
+            std::uint32_t sourceWidth,
+            std::uint32_t sourceHeight,
+            const glm::vec2 &targetRectMin,
+            const glm::vec2 &targetRectMax,
+            bool showLabels,
+            float labelScaleMultiplier,
+            int labelPrecision,
             bool useCrop,
             const std::array<float, 4> &cropRectNormalized) const;
         void RebuildAutoBonds(const std::vector<glm::vec3> &atomCartesianPositions);
@@ -284,14 +314,21 @@ namespace ds
         int m_RenderImageHeight = 1080;
         RenderImageFormat m_RenderImageFormat = RenderImageFormat::Png;
         bool m_ShowRenderImageDialog = false;
-        bool m_ShowRenderFramePreview = true;
+        bool m_ShowRenderPreviewWindow = true;
         int m_RenderJpegQuality = 92;
-        bool m_RenderUseWhiteBackground = false;
-        bool m_RenderOverrideAtomColor = false;
-        glm::vec3 m_RenderAtomOverrideColor = glm::vec3(0.90f, 0.65f, 0.35f);
+        SceneRenderSettings m_RenderSceneSettings;
         bool m_RenderCropEnabled = false;
         std::array<float, 4> m_RenderCropRectNormalized = {0.0f, 0.0f, 1.0f, 1.0f};
+        bool m_RenderShowBondLengthLabels = true;
         float m_RenderBondLabelScaleMultiplier = 1.0f;
+        int m_RenderBondLabelPrecision = 3;
+        glm::vec3 m_RenderBondLabelTextColor = glm::vec3(0.84f, 0.88f, 0.93f);
+        glm::vec3 m_RenderBondLabelBackgroundColor = glm::vec3(0.08f, 0.09f, 0.12f);
+        glm::vec3 m_RenderBondLabelBorderColor = glm::vec3(0.72f, 0.76f, 0.88f);
+        glm::vec2 m_RenderPreviewContentSize = glm::vec2(640.0f, 360.0f);
+        std::uint32_t m_RenderPreviewTargetWidth = 1280;
+        std::uint32_t m_RenderPreviewTargetHeight = 720;
+        float m_RenderPreviewLongSideCap = 1600.0f;
         RenderImageRequest m_RenderImageRequest;
         std::array<char, 16> m_AddAtomElementBuffer = {'S', 'i', '\0'};
         std::array<char, 16> m_ChangeAtomElementBuffer = {'G', 'e', '\0'};
@@ -512,6 +549,7 @@ namespace ds
         bool m_ViewportSettingsOpen = true;
 
         std::unique_ptr<IRenderBackend> m_RenderBackend;
+        std::unique_ptr<IRenderBackend> m_RenderPreviewBackend;
         std::unique_ptr<OrbitCamera> m_Camera;
     };
 

@@ -13,9 +13,18 @@
 
 namespace ds
 {
+    namespace
+    {
+        ImFont *s_BondLabelFont = nullptr;
+    }
 
     ImGuiLayer::ImGuiLayer()
         : Layer("ImGuiLayer") {}
+
+    ImFont *ImGuiLayer::GetBondLabelFont()
+    {
+        return s_BondLabelFont;
+    }
 
     void ImGuiLayer::OnAttach()
     {
@@ -29,6 +38,12 @@ namespace ds
 
         std::filesystem::create_directories("config");
         io.IniFilename = "config/imgui_layout.ini";
+        s_BondLabelFont = io.Fonts->AddFontFromFileTTF("vendor/imgui/misc/fonts/Roboto-Medium.ttf", 18.0f);
+        if (s_BondLabelFont == nullptr)
+        {
+            s_BondLabelFont = io.FontDefault;
+            LogWarn("Failed to load Roboto-Medium.ttf for bond labels. Falling back to default ImGui font.");
+        }
 
         ImGui::StyleColorsDark();
         ImGuiStyle &style = ImGui::GetStyle();
@@ -49,6 +64,7 @@ namespace ds
     void ImGuiLayer::OnDetach()
     {
         LogInfo("ImGui layer shutdown");
+        s_BondLabelFont = nullptr;
         ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();

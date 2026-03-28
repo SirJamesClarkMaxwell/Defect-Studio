@@ -32,6 +32,28 @@ namespace ds
             glm::vec3 normal;
         };
 
+        void ConfigureInstanceAttributes(std::uint32_t vao, std::uint32_t instanceVbo, std::uint32_t colorVbo)
+        {
+            glBindVertexArray(vao);
+
+            glBindBuffer(GL_ARRAY_BUFFER, instanceVbo);
+            const std::size_t matrixVectorSize = sizeof(glm::vec4);
+            for (int i = 0; i < 4; ++i)
+            {
+                glEnableVertexAttribArray(1 + i);
+                glVertexAttribPointer(1 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), reinterpret_cast<void *>(i * matrixVectorSize));
+                glVertexAttribDivisor(1 + i, 1);
+            }
+
+            glBindBuffer(GL_ARRAY_BUFFER, colorVbo);
+            glEnableVertexAttribArray(5);
+            glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), reinterpret_cast<void *>(0));
+            glVertexAttribDivisor(5, 1);
+
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glBindVertexArray(0);
+        }
+
         void BuildSphereMesh(std::vector<SphereVertex> &outVertices, std::vector<std::uint32_t> &outIndices)
         {
             constexpr int stacks = 20;
@@ -85,6 +107,46 @@ namespace ds
                 }
             }
         }
+
+        void BuildCylinderMesh(std::vector<SphereVertex> &outVertices, std::vector<std::uint32_t> &outIndices)
+        {
+            constexpr int radialSegments = 32;
+            constexpr float halfHeight = 0.5f;
+            constexpr float pi = 3.1415926535f;
+
+            outVertices.clear();
+            outIndices.clear();
+            outVertices.reserve(static_cast<std::size_t>(radialSegments + 1) * 2);
+            outIndices.reserve(static_cast<std::size_t>(radialSegments) * 12);
+
+            for (int i = 0; i <= radialSegments; ++i)
+            {
+                const float u = static_cast<float>(i) / static_cast<float>(radialSegments);
+                const float theta = u * 2.0f * pi;
+                const float x = std::cos(theta);
+                const float z = std::sin(theta);
+                const glm::vec3 normal = glm::normalize(glm::vec3(x, 0.0f, z));
+                outVertices.push_back({glm::vec3(x, -halfHeight, z), normal});
+                outVertices.push_back({glm::vec3(x, halfHeight, z), normal});
+            }
+
+            for (int i = 0; i < radialSegments; ++i)
+            {
+                const std::uint32_t base = static_cast<std::uint32_t>(i * 2);
+                outIndices.push_back(base + 0);
+                outIndices.push_back(base + 1);
+                outIndices.push_back(base + 2);
+
+                outIndices.push_back(base + 1);
+                outIndices.push_back(base + 3);
+                outIndices.push_back(base + 2);
+            }
+        }
+    }
+
+    OpenGLRendererBackend::OpenGLRendererBackend(int msaaSamples)
+        : m_MsaaSamples(std::max(1, msaaSamples))
+    {
     }
 
     OpenGLRendererBackend::~OpenGLRendererBackend()
@@ -107,9 +169,6 @@ namespace ds
             return false;
         }
 
-        glGenVertexArrays(1, &m_VAO);
-        glGenBuffers(1, &m_VBO);
-        glGenBuffers(1, &m_EBO);
         glGenBuffers(1, &m_InstanceVBO);
         glGenBuffers(1, &m_InstanceColorVBO);
         glGenVertexArrays(1, &m_GridVAO);
@@ -118,10 +177,13 @@ namespace ds
         std::vector<SphereVertex> sphereVertices;
         std::vector<std::uint32_t> sphereIndices;
         BuildSphereMesh(sphereVertices, sphereIndices);
-        m_IndexCount = static_cast<std::uint32_t>(sphereIndices.size());
+        glGenVertexArrays(1, &m_SphereMesh.vao);
+        glGenBuffers(1, &m_SphereMesh.vbo);
+        glGenBuffers(1, &m_SphereMesh.ebo);
+        m_SphereMesh.indexCount = static_cast<std::uint32_t>(sphereIndices.size());
 
-        glBindVertexArray(m_VAO);
-        glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
+        glBindVertexArray(m_SphereMesh.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, m_SphereMesh.vbo);
         glBufferData(
             GL_ARRAY_BUFFER,
             static_cast<GLsizeiptr>(sphereVertices.size() * sizeof(SphereVertex)),
@@ -133,31 +195,50 @@ namespace ds
         glEnableVertexAttribArray(6);
         glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), reinterpret_cast<void *>(offsetof(SphereVertex, normal)));
 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_SphereMesh.ebo);
         glBufferData(
             GL_ELEMENT_ARRAY_BUFFER,
             static_cast<GLsizeiptr>(sphereIndices.size() * sizeof(std::uint32_t)),
             sphereIndices.data(),
             GL_STATIC_DRAW);
 
+        std::vector<SphereVertex> cylinderVertices;
+        std::vector<std::uint32_t> cylinderIndices;
+        BuildCylinderMesh(cylinderVertices, cylinderIndices);
+        glGenVertexArrays(1, &m_CylinderMesh.vao);
+        glGenBuffers(1, &m_CylinderMesh.vbo);
+        glGenBuffers(1, &m_CylinderMesh.ebo);
+        m_CylinderMesh.indexCount = static_cast<std::uint32_t>(cylinderIndices.size());
+
+        glBindVertexArray(m_CylinderMesh.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, m_CylinderMesh.vbo);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(cylinderVertices.size() * sizeof(SphereVertex)),
+            cylinderVertices.data(),
+            GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), reinterpret_cast<void *>(offsetof(SphereVertex, position)));
+
+        glEnableVertexAttribArray(6);
+        glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, sizeof(SphereVertex), reinterpret_cast<void *>(offsetof(SphereVertex, normal)));
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_CylinderMesh.ebo);
+        glBufferData(
+            GL_ELEMENT_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(cylinderIndices.size() * sizeof(std::uint32_t)),
+            cylinderIndices.data(),
+            GL_STATIC_DRAW);
+
         glBindBuffer(GL_ARRAY_BUFFER, m_InstanceVBO);
         glBufferData(GL_ARRAY_BUFFER, sizeof(glm::mat4), nullptr, GL_DYNAMIC_DRAW);
-        const std::size_t matrixVectorSize = sizeof(glm::vec4);
-        for (int i = 0; i < 4; ++i)
-        {
-            glEnableVertexAttribArray(1 + i);
-            glVertexAttribPointer(1 + i, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), reinterpret_cast<void *>(i * matrixVectorSize));
-            glVertexAttribDivisor(1 + i, 1);
-        }
-
         glBindBuffer(GL_ARRAY_BUFFER, m_InstanceColorVBO);
         glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3), nullptr, GL_DYNAMIC_DRAW);
-        glEnableVertexAttribArray(5);
-        glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), reinterpret_cast<void *>(0));
-        glVertexAttribDivisor(5, 1);
-
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
+
+        ConfigureInstanceAttributes(m_SphereMesh.vao, m_InstanceVBO, m_InstanceColorVBO);
+        ConfigureInstanceAttributes(m_CylinderMesh.vao, m_InstanceVBO, m_InstanceColorVBO);
 
         glBindVertexArray(m_GridVAO);
         glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
@@ -182,18 +263,6 @@ namespace ds
         DS_PROFILE_SCOPE_N("OpenGLRendererBackend::Shutdown");
         DestroyFramebuffer();
 
-        if (m_VBO != 0)
-        {
-            glDeleteBuffers(1, &m_VBO);
-            m_VBO = 0;
-        }
-
-        if (m_EBO != 0)
-        {
-            glDeleteBuffers(1, &m_EBO);
-            m_EBO = 0;
-        }
-
         if (m_InstanceVBO != 0)
         {
             glDeleteBuffers(1, &m_InstanceVBO);
@@ -206,11 +275,8 @@ namespace ds
             m_InstanceColorVBO = 0;
         }
 
-        if (m_VAO != 0)
-        {
-            glDeleteVertexArrays(1, &m_VAO);
-            m_VAO = 0;
-        }
+        DestroyMesh(m_SphereMesh);
+        DestroyMesh(m_CylinderMesh);
 
         if (m_GridVBO != 0)
         {
@@ -255,29 +321,80 @@ namespace ds
         glGenFramebuffers(1, &m_Framebuffer);
         glBindFramebuffer(GL_FRAMEBUFFER, m_Framebuffer);
 
-        glGenTextures(1, &m_ColorTexture);
-        glBindTexture(GL_TEXTURE_2D, m_ColorTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<int>(width), static_cast<int>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_ColorTexture, 0);
+        if (m_MsaaSamples > 1)
+        {
+            glGenRenderbuffers(1, &m_ColorRenderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, m_ColorRenderbuffer);
+            glRenderbufferStorageMultisample(
+                GL_RENDERBUFFER,
+                m_MsaaSamples,
+                GL_RGBA8,
+                static_cast<int>(width),
+                static_cast<int>(height));
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_ColorRenderbuffer);
 
-        glGenRenderbuffers(1, &m_DepthRenderbuffer);
-        glBindRenderbuffer(GL_RENDERBUFFER, m_DepthRenderbuffer);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, static_cast<int>(width), static_cast<int>(height));
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_DepthRenderbuffer);
+            glGenRenderbuffers(1, &m_DepthRenderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, m_DepthRenderbuffer);
+            glRenderbufferStorageMultisample(
+                GL_RENDERBUFFER,
+                m_MsaaSamples,
+                GL_DEPTH24_STENCIL8,
+                static_cast<int>(width),
+                static_cast<int>(height));
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_DepthRenderbuffer);
+        }
+        else
+        {
+            glGenTextures(1, &m_ColorTexture);
+            glBindTexture(GL_TEXTURE_2D, m_ColorTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<int>(width), static_cast<int>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_ColorTexture, 0);
+
+            glGenRenderbuffers(1, &m_DepthRenderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, m_DepthRenderbuffer);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, static_cast<int>(width), static_cast<int>(height));
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_DepthRenderbuffer);
+        }
 
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         {
             LogError("OpenGL framebuffer is incomplete.");
         }
 
+        if (m_MsaaSamples > 1)
+        {
+            glGenFramebuffers(1, &m_ResolveFramebuffer);
+            glBindFramebuffer(GL_FRAMEBUFFER, m_ResolveFramebuffer);
+
+            glGenTextures(1, &m_ColorTexture);
+            glBindTexture(GL_TEXTURE_2D, m_ColorTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<int>(width), static_cast<int>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_ColorTexture, 0);
+
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            {
+                LogError("OpenGL resolve framebuffer is incomplete.");
+            }
+        }
+
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     void OpenGLRendererBackend::DestroyFramebuffer()
     {
         DS_PROFILE_SCOPE_N("OpenGLRendererBackend::DestroyFramebuffer");
+        if (m_ColorRenderbuffer != 0)
+        {
+            glDeleteRenderbuffers(1, &m_ColorRenderbuffer);
+            m_ColorRenderbuffer = 0;
+        }
+
         if (m_DepthRenderbuffer != 0)
         {
             glDeleteRenderbuffers(1, &m_DepthRenderbuffer);
@@ -290,11 +407,40 @@ namespace ds
             m_ColorTexture = 0;
         }
 
+        if (m_ResolveFramebuffer != 0)
+        {
+            glDeleteFramebuffers(1, &m_ResolveFramebuffer);
+            m_ResolveFramebuffer = 0;
+        }
+
         if (m_Framebuffer != 0)
         {
             glDeleteFramebuffers(1, &m_Framebuffer);
             m_Framebuffer = 0;
         }
+    }
+
+    void OpenGLRendererBackend::DestroyMesh(MeshBuffers &mesh)
+    {
+        if (mesh.ebo != 0)
+        {
+            glDeleteBuffers(1, &mesh.ebo);
+            mesh.ebo = 0;
+        }
+
+        if (mesh.vbo != 0)
+        {
+            glDeleteBuffers(1, &mesh.vbo);
+            mesh.vbo = 0;
+        }
+
+        if (mesh.vao != 0)
+        {
+            glDeleteVertexArrays(1, &mesh.vao);
+            mesh.vao = 0;
+        }
+
+        mesh.indexCount = 0;
     }
 
     void OpenGLRendererBackend::BeginFrame(const SceneRenderSettings &settings)
@@ -306,6 +452,10 @@ namespace ds
         glBindFramebuffer(GL_FRAMEBUFFER, m_Framebuffer);
         glViewport(0, 0, static_cast<int>(m_ViewportWidth), static_cast<int>(m_ViewportHeight));
         glEnable(GL_DEPTH_TEST);
+        if (m_MsaaSamples > 1)
+        {
+            glEnable(GL_MULTISAMPLE);
+        }
         glClearColor(settings.clearColor.r, settings.clearColor.g, settings.clearColor.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
@@ -350,7 +500,7 @@ namespace ds
         RenderGrid(viewProjection, settings);
 
         const std::size_t instanceCount = std::min(atomPositions.size(), atomColors.size());
-        if (instanceCount == 0 || m_IndexCount == 0)
+        if (instanceCount == 0 || m_SphereMesh.indexCount == 0)
         {
             return;
         }
@@ -383,6 +533,43 @@ namespace ds
             }
         }
 
+        RenderInstancedMesh(m_SphereMesh, viewProjection, instanceModels, effectiveColors, settings);
+    }
+
+    void OpenGLRendererBackend::RenderCylinderInstances(
+        const glm::mat4 &viewProjection,
+        const std::vector<glm::mat4> &instanceModels,
+        const std::vector<glm::vec3> &instanceColors,
+        const SceneRenderSettings &settings)
+    {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::RenderCylinderInstances");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuZone("RenderCylinderInstances");
+#endif
+        if (instanceModels.empty() || instanceColors.empty() || m_CylinderMesh.indexCount == 0)
+        {
+            return;
+        }
+
+        SceneRenderSettings cylinderSettings = settings;
+        cylinderSettings.drawGrid = false;
+        cylinderSettings.atomWireframe = false;
+        RenderInstancedMesh(m_CylinderMesh, viewProjection, instanceModels, instanceColors, cylinderSettings);
+    }
+
+    void OpenGLRendererBackend::RenderInstancedMesh(
+        const MeshBuffers &mesh,
+        const glm::mat4 &viewProjection,
+        const std::vector<glm::mat4> &instanceModels,
+        const std::vector<glm::vec3> &instanceColors,
+        const SceneRenderSettings &settings)
+    {
+        const std::size_t instanceCount = std::min(instanceModels.size(), instanceColors.size());
+        if (instanceCount == 0 || mesh.vao == 0 || mesh.indexCount == 0)
+        {
+            return;
+        }
+
         m_Shader.Bind();
         m_Shader.SetMat4("u_ViewProjection", viewProjection);
         m_Shader.SetFloat3("u_LightDirection", glm::normalize(settings.lightDirection));
@@ -401,12 +588,12 @@ namespace ds
             wireframeEnabled = true;
         }
 
-        glBindVertexArray(m_VAO);
+        glBindVertexArray(mesh.vao);
 
         glBindBuffer(GL_ARRAY_BUFFER, m_InstanceVBO);
         glBufferData(
             GL_ARRAY_BUFFER,
-            static_cast<GLsizeiptr>(instanceModels.size() * sizeof(glm::mat4)),
+            static_cast<GLsizeiptr>(instanceCount * sizeof(glm::mat4)),
             instanceModels.data(),
             GL_DYNAMIC_DRAW);
 
@@ -414,12 +601,12 @@ namespace ds
         glBufferData(
             GL_ARRAY_BUFFER,
             static_cast<GLsizeiptr>(instanceCount * sizeof(glm::vec3)),
-            effectiveColors.data(),
+            instanceColors.data(),
             GL_DYNAMIC_DRAW);
 
         glDrawElementsInstanced(
             GL_TRIANGLES,
-            static_cast<GLsizei>(m_IndexCount),
+            static_cast<GLsizei>(mesh.indexCount),
             GL_UNSIGNED_INT,
             nullptr,
             static_cast<GLsizei>(instanceCount));
@@ -532,6 +719,22 @@ namespace ds
 #if defined(DS_ENABLE_TRACY)
         TracyGpuCollect;
 #endif
+        if (m_MsaaSamples > 1 && m_Framebuffer != 0 && m_ResolveFramebuffer != 0)
+        {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, m_Framebuffer);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_ResolveFramebuffer);
+            glBlitFramebuffer(
+                0,
+                0,
+                static_cast<int>(m_ViewportWidth),
+                static_cast<int>(m_ViewportHeight),
+                0,
+                0,
+                static_cast<int>(m_ViewportWidth),
+                static_cast<int>(m_ViewportHeight),
+                GL_COLOR_BUFFER_BIT,
+                GL_LINEAR);
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 

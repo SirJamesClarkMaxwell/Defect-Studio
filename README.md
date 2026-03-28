@@ -1,78 +1,88 @@
 # DefectsStudio
 
-**DefectsStudio** is a lightweight desktop application for **visualizing, editing, and preparing atomic structures and defects for VASP simulations**.
+**DefectsStudio** is a desktop application for **visualizing, editing, and preparing atomic structures and defects for VASP-style workflows**.
 
-The goal of the project is to provide a **fast, minimal, and scientist-friendly environment** for working with crystal structures.
+The project aims to stay **fast, practical, and scientist-friendly**:
 
-The application is written in **C++23**, uses **OpenGL** for rendering and **Dear ImGui (Docking)** for the user interface.
+- C++23
+- OpenGL renderer
+- Dear ImGui with docking
+- editor-style workflow focused on structures, defects, and simulation prep
 
 ---
 
 # Overview
 
-Working with atomistic structures for **DFT calculations (e.g. VASP)** often requires repetitive manual editing of structures, defect manipulation, and visualization of atomic configurations.
+Working with atomistic structures for DFT workflows often means repetitive editing, defect creation, selection-heavy transforms, and endless export / re-export loops.
 
-Many existing tools are either:
+DefectsStudio is meant to be a lightweight alternative to heavier tools, with emphasis on:
 
-- too heavy
-- difficult to automate
-- or not well suited for defect engineering workflows
-
-**DefectsStudio** aims to provide a lightweight alternative focused on:
-
-- defect creation and manipulation
-- structure visualization
-- fast editing of POSCAR-style structures
-- preparing simulation inputs
+- direct structure editing
+- viewport-first workflow
+- fast POSCAR-style iteration
+- defect engineering use cases
+- local desktop responsiveness instead of web-style UI overhead
 
 ---
 
-# Key Features
+# Current Capabilities
 
-Current capabilities include:
+The app currently includes:
 
-- **3D visualization of atomic structures**
-- **POSCAR / CONTCAR import and export**
-- **instanced atom rendering**
-- **orbit camera navigation**
-- **gizmo-based transformations**
+- 3D visualization of atomic structures
+- POSCAR / CONTCAR import and export
+- multi-file structure loading through collections
+- instanced atom rendering
+- auto and manual bonds
+- bond length labels and angle labels
+- atom / bond / helper selection and transform workflows
+- scene collections, groups, and outliner-style management
+- dockable editor panels
+- persistent ImGui layout and core UI settings
+- offscreen render export to PNG / JPG
+- dockable live render preview window
+- crop-based render export workflow
+- render look overrides and label styling for export
+- Tracy profiling hooks (CPU + GPU zones)
+
 ---
 
-# Planned Features
+# Planned Directions
 
-Future development will include:
+Near-term and mid-term roadmap items are tracked in:
 
-### Bonds and Measurements
-- automatic bond detection
-- configurable cutoff distances
-- element-specific bonding rules
-- bond length measurement
-- bond angle measurement
+- `docs/project-control/TODO.md`
+- `docs/project-control/SESSION_HANDOFF.md`
+- `docs/project-control/hazel-ui-style-guide.md`
+- `docs/project-control/TASK_HELPER.md`
 
-### Volumetric Data
-- support for **CHGCAR**
-- support for **PARCHG**
-- isosurface visualization
+Planned future areas include:
+
+### UI / UX
+- Hazel-style editor polish
+- better logging / console UX
+- stronger settings persistence
+- cleaner panel ownership and workflow layout
 
 ### Rendering
-- offscreen rendering
-- high resolution export
-- screenshot system
+- advanced render architecture follow-up after refactor and docs
+- richer label rendering strategy
+- SVG export
+- multi-viewport workflows
 
-### UI Improvements
-- better settings persistence
-- improved viewport overlays
-- logging and diagnostics tools
+### Volumetrics
+- CHGCAR / PARCHG support
+- isosurface controls and visualization
 
-### Testing and Documentation
-- parser validation tests
-- round-trip file validation
-- example structures and datasets
+### Materials-science tooling
+- CIF support
+- convergence helpers
+- structure generators
+- VASP ecosystem integration
 
 ---
 
-
-# Building the Project
+# Building The Project
 
 ## Requirements
 
@@ -82,57 +92,94 @@ Future development will include:
 - PowerShell
 
 ## Setup
-1. Clone the repo (preferred): `git clone --recurse-submodules https://github.com/SirJamesClarkMaxwell/Defect-Studio.git`
-2. If you already cloned without submodules, run: `git submodule update --init --recursive`
-3. Run the setup script `./scripts/Setup.bat`
-4. Open: `DefectsStudio.sln` in **Visual Studio 2022**.
-5. Build configuration: `Debug` or `Release`
 
-Set **DefectsStudio** as the startup project and run the application (`F5`).
+1. Clone the repo with submodules:
+   `git clone --recurse-submodules https://github.com/SirJamesClarkMaxwell/Defect-Studio.git`
+2. If needed, sync submodules manually:
+   `git submodule update --init --recursive`
+3. Run:
+   `./scripts/Setup.bat`
+4. Open:
+   `DefectsStudio.sln`
+5. Build:
+   `Debug` or `Release`
+
+Set **DefectsStudio** as the startup project and run with `F5`.
 
 ---
 
 # Build Utilities
 
-Helper scripts included in the repository:
-- `scripts/Verify-Build.bat` - Verifies Debug and Release builds.
-- `scripts/Verify-Build-And-Run.bat` - Builds and launches the application.
-- `scripts/Run.bat` - Launches existing Debug/Release executable.
+Included helper scripts:
 
-External dependencies are managed using **git submodules** (for example `vendor/glfw`, `vendor/glad`, `vendor/imgui`, `vendor/glm`, `vendor/imguizmo`, `vendor/imviewguizmo`).
-`scripts/Setup.bat` automatically runs submodule sync/init/update.
+- `scripts/Setup.bat` - generate / refresh the Visual Studio solution
+- `scripts/Verify-Build.bat` - verify Debug and Release builds
+- `scripts/Verify-Build-And-Run.bat` - build and then launch the app
+- `scripts/Run.bat` - run an existing Debug / Release build
 
-Tracy profiler is integrated as a submodule: `vendor/tracy`.
+External dependencies are managed through git submodules, including:
 
-If project resources are modified (for example `assets/icon.rc`), run the setup script again.
+- `vendor/glfw`
+- `vendor/glad`
+- `vendor/imgui`
+- `vendor/glm`
+- `vendor/imguizmo`
+- `vendor/imviewguizmo`
+- `vendor/tracy`
+
+If project files or resource wiring change, rerun `scripts/Setup.bat`.
+
+---
+
+# Rendering Notes
+
+Current render/export workflow highlights:
+
+- `F12` opens the render/export workflow
+- export supports `PNG` and `JPG`
+- render preview is live and dockable
+- preview/export rendering is independent from the main viewport render target
+- export supports crop rectangles and label composition
 
 ---
 
 # Profiling (Tracy)
 
-The app includes built-in Tracy instrumentation (CPU + OpenGL GPU zones).
+The app includes Tracy instrumentation for CPU and OpenGL GPU zones.
 
 ## Local usage
-1. Build and run DefectsStudio normally.
+
+1. Build and run DefectsStudio.
 2. Build and run Tracy GUI from `vendor/tracy/profiler`.
 3. Connect Tracy GUI to the running app (`localhost`, default port).
-4. Inspect frame/update/render zones and GPU timeline.
+4. Inspect update / render / frame timing and GPU zones.
 
-## Quick launch script
-- `scripts/Run-Tracy.bat` (or `scripts/Run-Tracy.ps1`) starts DefectsStudio and Tracy GUI.
-- On first run, it builds Tracy profiler to a short Windows path: `D:\t\tracy-build`.
-- You can skip Tracy rebuild with: `scripts/Run-Tracy.ps1 -SkipTracyBuild`.
+## Quick launch
 
-## Notes
-- Instrumentation is enabled through build defines: `DS_ENABLE_TRACY`, `TRACY_ENABLE`, `TRACY_ON_DEMAND`.
-- Runtime logs are written to `logs/runtime.log` with levels: `TRACE`, `INFO`, `WARN`, `ERROR`, `FATAL`.
+- `scripts/Run-Tracy.bat`
+- `scripts/Run-Tracy.ps1`
+
+On first run, Tracy profiler may be built to a short Windows path:
+
+- `D:\t\tracy-build`
+
+---
+
+# Project Control Docs
+
+For active planning and handoff, use:
+
+- `docs/project-control/TODO.md`
+- `docs/project-control/SESSION_HANDOFF.md`
+
+Local workflow docs may also be present in `docs/project-control/`, for example `COPILOT_GUIDELINES.md`, `hazel-ui-style-guide.md`, and the per-task `TASK_HELPER.md` scratchpad.
 
 ---
 
 # Project Vision
 
-The long-term goal of **DefectsStudio** is to become a **specialized environment for defect engineering and atomistic modeling**, combining:
+The long-term goal of **DefectsStudio** is to become a specialized environment for defect engineering and atomistic modeling that combines:
 
-- the usability of modern DCC tools
-- lightweight performance
-- workflows optimized for materials science
+- the usability of modern editor-style tools
+- lightweight native performance
+- workflows tuned for materials science and VASP preparation
