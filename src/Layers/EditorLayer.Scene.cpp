@@ -1,0 +1,1229 @@
+#include "Layers/EditorLayerPrivate.h"
+
+namespace ds
+{
+    bool EditorLayer::IsAtomSelected(std::size_t index) const
+    {
+        return std::find(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), index) != m_SelectedAtomIndices.end();
+    }
+
+    bool EditorLayer::IsAtomHidden(std::size_t index) const
+    {
+        return m_HiddenAtomIndices.find(index) != m_HiddenAtomIndices.end();
+    }
+
+    int EditorLayer::ResolveAtomCollectionIndex(std::size_t atomIndex) const
+    {
+        if (atomIndex >= m_AtomCollectionIndices.size())
+        {
+            return 0;
+        }
+
+        const int collectionIndex = m_AtomCollectionIndices[atomIndex];
+        if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return 0;
+        }
+
+        return collectionIndex;
+    }
+
+    bool EditorLayer::IsAtomCollectionVisible(std::size_t atomIndex) const
+    {
+        return IsCollectionVisible(ResolveAtomCollectionIndex(atomIndex));
+    }
+
+    bool EditorLayer::IsAtomCollectionSelectable(std::size_t atomIndex) const
+    {
+        return IsCollectionSelectable(ResolveAtomCollectionIndex(atomIndex));
+    }
+
+    void EditorLayer::EnsureAtomCollectionAssignments()
+    {
+        if (m_AtomCollectionIndices.size() < m_WorkingStructure.atoms.size())
+        {
+            m_AtomCollectionIndices.resize(m_WorkingStructure.atoms.size(), 0);
+        }
+        else if (m_AtomCollectionIndices.size() > m_WorkingStructure.atoms.size())
+        {
+            m_AtomCollectionIndices.resize(m_WorkingStructure.atoms.size());
+        }
+
+        if (m_Collections.empty())
+        {
+            return;
+        }
+
+        for (int &collectionIndex : m_AtomCollectionIndices)
+        {
+            if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+            {
+                collectionIndex = 0;
+            }
+        }
+    }
+
+    float EditorLayer::ResolveBondThresholdScaleForPair(const std::string &elementA, const std::string &elementB) const
+    {
+        const float globalScale = glm::clamp(m_BondThresholdScale, 0.80f, 1.80f);
+        if (!m_BondUsePairThresholdOverrides)
+        {
+            return globalScale;
+        }
+
+        const std::string key = BuildElementPairScaleKey(elementA, elementB);
+        if (key.empty())
+        {
+            return globalScale;
+        }
+
+        const auto it = m_BondPairThresholdScaleOverrides.find(key);
+        if (it == m_BondPairThresholdScaleOverrides.end())
+        {
+            return globalScale;
+        }
+
+        return glm::clamp(it->second, 0.40f, 3.00f);
+    }
+
+    void EditorLayer::ToggleInteractionMode()
+    {
+        if (m_TranslateModeActive)
+        {
+            m_TranslateModeActive = false;
+            m_TranslateConstraintAxis = -1;
+            m_TranslatePlaneLockAxis = -1;
+            m_TranslateIndices.clear();
+            m_TranslateInitialCartesian.clear();
+            m_TranslateCurrentOffset = glm::vec3(0.0f);
+            AppendSelectionDebugLog("Translate mode exited by Tab");
+        }
+
+        if (m_RotateModeActive)
+        {
+            m_RotateModeActive = false;
+            m_RotateConstraintAxis = -1;
+            m_RotateIndices.clear();
+            m_RotateInitialCartesian.clear();
+            m_RotateCurrentAngle = 0.0f;
+            AppendSelectionDebugLog("Rotate mode exited by Tab");
+        }
+
+        if (m_InteractionMode == InteractionMode::Navigate)
+        {
+            if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
+            {
+                m_InteractionMode = InteractionMode::Select;
+                LogInfo("Interaction mode: Select");
+                AppendSelectionDebugLog("Mode switched to Select");
+                return;
+            }
+
+            m_InteractionMode = InteractionMode::ViewSet;
+            LogInfo("Interaction mode: ViewSet");
+            AppendSelectionDebugLog("Mode switched to ViewSet (Select unavailable)");
+            return;
+        }
+
+        if (m_InteractionMode == InteractionMode::Select)
+        {
+            m_InteractionMode = InteractionMode::ViewSet;
+            LogInfo("Interaction mode: ViewSet");
+            AppendSelectionDebugLog("Mode switched to ViewSet");
+            return;
+        }
+
+        m_InteractionMode = InteractionMode::Navigate;
+        LogInfo("Interaction mode: Navigate");
+        AppendSelectionDebugLog("Mode switched to Navigate");
+    }
+
+    void EditorLayer::StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll)
+    {
+        if (!m_Camera)
+        {
+            return;
+        }
+
+        m_CameraTransitionActive = true;
+        m_CameraTransitionElapsed = 0.0f;
+
+        m_CameraTransitionStartTarget = m_Camera->GetTarget();
+        m_CameraTransitionEndTarget = target;
+
+        m_CameraTransitionStartDistance = m_Camera->GetDistance();
+        m_CameraTransitionEndDistance = distance;
+
+        m_CameraTransitionStartYaw = m_Camera->GetYaw();
+        m_CameraTransitionEndYaw = yaw;
+
+        m_CameraTransitionStartPitch = m_Camera->GetPitch();
+        m_CameraTransitionEndPitch = pitch;
+
+        const float currentRoll = m_Camera->GetRoll();
+        m_CameraTransitionStartRoll = currentRoll;
+        m_CameraTransitionEndRoll = roll.value_or(currentRoll);
+    }
+
+    void EditorLayer::UpdateCameraOrbitTransition(float deltaTime)
+    {
+        if (!m_CameraTransitionActive || !m_Camera)
+        {
+            return;
+        }
+
+        m_CameraTransitionElapsed += std::max(0.0f, deltaTime);
+        const float duration = std::max(0.01f, m_CameraTransitionDuration);
+        const float alpha = glm::clamp(m_CameraTransitionElapsed / duration, 0.0f, 1.0f);
+        const float t = EaseOutCubic(alpha);
+
+        const glm::vec3 target = glm::mix(m_CameraTransitionStartTarget, m_CameraTransitionEndTarget, t);
+        const float distance = glm::mix(m_CameraTransitionStartDistance, m_CameraTransitionEndDistance, t);
+        const float yaw = LerpAngleRadians(m_CameraTransitionStartYaw, m_CameraTransitionEndYaw, t);
+        const float pitch = LerpAngleRadians(m_CameraTransitionStartPitch, m_CameraTransitionEndPitch, t);
+        const float roll = LerpAngleRadians(m_CameraTransitionStartRoll, m_CameraTransitionEndRoll, t);
+
+        m_Camera->SetOrbitState(target, distance, yaw, pitch);
+        m_Camera->SetRoll(roll);
+
+        if (alpha >= 1.0f)
+        {
+            m_CameraTransitionActive = false;
+        }
+    }
+
+    void EditorLayer::AppendSelectionDebugLog(const std::string &message) const
+    {
+        if (!m_SelectionDebugToFile)
+        {
+            return;
+        }
+
+        std::filesystem::create_directories("logs");
+        std::ofstream out(kSelectionDebugLogPath, std::ios::app);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        out << '[' << BuildDebugTimestampNow() << "] " << message << '\n';
+    }
+
+    bool EditorLayer::PickAtomAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outAtomIndex) const
+    {
+        if (!m_Camera || !m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            return false;
+        }
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return false;
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        bool found = false;
+        float bestDepth = std::numeric_limits<float>::max();
+        float bestDistancePixels = std::numeric_limits<float>::max();
+        const float pickRadiusPixels = 14.0f + m_SceneSettings.atomScale * 20.0f;
+        const float pickRadiusPixelsSq = pickRadiusPixels * pickRadiusPixels;
+
+        for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
+        {
+            if (IsAtomHidden(i) || !IsAtomCollectionVisible(i) || !IsAtomCollectionSelectable(i))
+            {
+                continue;
+            }
+
+            glm::vec3 center = m_WorkingStructure.atoms[i].position;
+            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+            {
+                center = m_WorkingStructure.DirectToCartesian(center);
+            }
+
+            const glm::vec4 clip = viewProjection * glm::vec4(center, 1.0f);
+            if (clip.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.05f || ndc.x > 1.05f || ndc.y < -1.05f || ndc.y > 1.05f || ndc.z < -1.0f || ndc.z > 1.0f)
+            {
+                continue;
+            }
+
+            const float screenX = m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width;
+            const float screenY = m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height;
+            const float dx = mousePos.x - screenX;
+            const float dy = mousePos.y - screenY;
+            const float distSq = dx * dx + dy * dy;
+            if (distSq > pickRadiusPixelsSq)
+            {
+                continue;
+            }
+
+            const float distPixels = std::sqrt(distSq);
+            if (!found || ndc.z < bestDepth - 1e-4f || (std::abs(ndc.z - bestDepth) <= 1e-4f && distPixels < bestDistancePixels))
+            {
+                bestDepth = ndc.z;
+                bestDistancePixels = distPixels;
+                outAtomIndex = i;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    bool EditorLayer::PickBondAtScreenPoint(const glm::vec2 &mousePos, std::uint64_t &outBondKey) const
+    {
+        if (!m_Camera || m_GeneratedBonds.empty())
+        {
+            return false;
+        }
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return false;
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        bool found = false;
+        float bestDepth = std::numeric_limits<float>::max();
+        float bestDistanceSq = std::numeric_limits<float>::max();
+        const float pickRadius = 8.0f;
+        const float pickRadiusSq = pickRadius * pickRadius;
+
+        for (const BondSegment &bond : m_GeneratedBonds)
+        {
+            const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
+            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end() ||
+                m_HiddenBondKeys.find(key) != m_HiddenBondKeys.end() ||
+                IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB) ||
+                !IsAtomCollectionSelectable(bond.atomA) || !IsAtomCollectionSelectable(bond.atomB))
+            {
+                continue;
+            }
+
+            const glm::vec4 clipA = viewProjection * glm::vec4(bond.start, 1.0f);
+            const glm::vec4 clipB = viewProjection * glm::vec4(bond.end, 1.0f);
+            if (clipA.w <= 1e-6f || clipB.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndcA = glm::vec3(clipA) / clipA.w;
+            const glm::vec3 ndcB = glm::vec3(clipB) / clipB.w;
+            if (ndcA.z < -1.0f || ndcA.z > 1.0f || ndcB.z < -1.0f || ndcB.z > 1.0f)
+            {
+                continue;
+            }
+
+            const glm::vec2 screenA(
+                m_ViewportRectMin.x + (ndcA.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndcA.y * 0.5f + 0.5f)) * height);
+            const glm::vec2 screenB(
+                m_ViewportRectMin.x + (ndcB.x * 0.5f + 0.5f) * width,
+                m_ViewportRectMin.y + (1.0f - (ndcB.y * 0.5f + 0.5f)) * height);
+
+            const glm::vec2 seg = screenB - screenA;
+            const float segLenSq = glm::dot(seg, seg);
+            if (segLenSq < 1e-6f)
+            {
+                continue;
+            }
+
+            const float t = glm::clamp(glm::dot(mousePos - screenA, seg) / segLenSq, 0.0f, 1.0f);
+            const glm::vec2 closest = screenA + seg * t;
+            const float distSq = glm::length2(mousePos - closest);
+            if (distSq > pickRadiusSq)
+            {
+                continue;
+            }
+
+            const float depth = glm::mix(ndcA.z, ndcB.z, t);
+            if (!found || depth < bestDepth - 1e-4f || (std::abs(depth - bestDepth) <= 1e-4f && distSq < bestDistanceSq))
+            {
+                bestDepth = depth;
+                bestDistanceSq = distSq;
+                outBondKey = key;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    bool EditorLayer::PickTransformEmptyAtScreenPoint(const glm::vec2 &mousePos, std::size_t &outEmptyIndex) const
+    {
+        if (!m_Camera || m_TransformEmpties.empty())
+        {
+            return false;
+        }
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return false;
+        }
+
+        const glm::mat4 viewProjection = m_Camera->GetViewProjectionMatrix();
+        bool found = false;
+        float bestDepth = std::numeric_limits<float>::max();
+        float bestDistancePixels = std::numeric_limits<float>::max();
+        const float pickRadiusPixels = glm::clamp(10.0f + 22.0f * m_TransformEmptyVisualScale, 10.0f, 22.0f);
+        const float pickRadiusPixelsSq = pickRadiusPixels * pickRadiusPixels;
+
+        for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+        {
+            const glm::vec3 center = m_TransformEmpties[i].position;
+            if (!m_TransformEmpties[i].visible || !m_TransformEmpties[i].selectable)
+            {
+                continue;
+            }
+            if (!IsCollectionVisible(m_TransformEmpties[i].collectionIndex) || !IsCollectionSelectable(m_TransformEmpties[i].collectionIndex))
+            {
+                continue;
+            }
+            const glm::vec4 clip = viewProjection * glm::vec4(center, 1.0f);
+            if (clip.w <= 1e-6f)
+            {
+                continue;
+            }
+
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.1f || ndc.x > 1.1f || ndc.y < -1.1f || ndc.y > 1.1f || ndc.z < -1.0f || ndc.z > 1.0f)
+            {
+                continue;
+            }
+
+            const float screenX = m_ViewportRectMin.x + (ndc.x * 0.5f + 0.5f) * width;
+            const float screenY = m_ViewportRectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height;
+            const float dx = mousePos.x - screenX;
+            const float dy = mousePos.y - screenY;
+            const float distSq = dx * dx + dy * dy;
+            if (distSq > pickRadiusPixelsSq)
+            {
+                continue;
+            }
+
+            const float distPixels = std::sqrt(distSq);
+            if (!found || ndc.z < bestDepth - 1e-4f || (std::abs(ndc.z - bestDepth) <= 1e-4f && distPixels < bestDistancePixels))
+            {
+                bestDepth = ndc.z;
+                bestDistancePixels = distPixels;
+                outEmptyIndex = i;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    glm::vec3 EditorLayer::GetAtomCartesianPosition(std::size_t atomIndex) const
+    {
+        if (atomIndex >= m_WorkingStructure.atoms.size())
+        {
+            return glm::vec3(0.0f);
+        }
+
+        glm::vec3 position = m_WorkingStructure.atoms[atomIndex].position;
+        if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+        {
+            position = m_WorkingStructure.DirectToCartesian(position);
+        }
+        return position;
+    }
+
+    void EditorLayer::SetAtomCartesianPosition(std::size_t atomIndex, const glm::vec3 &position)
+    {
+        if (atomIndex >= m_WorkingStructure.atoms.size())
+        {
+            return;
+        }
+
+        if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+        {
+            m_WorkingStructure.atoms[atomIndex].position = m_WorkingStructure.CartesianToDirect(position);
+            return;
+        }
+
+        m_WorkingStructure.atoms[atomIndex].position = position;
+    }
+
+    glm::vec3 EditorLayer::ComputeSelectionCenter() const
+    {
+        if (m_SelectedAtomIndices.empty())
+        {
+            return glm::vec3(0.0f);
+        }
+
+        glm::vec3 center(0.0f);
+        std::size_t validCount = 0;
+        for (std::size_t atomIndex : m_SelectedAtomIndices)
+        {
+            if (atomIndex >= m_WorkingStructure.atoms.size())
+            {
+                continue;
+            }
+
+            center += GetAtomCartesianPosition(atomIndex);
+            ++validCount;
+        }
+
+        if (validCount == 0)
+        {
+            return glm::vec3(0.0f);
+        }
+
+        return center / static_cast<float>(validCount);
+    }
+
+    bool EditorLayer::ComputeSelectionAxesAround(const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const
+    {
+        if (m_SelectedAtomIndices.empty())
+        {
+            return false;
+        }
+
+        std::vector<glm::vec3> points;
+        points.reserve(m_SelectedAtomIndices.size());
+        for (std::size_t atomIndex : m_SelectedAtomIndices)
+        {
+            if (atomIndex < m_WorkingStructure.atoms.size())
+            {
+                points.push_back(GetAtomCartesianPosition(atomIndex));
+            }
+        }
+
+        if (points.empty())
+        {
+            return false;
+        }
+
+        return BuildAxesFromPoints(points, pivot, outAxes);
+    }
+
+    bool EditorLayer::HasActiveTransformEmpty() const
+    {
+        return m_ActiveTransformEmptyIndex >= 0 &&
+               m_ActiveTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size());
+    }
+
+    bool EditorLayer::IsCollectionVisible(int collectionIndex) const
+    {
+        if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return true;
+        }
+        return m_Collections[static_cast<std::size_t>(collectionIndex)].visible;
+    }
+
+    bool EditorLayer::IsCollectionSelectable(int collectionIndex) const
+    {
+        if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return true;
+        }
+        return m_Collections[static_cast<std::size_t>(collectionIndex)].selectable;
+    }
+
+    void EditorLayer::EnsureAtomNodeIds()
+    {
+        if (!m_HasStructureLoaded)
+        {
+            return;
+        }
+
+        const std::size_t atomCount = m_WorkingStructure.atoms.size();
+        if (m_AtomNodeIds.size() < atomCount)
+        {
+            const std::size_t oldSize = m_AtomNodeIds.size();
+            m_AtomNodeIds.resize(atomCount, 0);
+            for (std::size_t i = oldSize; i < atomCount; ++i)
+            {
+                m_AtomNodeIds[i] = GenerateSceneUUID();
+            }
+        }
+        else if (m_AtomNodeIds.size() > atomCount)
+        {
+            m_AtomNodeIds.resize(atomCount);
+        }
+
+        for (SceneUUID &id : m_AtomNodeIds)
+        {
+            if (id == 0)
+            {
+                id = GenerateSceneUUID();
+            }
+        }
+    }
+
+    void EditorLayer::EnsureSceneDefaults()
+    {
+        EnsureAtomNodeIds();
+
+        if (m_Collections.empty())
+        {
+            SceneCollection rootCollection;
+            rootCollection.id = GenerateSceneUUID();
+            rootCollection.name = "Scene Collection";
+            rootCollection.visible = true;
+            rootCollection.selectable = true;
+            m_Collections.push_back(rootCollection);
+        }
+
+        for (SceneCollection &collection : m_Collections)
+        {
+            if (collection.id == 0)
+            {
+                collection.id = GenerateSceneUUID();
+            }
+        }
+
+        if (m_ActiveCollectionIndex < 0 || m_ActiveCollectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            m_ActiveCollectionIndex = 0;
+        }
+
+        std::unordered_set<SceneUUID> usedEmptyIds;
+
+        auto findCollectionIndexById = [&](SceneUUID collectionId) -> int
+        {
+            if (collectionId == 0)
+            {
+                return -1;
+            }
+
+            for (std::size_t i = 0; i < m_Collections.size(); ++i)
+            {
+                if (m_Collections[i].id == collectionId)
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        };
+
+        auto hasEmptyId = [&](SceneUUID emptyId) -> bool
+        {
+            if (emptyId == 0)
+            {
+                return false;
+            }
+            for (const TransformEmpty &empty : m_TransformEmpties)
+            {
+                if (empty.id == emptyId)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        auto findEmptyIndexById = [&](SceneUUID emptyId) -> int
+        {
+            if (emptyId == 0)
+            {
+                return -1;
+            }
+
+            for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+            {
+                if (m_TransformEmpties[i].id == emptyId)
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        };
+
+        for (TransformEmpty &empty : m_TransformEmpties)
+        {
+            if (empty.id == 0 || usedEmptyIds.find(empty.id) != usedEmptyIds.end())
+            {
+                if (empty.id != 0)
+                {
+                    LogWarn("EnsureSceneDefaults: duplicate empty UUID detected, assigning a new UUID.");
+                }
+                empty.id = GenerateSceneUUID();
+            }
+            usedEmptyIds.insert(empty.id);
+
+            if (empty.collectionId != 0)
+            {
+                const int resolvedIndex = findCollectionIndexById(empty.collectionId);
+                if (resolvedIndex >= 0)
+                {
+                    empty.collectionIndex = resolvedIndex;
+                }
+            }
+
+            if (empty.collectionIndex < 0 || empty.collectionIndex >= static_cast<int>(m_Collections.size()))
+            {
+                empty.collectionIndex = 0;
+            }
+
+            empty.collectionId = m_Collections[static_cast<std::size_t>(empty.collectionIndex)].id;
+
+            if (empty.parentEmptyId == empty.id || !hasEmptyId(empty.parentEmptyId))
+            {
+                empty.parentEmptyId = 0;
+            }
+        }
+
+        for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
+        {
+            TransformEmpty &empty = m_TransformEmpties[i];
+            std::unordered_set<SceneUUID> chain;
+            chain.insert(empty.id);
+
+            SceneUUID parentId = empty.parentEmptyId;
+            bool hasCycle = false;
+            std::size_t guard = 0;
+
+            while (parentId != 0 && guard <= m_TransformEmpties.size())
+            {
+                if (chain.find(parentId) != chain.end())
+                {
+                    hasCycle = true;
+                    break;
+                }
+
+                chain.insert(parentId);
+                const int parentIndex = findEmptyIndexById(parentId);
+                if (parentIndex < 0)
+                {
+                    break;
+                }
+
+                parentId = m_TransformEmpties[static_cast<std::size_t>(parentIndex)].parentEmptyId;
+                ++guard;
+            }
+
+            if (hasCycle || guard > m_TransformEmpties.size())
+            {
+                LogWarn("EnsureSceneDefaults: hierarchy cycle detected for empty '" + empty.name + "'. Parent cleared.");
+                empty.parentEmptyId = 0;
+            }
+        }
+
+        for (SceneGroup &group : m_ObjectGroups)
+        {
+            if (group.id == 0)
+            {
+                group.id = GenerateSceneUUID();
+            }
+        }
+
+        EnsureAtomCollectionAssignments();
+    }
+
+    void EditorLayer::DeleteTransformEmptyAtIndex(int emptyIndex)
+    {
+        if (emptyIndex < 0 || emptyIndex >= static_cast<int>(m_TransformEmpties.size()))
+        {
+            return;
+        }
+
+        const SceneUUID deletedEmptyId = m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].id;
+
+        for (TransformEmpty &empty : m_TransformEmpties)
+        {
+            if (empty.parentEmptyId == deletedEmptyId)
+            {
+                empty.parentEmptyId = 0;
+            }
+        }
+
+        for (SceneGroup &group : m_ObjectGroups)
+        {
+            group.emptyIds.erase(
+                std::remove(group.emptyIds.begin(), group.emptyIds.end(), deletedEmptyId),
+                group.emptyIds.end());
+
+            for (std::size_t i = 0; i < group.emptyIndices.size();)
+            {
+                if (group.emptyIndices[i] == emptyIndex)
+                {
+                    group.emptyIndices.erase(group.emptyIndices.begin() + static_cast<std::ptrdiff_t>(i));
+                    continue;
+                }
+                if (group.emptyIndices[i] > emptyIndex)
+                {
+                    group.emptyIndices[i] -= 1;
+                }
+                ++i;
+            }
+        }
+
+        m_TransformEmpties.erase(m_TransformEmpties.begin() + emptyIndex);
+
+        if (m_TransformEmpties.empty())
+        {
+            m_ActiveTransformEmptyIndex = -1;
+            m_SelectedTransformEmptyIndex = -1;
+            return;
+        }
+
+        if (m_ActiveTransformEmptyIndex == emptyIndex)
+        {
+            m_ActiveTransformEmptyIndex = std::min(emptyIndex, static_cast<int>(m_TransformEmpties.size()) - 1);
+        }
+        else if (m_ActiveTransformEmptyIndex > emptyIndex)
+        {
+            m_ActiveTransformEmptyIndex -= 1;
+        }
+
+        if (m_SelectedTransformEmptyIndex == emptyIndex)
+        {
+            m_SelectedTransformEmptyIndex = -1;
+        }
+        else if (m_SelectedTransformEmptyIndex > emptyIndex)
+        {
+            m_SelectedTransformEmptyIndex -= 1;
+        }
+    }
+
+    bool EditorLayer::AlignEmptyZAxisFromSelectedAtoms(int emptyIndex)
+    {
+        if (emptyIndex < 0 || emptyIndex >= static_cast<int>(m_TransformEmpties.size()))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty Z failed: active empty index is invalid.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+
+        if (m_SelectedAtomIndices.size() < 2)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty Z failed: select at least 2 atoms.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+
+        const std::size_t atomA = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 2];
+        const std::size_t atomB = m_SelectedAtomIndices[m_SelectedAtomIndices.size() - 1];
+        if (atomA >= m_WorkingStructure.atoms.size() || atomB >= m_WorkingStructure.atoms.size() || atomA == atomB)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty Z failed: selected atom pair is invalid.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+
+        const glm::vec3 posA = GetAtomCartesianPosition(atomA);
+        const glm::vec3 posB = GetAtomCartesianPosition(atomB);
+        const glm::vec3 zAxis = posB - posA;
+        if (glm::length2(zAxis) < 1e-8f)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Align Empty Z failed: atom pair is coincident.";
+            AppendSelectionDebugLog(m_LastStructureMessage);
+            return false;
+        }
+
+        TransformEmpty &empty = m_TransformEmpties[static_cast<std::size_t>(emptyIndex)];
+        const glm::vec3 previousZ = glm::normalize(empty.axes[2]);
+        const glm::vec3 axisZ = glm::normalize(zAxis);
+        glm::vec3 up = (std::abs(axisZ.z) < 0.95f) ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+        glm::vec3 axisX = glm::cross(up, axisZ);
+        if (glm::length2(axisX) < 1e-8f)
+        {
+            up = glm::vec3(1.0f, 0.0f, 0.0f);
+            axisX = glm::cross(up, axisZ);
+            if (glm::length2(axisX) < 1e-8f)
+            {
+                m_LastStructureOperationFailed = true;
+                m_LastStructureMessage = "Align Empty Z failed: could not build orthogonal frame.";
+                AppendSelectionDebugLog(m_LastStructureMessage);
+                return false;
+            }
+        }
+
+        axisX = glm::normalize(axisX);
+        const glm::vec3 axisY = glm::normalize(glm::cross(axisZ, axisX));
+
+        empty.axes[0] = axisX;
+        empty.axes[1] = axisY;
+        empty.axes[2] = axisZ;
+
+        const float alignmentDot = glm::clamp(glm::dot(previousZ, axisZ), -1.0f, 1.0f);
+        const float rotationDeltaDeg = glm::degrees(std::acos(alignmentDot));
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Aligned Empty Z to selected atoms.";
+
+        std::ostringstream alignLog;
+        alignLog << "Align Empty Z success: emptyIndex=" << emptyIndex
+                 << " atomA=" << atomA
+                 << " atomB=" << atomB
+                 << " posA=(" << posA.x << "," << posA.y << "," << posA.z << ")"
+                 << " posB=(" << posB.x << "," << posB.y << "," << posB.z << ")"
+                 << " newZ=(" << axisZ.x << "," << axisZ.y << "," << axisZ.z << ")"
+                 << " deltaDeg=" << rotationDeltaDeg;
+        AppendSelectionDebugLog(alignLog.str());
+        return true;
+    }
+
+    bool EditorLayer::BuildAxesFromPoints(const std::vector<glm::vec3> &points, const glm::vec3 &pivot, std::array<glm::vec3, 3> &outAxes) const
+    {
+        std::vector<glm::vec3> offsets;
+        offsets.reserve(points.size());
+
+        for (const glm::vec3 &point : points)
+        {
+            const glm::vec3 offset = point - pivot;
+            if (glm::length2(offset) > 1e-8f)
+            {
+                offsets.push_back(offset);
+            }
+        }
+
+        if (offsets.empty())
+        {
+            return false;
+        }
+
+        glm::vec3 axisX(0.0f);
+        float maxLen2 = 0.0f;
+        for (const glm::vec3 &offset : offsets)
+        {
+            const float len2 = glm::length2(offset);
+            if (len2 > maxLen2)
+            {
+                maxLen2 = len2;
+                axisX = offset;
+            }
+        }
+
+        if (maxLen2 < 1e-8f)
+        {
+            return false;
+        }
+        axisX = glm::normalize(axisX);
+
+        glm::vec3 axisY(0.0f);
+        float bestOrthogonality = 0.0f;
+        for (const glm::vec3 &offset : offsets)
+        {
+            const glm::vec3 normalized = glm::normalize(offset);
+            const float orthogonality = glm::length(glm::cross(axisX, normalized));
+            if (orthogonality > bestOrthogonality)
+            {
+                bestOrthogonality = orthogonality;
+                axisY = normalized;
+            }
+        }
+
+        if (bestOrthogonality < 1e-4f)
+        {
+            axisY = (std::abs(axisX.z) < 0.9f) ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+
+        glm::vec3 axisZ = glm::cross(axisX, axisY);
+        if (glm::length2(axisZ) < 1e-8f)
+        {
+            return false;
+        }
+
+        axisZ = glm::normalize(axisZ);
+        axisY = glm::normalize(glm::cross(axisZ, axisX));
+
+        outAxes[0] = axisX;
+        outAxes[1] = axisY;
+        outAxes[2] = axisZ;
+        return true;
+    }
+
+    bool EditorLayer::ResolveTemporaryLocalAxes(std::array<glm::vec3, 3> &outAxes) const
+    {
+        if (!m_UseTemporaryLocalAxes || !m_HasStructureLoaded)
+        {
+            return false;
+        }
+
+        if (m_TemporaryAxesSource == TemporaryAxesSource::ActiveEmpty)
+        {
+            if (!HasActiveTransformEmpty())
+            {
+                return false;
+            }
+
+            outAxes = m_TransformEmpties[static_cast<std::size_t>(m_ActiveTransformEmptyIndex)].axes;
+            return true;
+        }
+
+        if (m_TemporaryAxisAtomA < 0 || m_TemporaryAxisAtomB < 0)
+        {
+            return false;
+        }
+
+        const std::size_t atomA = static_cast<std::size_t>(m_TemporaryAxisAtomA);
+        const std::size_t atomB = static_cast<std::size_t>(m_TemporaryAxisAtomB);
+        if (atomA >= m_WorkingStructure.atoms.size() || atomB >= m_WorkingStructure.atoms.size() || atomA == atomB)
+        {
+            return false;
+        }
+
+        const glm::vec3 origin = GetAtomCartesianPosition(atomA);
+        std::vector<glm::vec3> framePoints;
+        framePoints.reserve(2);
+        framePoints.push_back(GetAtomCartesianPosition(atomB));
+
+        if (m_TemporaryAxisAtomC >= 0)
+        {
+            const std::size_t atomC = static_cast<std::size_t>(m_TemporaryAxisAtomC);
+            if (atomC < m_WorkingStructure.atoms.size() && atomC != atomA && atomC != atomB)
+            {
+                framePoints.push_back(GetAtomCartesianPosition(atomC));
+            }
+        }
+
+        return BuildAxesFromPoints(framePoints, origin, outAxes);
+    }
+
+    std::array<glm::vec3, 3> EditorLayer::ResolveTransformAxes(const glm::vec3 &pivot) const
+    {
+        std::array<glm::vec3, 3> axes = {
+            glm::vec3(1.0f, 0.0f, 0.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f),
+            glm::vec3(0.0f, 0.0f, 1.0f)};
+
+        if (m_GizmoModeIndex == 1)
+        {
+            return axes;
+        }
+
+        std::vector<glm::vec3> points;
+        if (m_GizmoModeIndex == 0)
+        {
+            std::array<glm::vec3, 3> temporaryAxes = axes;
+            if (ResolveTemporaryLocalAxes(temporaryAxes))
+            {
+                return temporaryAxes;
+            }
+
+            points.reserve(m_SelectedAtomIndices.size());
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex < m_WorkingStructure.atoms.size())
+                {
+                    points.push_back(GetAtomCartesianPosition(atomIndex));
+                }
+            }
+        }
+        else
+        {
+            float selectionRadius = 0.0f;
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex < m_WorkingStructure.atoms.size())
+                {
+                    const float dist = glm::length(GetAtomCartesianPosition(atomIndex) - pivot);
+                    selectionRadius = std::max(selectionRadius, dist);
+                }
+            }
+
+            const float searchRadius = std::max(1.0f, selectionRadius * 1.6f);
+            constexpr std::size_t kMaxNeighbors = 48;
+            std::vector<std::pair<float, glm::vec3>> nearest;
+            nearest.reserve(kMaxNeighbors);
+
+            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+            {
+                const glm::vec3 atomPos = GetAtomCartesianPosition(atomIndex);
+                const float dist = glm::length(atomPos - pivot);
+                if (dist < 1e-4f || dist > searchRadius)
+                {
+                    continue;
+                }
+
+                if (nearest.size() < kMaxNeighbors)
+                {
+                    nearest.emplace_back(dist, atomPos);
+                    continue;
+                }
+
+                std::size_t farthestIndex = 0;
+                float farthestDistance = nearest[0].first;
+                for (std::size_t i = 1; i < nearest.size(); ++i)
+                {
+                    if (nearest[i].first > farthestDistance)
+                    {
+                        farthestDistance = nearest[i].first;
+                        farthestIndex = i;
+                    }
+                }
+
+                if (dist < farthestDistance)
+                {
+                    nearest[farthestIndex] = std::make_pair(dist, atomPos);
+                }
+            }
+
+            points.reserve(nearest.size());
+            for (const auto &entry : nearest)
+            {
+                points.push_back(entry.second);
+            }
+        }
+
+        std::array<glm::vec3, 3> computedAxes = axes;
+        if (BuildAxesFromPoints(points, pivot, computedAxes))
+        {
+            return computedAxes;
+        }
+
+        return axes;
+    }
+
+    bool EditorLayer::Set3DCursorToSelectionCenterOfMass()
+    {
+        if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty() || m_SelectedAtomIndices.empty())
+        {
+            return false;
+        }
+
+        glm::vec3 weightedSum(0.0f);
+        float totalMass = 0.0f;
+        for (std::size_t atomIndex : m_SelectedAtomIndices)
+        {
+            if (atomIndex >= m_WorkingStructure.atoms.size())
+            {
+                continue;
+            }
+
+            const Atom &atom = m_WorkingStructure.atoms[atomIndex];
+            const float mass = AtomicMassByElementSymbol(atom.element);
+            weightedSum += GetAtomCartesianPosition(atomIndex) * mass;
+            totalMass += mass;
+        }
+
+        if (totalMass <= 1e-6f)
+        {
+            return false;
+        }
+
+        m_CursorPosition = weightedSum / totalMass;
+        m_AddAtomPosition = m_CursorPosition;
+        m_AddAtomCoordinateModeIndex = 1;
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "3D cursor moved to selection center of mass.";
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::Set3DCursorToSelectedAtom(bool useLastSelected)
+    {
+        if (m_SelectedAtomIndices.empty())
+        {
+            return false;
+        }
+
+        const std::size_t atomIndex = useLastSelected ? m_SelectedAtomIndices.back() : m_SelectedAtomIndices.front();
+        if (atomIndex >= m_WorkingStructure.atoms.size())
+        {
+            return false;
+        }
+
+        m_CursorPosition = GetAtomCartesianPosition(atomIndex);
+        m_AddAtomPosition = m_CursorPosition;
+        m_AddAtomCoordinateModeIndex = 1;
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = std::string("3D cursor moved to ") + (useLastSelected ? "last" : "first") + " selected atom.";
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::PickWorldPositionOnGrid(const glm::vec2 &mousePos, glm::vec3 &outWorldPosition) const
+    {
+        if (!m_Camera)
+        {
+            return false;
+        }
+
+        const float width = m_ViewportRectMax.x - m_ViewportRectMin.x;
+        const float height = m_ViewportRectMax.y - m_ViewportRectMin.y;
+        if (width < 1.0f || height < 1.0f)
+        {
+            return false;
+        }
+
+        const float x = (mousePos.x - m_ViewportRectMin.x) / width;
+        const float y = (mousePos.y - m_ViewportRectMin.y) / height;
+        if (x < 0.0f || x > 1.0f || y < 0.0f || y > 1.0f)
+        {
+            return false;
+        }
+
+        const float ndcX = x * 2.0f - 1.0f;
+        const float ndcY = 1.0f - y * 2.0f;
+
+        const glm::mat4 inverseViewProjection = glm::inverse(m_Camera->GetViewProjectionMatrix());
+        glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+        glm::vec4 farPoint = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+
+        if (std::abs(nearPoint.w) < 1e-6f || std::abs(farPoint.w) < 1e-6f)
+        {
+            return false;
+        }
+
+        const glm::vec3 worldNear = glm::vec3(nearPoint) / nearPoint.w;
+        const glm::vec3 worldFar = glm::vec3(farPoint) / farPoint.w;
+        const glm::vec3 ray = worldFar - worldNear;
+        const float rayZ = ray.z;
+        if (std::abs(rayZ) < 1e-6f)
+        {
+            return false;
+        }
+
+        const float planeZ = m_SceneSettings.gridOrigin.z;
+        const float t = (planeZ - worldNear.z) / rayZ;
+        if (t < 0.0f)
+        {
+            return false;
+        }
+
+        glm::vec3 hit = worldNear + ray * t;
+        hit.z = planeZ;
+
+        if (m_CursorSnapToGrid)
+        {
+            const float spacing = std::max(0.0001f, m_SceneSettings.gridSpacing);
+            hit.x = std::round((hit.x - m_SceneSettings.gridOrigin.x) / spacing) * spacing + m_SceneSettings.gridOrigin.x;
+            hit.y = std::round((hit.y - m_SceneSettings.gridOrigin.y) / spacing) * spacing + m_SceneSettings.gridOrigin.y;
+        }
+
+        outWorldPosition = hit;
+        return true;
+    }
+
+    void EditorLayer::Set3DCursorFromScreenPoint(const glm::vec2 &mousePos)
+    {
+        glm::vec3 worldHit(0.0f);
+        if (!PickWorldPositionOnGrid(mousePos, worldHit))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "3D cursor placement failed: could not project onto grid plane.";
+            LogWarn(m_LastStructureMessage);
+            return;
+        }
+
+        m_CursorPosition = worldHit;
+        m_AddAtomPosition = worldHit;
+        m_AddAtomCoordinateModeIndex = 1;
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "3D cursor moved to (" + std::to_string(worldHit.x) + ", " + std::to_string(worldHit.y) + ", " + std::to_string(worldHit.z) + ")";
+        LogInfo(m_LastStructureMessage);
+    }
+
+
+} // namespace ds

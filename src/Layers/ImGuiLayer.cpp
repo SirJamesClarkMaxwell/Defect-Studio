@@ -13,9 +13,18 @@
 
 namespace ds
 {
+    namespace
+    {
+        ImFont *s_BondLabelFont = nullptr;
+    }
 
     ImGuiLayer::ImGuiLayer()
         : Layer("ImGuiLayer") {}
+
+    ImFont *ImGuiLayer::GetBondLabelFont()
+    {
+        return s_BondLabelFont;
+    }
 
     void ImGuiLayer::OnAttach()
     {
@@ -25,11 +34,25 @@ namespace ds
         ImGuiIO &io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
         std::filesystem::create_directories("config");
         io.IniFilename = "config/imgui_layout.ini";
+        s_BondLabelFont = io.Fonts->AddFontFromFileTTF("vendor/imgui/misc/fonts/Roboto-Medium.ttf", 18.0f);
+        if (s_BondLabelFont == nullptr)
+        {
+            s_BondLabelFont = io.FontDefault;
+            LogWarn("Failed to load Roboto-Medium.ttf for bond labels. Falling back to default ImGui font.");
+        }
 
         ImGui::StyleColorsDark();
+        ImGuiStyle &style = ImGui::GetStyle();
+        if ((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+        {
+            // Keep platform windows visually consistent with the main viewport.
+            style.WindowRounding = 0.0f;
+            style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+        }
 
         GLFWwindow *window = ApplicationContext::Get().GetWindow();
         ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -41,6 +64,7 @@ namespace ds
     void ImGuiLayer::OnDetach()
     {
         LogInfo("ImGui layer shutdown");
+        s_BondLabelFont = nullptr;
         ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -58,6 +82,15 @@ namespace ds
     {
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        ImGuiIO &io = ImGui::GetIO();
+        if ((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+        {
+            GLFWwindow *backupCurrentContext = glfwGetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            glfwMakeContextCurrent(backupCurrentContext);
+        }
     }
 
 } // namespace ds

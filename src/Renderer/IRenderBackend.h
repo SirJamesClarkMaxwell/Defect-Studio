@@ -54,6 +54,11 @@ namespace ds
             const std::vector<glm::vec3> &atomPositions,
             const std::vector<glm::vec3> &atomColors,
             const SceneRenderSettings &settings) = 0;
+        virtual void RenderCylinderInstances(
+            const glm::mat4 &viewProjection,
+            const std::vector<glm::mat4> &instanceModels,
+            const std::vector<glm::vec3> &instanceColors,
+            const SceneRenderSettings &settings) = 0;
         virtual void RenderLineSegments(
             const glm::mat4 &viewProjection,
             const std::vector<glm::vec3> &lineVertices,
@@ -62,6 +67,10 @@ namespace ds
         virtual void EndFrame() = 0;
 
         virtual std::uint32_t GetColorAttachmentRendererID() const = 0;
+        virtual bool ReadColorAttachmentPixels(
+            std::uint32_t &outWidth,
+            std::uint32_t &outHeight,
+            std::vector<std::uint8_t> &outRgbaPixels) const = 0;
     };
 
 } // namespace ds
