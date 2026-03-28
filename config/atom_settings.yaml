@@ -1,0 +1,32 @@
+version: 1
+defaults:
+  overrideColor:
+    r: 0.9
+    g: 0.65
+    b: 0.35
+  atomScale: 0.3
+elements:
+  B:
+    visual:
+      color:
+        r: 0.13333334
+        g: 1
+        b: 0
+  C:
+    visual:
+      color:
+        r: 9.999971e-05
+        g: 0.0001
+        b: 9.998999e-05
+  Ge:
+    visual:
+      color:
+        r: 1
+        g: 0
+        b: 0
+  N:
+    visual:
+      color:
+        r: 1
+        g: 1
+        b: 0

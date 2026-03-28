@@ -20,3 +20,6 @@
 [submodule "vendor/tracy"]
 	path = vendor/tracy
 	url = https://github.com/wolfpld/tracy.git
+[submodule "vendor/yaml-cpp"]
+	path = vendor/yaml-cpp
+	url = https://github.com/sjcmdev/yaml-cpp.git

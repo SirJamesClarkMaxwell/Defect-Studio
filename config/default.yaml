@@ -3,6 +3,8 @@ app:
     width: 1600
     height: 900
     title: DefectsStudio
+  startup:
+    defaultStructurePath: assets/samples/reduced_diamond_bulk.vasp
   camera:
     orbitSensitivity: 1.0
     panSensitivity: 1.0

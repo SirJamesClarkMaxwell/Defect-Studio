@@ -5,7 +5,7 @@ namespace ds
     EditorLayer::EditorLayer()
         : Layer("EditorLayer")
     {
-        const char *defaultImportPath = "assets/samples/reduced_diamond_bulk";
+        const char *defaultImportPath = kFallbackStartupImportPath;
         const char *defaultExportPath = "exports/CONTCAR.vasp";
         const char *defaultRenderImagePath = "exports/render.png";
 
@@ -13,13 +13,25 @@ namespace ds
         std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", defaultExportPath);
         std::snprintf(m_RenderImagePathBuffer.data(), m_RenderImagePathBuffer.size(), "%s", defaultRenderImagePath);
 
-        m_SceneSettings.clearColor = glm::vec3(0.16f, 0.18f, 0.22f);
+        m_SceneSettings.clearColor = glm::vec3(0.10f, 0.10f, 0.10f);
         m_SceneSettings.gridLineWidth = 1.0f;
-        m_SceneSettings.gridColor = glm::vec3(0.38f, 0.42f, 0.50f);
+        m_SceneSettings.gridColor = glm::vec3(0.27f, 0.29f, 0.32f);
         m_SceneSettings.ambientStrength = 0.58f;
         m_SceneSettings.diffuseStrength = 0.78f;
         m_SceneSettings.atomBrightness = 1.15f;
+        ApplyAtomDefaultsToSceneSettings();
         m_RenderSceneSettings = m_SceneSettings;
+        m_HotkeyAddMenu = static_cast<std::uint32_t>(ImGuiKey_A);
+        m_HotkeyOpenRender = static_cast<std::uint32_t>(ImGuiKey_F12);
+        m_HotkeyToggleSidePanels = static_cast<std::uint32_t>(ImGuiKey_N);
+        m_HotkeyDeleteSelection = static_cast<std::uint32_t>(ImGuiKey_Delete);
+        m_HotkeyHideSelection = static_cast<std::uint32_t>(ImGuiKey_H);
+        m_HotkeyBoxSelect = static_cast<std::uint32_t>(ImGuiKey_B);
+        m_HotkeyCircleSelect = static_cast<std::uint32_t>(ImGuiKey_C);
+        m_HotkeyTranslateModal = static_cast<std::uint32_t>(ImGuiKey_G);
+        m_HotkeyTranslateGizmo = static_cast<std::uint32_t>(ImGuiKey_T);
+        m_HotkeyRotateGizmo = static_cast<std::uint32_t>(ImGuiKey_R);
+        m_HotkeyScaleGizmo = static_cast<std::uint32_t>(ImGuiKey_S);
     }
 
     void EditorLayer::SyncRenderAppearanceFromViewport()
@@ -39,8 +51,21 @@ namespace ds
     void EditorLayer::OnAttach()
     {
         LogInfo("EditorLayer::OnAttach begin");
+        m_ApplyDefaultDockLayoutOnNextFrame = !std::filesystem::exists("config/imgui_layout.ini");
 
-        LogInfo("Loading editor settings from config/editor_ui_settings.ini");
+        LogInfo("Loading app defaults from config/default.yaml");
+        LoadDefaultConfigYaml();
+
+        LogInfo("Migrating legacy atom settings if needed");
+        MigrateLegacyAtomIniIfNeeded();
+
+        LogInfo("Loading atom defaults from config/atom_settings.yaml");
+        LoadAtomSettings();
+
+        LogInfo("Migrating legacy UI settings if needed");
+        MigrateLegacyUiIniIfNeeded();
+
+        LogInfo("Loading UI settings from config/ui_settings.yaml");
         LoadSettings();
 
         LogInfo("Loading scene state from config/scene_state.ini");
@@ -50,6 +75,7 @@ namespace ds
         EnsureSceneDefaults();
         SyncRenderAppearanceFromViewport();
         ApplyTheme(m_CurrentTheme);
+        ImGuiLayer::LoadSavedStyle();
         ApplyFontScale(m_FontScale);
 
         LogInfo("Initializing render backend");
