@@ -38,6 +38,11 @@ The app currently includes:
 - atom / bond / helper selection and transform workflows
 - scene collections, groups, and outliner-style management
 - dockable editor panels
+- dockable Periodic Table and `Element Catalog`
+- per-element atom defaults with YAML-backed config
+- YAML-backed app / UI config migration from legacy INI files
+- undo / redo for core scene edit actions
+- shortcut reference panel and customizable input behavior
 - persistent ImGui layout and core UI settings
 - offscreen render export to PNG / JPG
 - dockable live render preview window
@@ -59,10 +64,9 @@ Near-term and mid-term roadmap items are tracked in:
 Planned future areas include:
 
 ### UI / UX
-- Hazel-style editor polish
-- better logging / console UX
-- stronger settings persistence
-- cleaner panel ownership and workflow layout
+- editing workflow polish (selection completion, transform undo/redo, copy / duplicate / multi-edit actions)
+- project-level appearance override workflow cleanup
+- continued panel / workflow refinement after the large T09 pass
 
 ### Rendering
 - advanced render architecture follow-up after refactor and docs
@@ -140,6 +144,22 @@ Current render/export workflow highlights:
 - render preview is live and dockable
 - preview/export rendering is independent from the main viewport render target
 - export supports crop rectangles and label composition
+
+---
+
+# Configuration Model
+
+The project currently uses a split config model:
+
+- `config/default.yaml` - app-level defaults such as the startup sample
+- `config/atom_settings.yaml` - global per-element defaults and future atom catalog data
+- `config/ui_settings.yaml` - persisted editor and viewport UI state
+
+Current default startup sample:
+
+- `assets/samples/reduced_diamond_bulk.vasp`
+
+Project-specific appearance overrides still exist, but are planned to be separated more cleanly from scene state in a follow-up task.
 
 ---
 
