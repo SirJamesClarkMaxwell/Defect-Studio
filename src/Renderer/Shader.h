@@ -21,6 +21,7 @@ namespace ds
 
         void SetMat4(const char *name, const glm::mat4 &value) const;
         void SetFloat3(const char *name, const glm::vec3 &value) const;
+        void SetFloat4(const char *name, float x, float y, float z, float w) const;
         void SetFloat(const char *name, float value) const;
 
         bool IsValid() const { return m_RendererID != 0; }

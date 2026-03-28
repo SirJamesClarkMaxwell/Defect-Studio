@@ -38,6 +38,13 @@ namespace ds
             const std::vector<glm::vec3> &lineVertices,
             const glm::vec3 &lineColor,
             float lineWidth) override;
+        void RenderSurfaceMesh(
+            const glm::mat4 &viewProjection,
+            const std::vector<glm::vec3> &positions,
+            const std::vector<glm::vec3> &normals,
+            const glm::vec3 &surfaceColor,
+            float surfaceOpacity,
+            const SceneRenderSettings &settings) override;
         void EndFrame() override;
 
         std::uint32_t GetColorAttachmentRendererID() const override { return m_ColorTexture; }
@@ -68,6 +75,7 @@ namespace ds
 
         Shader m_Shader;
         Shader m_GridShader;
+        Shader m_SurfaceShader;
 
         std::uint32_t m_Framebuffer = 0;
         std::uint32_t m_ColorRenderbuffer = 0;
@@ -82,6 +90,8 @@ namespace ds
 
         std::uint32_t m_GridVAO = 0;
         std::uint32_t m_GridVBO = 0;
+        std::uint32_t m_SurfaceVAO = 0;
+        std::uint32_t m_SurfaceVBO = 0;
 
         std::uint32_t m_ViewportWidth = 1;
         std::uint32_t m_ViewportHeight = 1;

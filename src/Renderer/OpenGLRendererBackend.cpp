@@ -32,6 +32,12 @@ namespace ds
             glm::vec3 normal;
         };
 
+        struct SurfaceVertex
+        {
+            glm::vec3 position;
+            glm::vec3 normal;
+        };
+
         void ConfigureInstanceAttributes(std::uint32_t vao, std::uint32_t instanceVbo, std::uint32_t colorVbo)
         {
             glBindVertexArray(vao);
@@ -169,10 +175,18 @@ namespace ds
             return false;
         }
 
+        if (!m_SurfaceShader.LoadFromFiles("assets/shaders/surface_mesh.vert", "assets/shaders/surface_mesh.frag"))
+        {
+            LogError("OpenGL renderer failed to load volumetric surface shader files.");
+            return false;
+        }
+
         glGenBuffers(1, &m_InstanceVBO);
         glGenBuffers(1, &m_InstanceColorVBO);
         glGenVertexArrays(1, &m_GridVAO);
         glGenBuffers(1, &m_GridVBO);
+        glGenVertexArrays(1, &m_SurfaceVAO);
+        glGenBuffers(1, &m_SurfaceVBO);
 
         std::vector<SphereVertex> sphereVertices;
         std::vector<std::uint32_t> sphereIndices;
@@ -237,6 +251,16 @@ namespace ds
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
+        glBindVertexArray(m_SurfaceVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_SurfaceVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(SurfaceVertex), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), reinterpret_cast<void *>(offsetof(SurfaceVertex, position)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), reinterpret_cast<void *>(offsetof(SurfaceVertex, normal)));
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
         ConfigureInstanceAttributes(m_SphereMesh.vao, m_InstanceVBO, m_InstanceColorVBO);
         ConfigureInstanceAttributes(m_CylinderMesh.vao, m_InstanceVBO, m_InstanceColorVBO);
 
@@ -290,8 +314,21 @@ namespace ds
             m_GridVAO = 0;
         }
 
+        if (m_SurfaceVBO != 0)
+        {
+            glDeleteBuffers(1, &m_SurfaceVBO);
+            m_SurfaceVBO = 0;
+        }
+
+        if (m_SurfaceVAO != 0)
+        {
+            glDeleteVertexArrays(1, &m_SurfaceVAO);
+            m_SurfaceVAO = 0;
+        }
+
         m_Shader.Destroy();
         m_GridShader.Destroy();
+        m_SurfaceShader.Destroy();
     }
 
     void OpenGLRendererBackend::ResizeViewport(std::uint32_t width, std::uint32_t height)
@@ -654,6 +691,67 @@ namespace ds
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
         glLineWidth(1.0f);
 
+        glBindVertexArray(0);
+    }
+
+    void OpenGLRendererBackend::RenderSurfaceMesh(
+        const glm::mat4 &viewProjection,
+        const std::vector<glm::vec3> &positions,
+        const std::vector<glm::vec3> &normals,
+        const glm::vec3 &surfaceColor,
+        float surfaceOpacity,
+        const SceneRenderSettings &settings)
+    {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::RenderSurfaceMesh");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuZone("RenderSurfaceMesh");
+#endif
+        const std::size_t vertexCount = std::min(positions.size(), normals.size());
+        if (vertexCount < 3 || m_SurfaceVAO == 0 || m_SurfaceVBO == 0)
+        {
+            return;
+        }
+
+        std::vector<SurfaceVertex> vertices;
+        vertices.reserve(vertexCount);
+        for (std::size_t i = 0; i < vertexCount; ++i)
+        {
+            vertices.push_back({positions[i], normals[i]});
+        }
+
+        m_SurfaceShader.Bind();
+        m_SurfaceShader.SetMat4("u_ViewProjection", viewProjection);
+        m_SurfaceShader.SetFloat3("u_LightDirection", glm::normalize(settings.lightDirection));
+        m_SurfaceShader.SetFloat3("u_LightColor", settings.lightColor);
+        m_SurfaceShader.SetFloat4(
+            "u_SurfaceColor",
+            surfaceColor.r,
+            surfaceColor.g,
+            surfaceColor.b,
+            std::clamp(surfaceOpacity, 0.0f, 1.0f));
+        m_SurfaceShader.SetFloat4(
+            "u_LightFactors",
+            std::max(settings.ambientStrength, 0.0f),
+            std::max(settings.diffuseStrength, 0.0f),
+            0.12f,
+            0.0f);
+
+        glBindVertexArray(m_SurfaceVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_SurfaceVBO);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(vertices.size() * sizeof(SurfaceVertex)),
+            vertices.data(),
+            GL_DYNAMIC_DRAW);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertexCount));
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
     }
 

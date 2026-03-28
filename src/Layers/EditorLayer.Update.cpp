@@ -1,7 +1,181 @@
 #include "Layers/EditorLayerPrivate.h"
 
+#include <chrono>
+
 namespace ds
 {
+    namespace
+    {
+        float ComputeDefaultIsoValue(const ScalarFieldBlock &block, float factor)
+        {
+            const float absMax = std::max(1e-6f, block.statistics.absMaxValue);
+            const float meanBias = std::max(std::abs(block.statistics.meanValue) * 6.0f, absMax * 0.05f);
+            return std::max(meanBias, absMax * factor);
+        }
+    } // namespace
+
+    void EditorLayer::MarkVolumetricMeshesDirty()
+    {
+        auto resetSurface = [](VolumetricSurfaceState &surface)
+        {
+            surface.dirty = true;
+            surface.hasMesh = false;
+            surface.sampledDimensions = glm::ivec3(0);
+            surface.decimationStep = 1;
+            surface.lastBuildMilliseconds = 0.0;
+            surface.lastStatus.clear();
+            surface.mesh.Clear();
+        };
+
+        resetSurface(m_PrimaryVolumetricSurface);
+        resetSurface(m_SecondaryVolumetricSurface);
+    }
+
+    void EditorLayer::SyncVolumetricSurfaceDefaults()
+    {
+        EnsureVolumetricSelection();
+        if (m_ActiveVolumetricDatasetIndex < 0 || m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            m_VolumetricSurfaceDatasetKey.clear();
+            return;
+        }
+
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        const std::string datasetKey = dataset.sourcePath + "#" + std::to_string(dataset.blocks.size());
+        const auto clampSurfaceBlockIndex = [&](VolumetricSurfaceState &surface)
+        {
+            if (dataset.blocks.empty())
+            {
+                surface.blockIndex = 0;
+                return;
+            }
+
+            surface.blockIndex = std::clamp(surface.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+        };
+        if (datasetKey == m_VolumetricSurfaceDatasetKey)
+        {
+            clampSurfaceBlockIndex(m_PrimaryVolumetricSurface);
+            clampSurfaceBlockIndex(m_SecondaryVolumetricSurface);
+            return;
+        }
+
+        m_VolumetricSurfaceDatasetKey = datasetKey;
+        m_PrimaryVolumetricSurface.enabled = true;
+        m_PrimaryVolumetricSurface.blockIndex = 0;
+        m_PrimaryVolumetricSurface.color = glm::vec3(1.0f, 0.92f, 0.14f);
+        m_PrimaryVolumetricSurface.opacity = 0.42f;
+        m_PrimaryVolumetricSurface.isoValue =
+            dataset.blocks.empty() ? 0.0f : ComputeDefaultIsoValue(dataset.blocks.front(), 0.26f);
+
+        m_SecondaryVolumetricSurface.enabled = dataset.blocks.size() > 1;
+        m_SecondaryVolumetricSurface.blockIndex = dataset.blocks.size() > 1 ? 1 : 0;
+        m_SecondaryVolumetricSurface.color = glm::vec3(0.10f, 0.22f, 0.96f);
+        m_SecondaryVolumetricSurface.opacity = 0.46f;
+        m_SecondaryVolumetricSurface.isoValue =
+            dataset.blocks.size() > 1 ? ComputeDefaultIsoValue(dataset.blocks[1], 0.42f) :
+                                         (dataset.blocks.empty() ? 0.0f : ComputeDefaultIsoValue(dataset.blocks.front(), 0.55f));
+        MarkVolumetricMeshesDirty();
+    }
+
+    bool EditorLayer::RebuildVolumetricSurfaceMesh(VolumetricSurfaceState &surfaceState)
+    {
+        surfaceState.dirty = false;
+        surfaceState.hasMesh = false;
+        surfaceState.mesh.Clear();
+        surfaceState.lastStatus.clear();
+        surfaceState.lastBuildMilliseconds = 0.0;
+        surfaceState.sampledDimensions = glm::ivec3(0);
+        surfaceState.decimationStep = 1;
+
+        EnsureVolumetricSelection();
+        if (!surfaceState.enabled ||
+            m_ActiveVolumetricDatasetIndex < 0 ||
+            m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            return false;
+        }
+
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        if (dataset.blocks.empty())
+        {
+            surfaceState.lastStatus = "Dataset has no blocks.";
+            return false;
+        }
+
+        surfaceState.blockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+        const ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(surfaceState.blockIndex)];
+
+        IsosurfaceBuildResult result;
+        std::string error;
+        const auto startedAt = std::chrono::steady_clock::now();
+        const bool built = m_IsosurfaceExtractor.BuildPreviewMesh(
+            dataset.structure,
+            block,
+            IsosurfaceBuildSettings{surfaceState.isoValue, m_VolumetricPreviewMaxDimension},
+            result,
+            error);
+        const auto finishedAt = std::chrono::steady_clock::now();
+        surfaceState.lastBuildMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+        surfaceState.sampledDimensions = result.sampledDimensions;
+        surfaceState.decimationStep = result.decimationStep;
+
+        if (!built)
+        {
+            surfaceState.lastStatus = error.empty() ? "Surface build failed." : error;
+            return false;
+        }
+
+        surfaceState.mesh = std::move(result.mesh);
+        surfaceState.hasMesh = !surfaceState.mesh.positions.empty();
+        surfaceState.lastStatus =
+            surfaceState.hasMesh ?
+                ("Preview mesh: " + std::to_string(surfaceState.mesh.TriangleCount()) + " triangles") :
+                (error.empty() ? "No surface for current iso value." : error);
+        return surfaceState.hasMesh;
+    }
+
+    void EditorLayer::EnsureVolumetricSurfaceMeshes()
+    {
+        SyncVolumetricSurfaceDefaults();
+        if (m_ActiveVolumetricDatasetIndex < 0 || m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            return;
+        }
+
+        if (m_PrimaryVolumetricSurface.dirty)
+        {
+            RebuildVolumetricSurfaceMesh(m_PrimaryVolumetricSurface);
+        }
+
+        if (m_SecondaryVolumetricSurface.dirty)
+        {
+            RebuildVolumetricSurfaceMesh(m_SecondaryVolumetricSurface);
+        }
+    }
+
+    void EditorLayer::RenderVolumetricSurfaces(IRenderBackend &backend, const OrbitCamera &camera, const SceneRenderSettings &settings)
+    {
+        const glm::mat4 viewProjection = camera.GetViewProjectionMatrix();
+        auto renderSurface = [&](const VolumetricSurfaceState &surfaceState)
+        {
+            if (!surfaceState.enabled || !surfaceState.hasMesh || surfaceState.mesh.positions.empty())
+            {
+                return;
+            }
+
+            backend.RenderSurfaceMesh(
+                viewProjection,
+                surfaceState.mesh.positions,
+                surfaceState.mesh.normals,
+                surfaceState.color,
+                surfaceState.opacity,
+                settings);
+        };
+
+        renderSurface(m_PrimaryVolumetricSurface);
+        renderSurface(m_SecondaryVolumetricSurface);
+    }
+
     void EditorLayer::OnUpdate(float deltaTime)
     {
         DS_PROFILE_SCOPE_N("EditorLayer::OnUpdate");
@@ -36,6 +210,7 @@ namespace ds
             m_CameraTransitionActive = false;
         }
         UpdateCameraOrbitTransition(deltaTime);
+        EnsureVolumetricSurfaceMeshes();
 
         m_SceneOriginPosition = glm::vec3(0.0f);
         const glm::vec3 lightToOrigin = m_SceneOriginPosition - m_LightPosition;
@@ -159,6 +334,43 @@ namespace ds
                 farthestSceneDepth = std::max(farthestSceneDepth, sceneDepth + emptyRadius * m_CameraClipFarPadding);
                 hasSceneDepth = true;
             }
+
+            const auto accumulateSurfaceDepth = [&](const VolumetricSurfaceState &surfaceState)
+            {
+                if (!surfaceState.enabled || !surfaceState.hasMesh || surfaceState.mesh.positions.empty())
+                {
+                    return;
+                }
+
+                const glm::vec3 &bmin = surfaceState.mesh.boundsMin;
+                const glm::vec3 &bmax = surfaceState.mesh.boundsMax;
+                const glm::vec3 corners[8] = {
+                    glm::vec3(bmin.x, bmin.y, bmin.z),
+                    glm::vec3(bmax.x, bmin.y, bmin.z),
+                    glm::vec3(bmin.x, bmax.y, bmin.z),
+                    glm::vec3(bmax.x, bmax.y, bmin.z),
+                    glm::vec3(bmin.x, bmin.y, bmax.z),
+                    glm::vec3(bmax.x, bmin.y, bmax.z),
+                    glm::vec3(bmin.x, bmax.y, bmax.z),
+                    glm::vec3(bmax.x, bmax.y, bmax.z)};
+
+                for (const glm::vec3 &corner : corners)
+                {
+                    const glm::vec4 viewPosition = cameraView * glm::vec4(corner, 1.0f);
+                    const float sceneDepth = -viewPosition.z;
+                    if (sceneDepth <= 1e-4f)
+                    {
+                        continue;
+                    }
+
+                    nearestSceneDepth = std::min(nearestSceneDepth, sceneDepth - 0.08f * m_CameraClipNearPadding);
+                    farthestSceneDepth = std::max(farthestSceneDepth, sceneDepth + 0.12f * m_CameraClipFarPadding);
+                    hasSceneDepth = true;
+                }
+            };
+
+            accumulateSurfaceDepth(m_PrimaryVolumetricSurface);
+            accumulateSurfaceDepth(m_SecondaryVolumetricSurface);
 
             if (hasSceneDepth)
             {
@@ -317,6 +529,8 @@ namespace ds
                 selectedAtomSettings.atomScale = m_SceneSettings.atomScale * ElementRadiusScale(elementKey) * ResolveElementVisualScale(elementKey);
                 m_RenderBackend->RenderAtomsScene(m_Camera->GetViewProjectionMatrix(), positions, colors, selectedAtomSettings);
             }
+
+            RenderVolumetricSurfaces(*m_RenderBackend, *m_Camera, m_SceneSettings);
         }
         else
         {
@@ -556,6 +770,8 @@ namespace ds
                     selectedAtomSettings.atomScale = previewSceneSettings.atomScale * ElementRadiusScale(elementKey) * ResolveElementVisualScale(elementKey);
                     m_RenderPreviewBackend->RenderAtomsScene(previewCamera.GetViewProjectionMatrix(), positions, colors, selectedAtomSettings);
                 }
+
+                RenderVolumetricSurfaces(*m_RenderPreviewBackend, previewCamera, previewSceneSettings);
             }
             else
             {

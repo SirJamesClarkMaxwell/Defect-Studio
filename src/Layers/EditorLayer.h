@@ -2,8 +2,11 @@
 
 #include "Core/Layer.h"
 #include "DataModel/Structure.h"
+#include "DataModel/VolumetricDataset.h"
 #include "IO/PoscarParser.h"
 #include "IO/PoscarSerializer.h"
+#include "IO/VaspVolumetricParser.h"
+#include "Volumetrics/IsosurfaceExtractor.h"
 #include "Renderer/IRenderBackend.h"
 
 #include <array>
@@ -121,6 +124,8 @@ namespace ds
             bool useCrop = false;
             std::array<float, 4> cropRectNormalized = {0.0f, 0.0f, 1.0f, 1.0f};
         };
+
+        struct VolumetricSurfaceState;
 
         struct TransformEmpty
         {
@@ -351,6 +356,7 @@ namespace ds
         void AddRecentProjectPath(const std::filesystem::path &path);
         void SaveProjectManifest() const;
         void LoadProjectManifest();
+        void LoadProjectVolumetricDatasets();
         bool CreateProjectAt(const std::filesystem::path &folderPath);
         bool OpenProjectAt(const std::filesystem::path &folderPath);
         void ResetProjectSceneState();
@@ -361,6 +367,10 @@ namespace ds
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
         bool BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const;
         bool ExportCollectionToPath(int collectionIndex, const std::string &path, CoordinateMode mode, int precision);
+        bool LoadVolumetricDatasetFromPath(const std::string &path);
+        bool RemoveVolumetricDatasetAtIndex(int datasetIndex);
+        void ClearVolumetricDatasets();
+        void EnsureVolumetricSelection();
         bool AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode);
         bool ApplyElementToSelectedAtoms(const std::string &elementInput, std::size_t *outChangedCount = nullptr);
         bool IsAtomSelected(std::size_t index) const;
@@ -407,6 +417,12 @@ namespace ds
         void DrawRenderImageDialog(bool &settingsChanged);
         void DrawRenderPreviewWindow(bool &settingsChanged);
         void DrawElementAppearanceWindow(bool &settingsChanged);
+        void DrawVolumetricsWindow(bool &settingsChanged);
+        void MarkVolumetricMeshesDirty();
+        void SyncVolumetricSurfaceDefaults();
+        bool RebuildVolumetricSurfaceMesh(struct VolumetricSurfaceState &surfaceState);
+        void EnsureVolumetricSurfaceMeshes();
+        void RenderVolumetricSurfaces(IRenderBackend &backend, const OrbitCamera &camera, const SceneRenderSettings &settings);
         void ApplyDefaultDockLayout(unsigned int dockspaceId);
         bool HasClipboardPayload() const;
         bool CopyCurrentSelectionToClipboard();
@@ -458,6 +474,7 @@ namespace ds
         bool m_ShowViewportInfoPanel = true;
         bool m_ShowShortcutReferencePanel = false;
         bool m_ShowElementCatalogPanel = false;
+        bool m_ShowVolumetricsPanel = false;
         ThemePreset m_CurrentTheme = ThemePreset::Dark;
         float m_FontScale = 1.0f;
         int m_LogFilter = 0;
@@ -477,17 +494,21 @@ namespace ds
 
         PoscarParser m_PoscarParser;
         PoscarSerializer m_PoscarSerializer;
+        VaspVolumetricParser m_VaspVolumetricParser;
         std::optional<Structure> m_OriginalStructure;
         Structure m_WorkingStructure;
         bool m_HasStructureLoaded = false;
+        std::vector<VolumetricDataset> m_VolumetricDatasets;
         std::string m_AppRootPath;
         std::string m_ProjectRootPath;
         std::string m_ProjectName = "Default Project";
         std::string m_ProjectStructurePath;
+        std::vector<std::string> m_ProjectVolumetricPaths;
         std::vector<std::string> m_RecentProjectPaths;
 
         std::array<char, 512> m_ImportPathBuffer = {};
         std::array<char, 512> m_ExportPathBuffer = {};
+        std::array<char, 512> m_VolumetricImportPathBuffer = {};
         std::array<char, 512> m_RenderImagePathBuffer = {};
         int m_ExportPrecision = 8;
         int m_ExportCoordinateModeIndex = 0;
@@ -568,6 +589,38 @@ namespace ds
         std::unordered_map<SceneUUID, glm::vec3> m_AtomColorOverrides;
         std::string m_ElementCatalogSelectedSymbol = "C";
         bool m_ElementCatalogFollowViewportSelection = false;
+        int m_ActiveVolumetricDatasetIndex = -1;
+        int m_ActiveVolumetricBlockIndex = 0;
+        int m_VolumetricPreviewMaxDimension = 96;
+        bool m_LastVolumetricOperationFailed = false;
+        std::string m_LastVolumetricMessage;
+        struct VolumetricSurfaceState
+        {
+            bool enabled = true;
+            int blockIndex = 0;
+            float isoValue = 0.0f;
+            glm::vec3 color = glm::vec3(1.0f, 0.92f, 0.14f);
+            float opacity = 0.42f;
+            bool dirty = true;
+            bool hasMesh = false;
+            glm::ivec3 sampledDimensions = glm::ivec3(0);
+            int decimationStep = 1;
+            double lastBuildMilliseconds = 0.0;
+            std::string lastStatus;
+            SurfaceTriangleMesh mesh;
+        };
+        IsosurfaceExtractor m_IsosurfaceExtractor;
+        VolumetricSurfaceState m_PrimaryVolumetricSurface;
+        VolumetricSurfaceState m_SecondaryVolumetricSurface = []()
+        {
+            VolumetricSurfaceState state;
+            state.enabled = false;
+            state.blockIndex = 1;
+            state.color = glm::vec3(0.10f, 0.22f, 0.96f);
+            state.opacity = 0.44f;
+            return state;
+        }();
+        std::string m_VolumetricSurfaceDatasetKey;
         std::size_t m_LastLoggedBondCount = std::numeric_limits<std::size_t>::max();
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;

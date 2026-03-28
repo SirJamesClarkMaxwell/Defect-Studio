@@ -30,6 +30,7 @@ namespace ds
         ImGui::DockBuilderDockWindow("Appearance", rightDockId);
         ImGui::DockBuilderDockWindow("Actions", rightDockId);
         ImGui::DockBuilderDockWindow("Element Catalog", rightDockId);
+        ImGui::DockBuilderDockWindow("Volumetrics", rightDockId);
         ImGui::DockBuilderDockWindow("Periodic Table", rightDockId);
         ImGui::DockBuilderDockWindow("Viewport Settings", rightUtilityDockId);
         ImGui::DockBuilderDockWindow("Render Preview", rightUtilityDockId);
@@ -188,6 +189,25 @@ namespace ds
                     }
                 }
 
+                if (ImGui::MenuItem("Open CHG/CHGCAR/PARCHG", nullptr))
+                {
+                    const std::filesystem::path initialDirectory = !GetProjectRootPath().empty()
+                                                                      ? (GetProjectRootPath() / "project")
+                                                                      : GetAppRootPath();
+                    std::vector<std::string> selectedPaths;
+                    if (OpenNativeVolumetricFilesDialog(selectedPaths, initialDirectory.string()) && !selectedPaths.empty())
+                    {
+                        for (const std::string &selectedPath : selectedPaths)
+                        {
+                            if (LoadVolumetricDatasetFromPath(selectedPath))
+                            {
+                                SaveProjectManifest();
+                            }
+                        }
+                        settingsChanged = true;
+                    }
+                }
+
                 if (ImGui::MenuItem("Export POSCAR/CONTCAR", "Ctrl+S", false, m_HasStructureLoaded))
                 {
                     std::string selectedPath;
@@ -327,6 +347,10 @@ namespace ds
                 {
                     settingsChanged = true;
                 }
+                if (ImGui::MenuItem("Volumetrics", nullptr, &m_ShowVolumetricsPanel))
+                {
+                    settingsChanged = true;
+                }
                 if (ImGui::MenuItem("Periodic Table", nullptr, &m_ShowPeriodicTablePanel))
                 {
                     if (m_ShowPeriodicTablePanel)
@@ -382,6 +406,7 @@ namespace ds
                     m_ShowObjectPropertiesPanel = true;
                     m_ShowActionsPanel = true;
                     m_ShowAppearancePanel = true;
+                    m_ShowVolumetricsPanel = true;
                     m_ShowPeriodicTablePanel = false;
                     m_PeriodicTableOpen = false;
                     m_ViewportSettingsOpen = true;
@@ -7237,6 +7262,7 @@ namespace ds
         DrawRenderImageDialog(settingsChanged);
         DrawRenderPreviewWindow(settingsChanged);
         DrawElementAppearanceWindow(settingsChanged);
+        DrawVolumetricsWindow(settingsChanged);
 
         if (m_ShowAddAtomDialog)
         {
@@ -7313,6 +7339,309 @@ namespace ds
         {
             SaveSettings();
         }
+    }
+
+    void EditorLayer::DrawVolumetricsWindow(bool &settingsChanged)
+    {
+        if (!m_ShowVolumetricsPanel)
+        {
+            return;
+        }
+
+        EnsureVolumetricSelection();
+
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 560.0f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Volumetrics", &m_ShowVolumetricsPanel))
+        {
+            ImGui::End();
+            return;
+        }
+
+        auto formatBytes = [](std::size_t bytes)
+        {
+            constexpr double kKiB = 1024.0;
+            constexpr double kMiB = 1024.0 * 1024.0;
+            constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+
+            std::ostringstream out;
+            out << std::fixed << std::setprecision(2);
+            if (bytes >= static_cast<std::size_t>(kGiB))
+            {
+                out << (static_cast<double>(bytes) / kGiB) << " GiB";
+            }
+            else if (bytes >= static_cast<std::size_t>(kMiB))
+            {
+                out << (static_cast<double>(bytes) / kMiB) << " MiB";
+            }
+            else if (bytes >= static_cast<std::size_t>(kKiB))
+            {
+                out << (static_cast<double>(bytes) / kKiB) << " KiB";
+            }
+            else
+            {
+                out << bytes << " B";
+            }
+            return out.str();
+        };
+
+        ImGui::TextWrapped("Volumetrics MVP for CHG / CHGCAR / PARCHG. This panel now loads scalar fields, preserves multi-block files, shows dataset statistics, and renders preview isosurfaces on a decimated grid.");
+
+        if (ImGui::Button("Load volumetric files..."))
+        {
+            const std::filesystem::path initialDirectory = !GetProjectRootPath().empty()
+                                                              ? (GetProjectRootPath() / "project")
+                                                              : GetAppRootPath();
+            std::vector<std::string> selectedPaths;
+            if (OpenNativeVolumetricFilesDialog(selectedPaths, initialDirectory.string()) && !selectedPaths.empty())
+            {
+                bool anyLoaded = false;
+                for (const std::string &selectedPath : selectedPaths)
+                {
+                    anyLoaded |= LoadVolumetricDatasetFromPath(selectedPath);
+                }
+                if (anyLoaded)
+                {
+                    SaveProjectManifest();
+                }
+            }
+        }
+
+        ImGui::SameLine();
+        const bool hasDataset = !m_VolumetricDatasets.empty();
+        if (!hasDataset)
+        {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Unload selected"))
+        {
+            if (RemoveVolumetricDatasetAtIndex(m_ActiveVolumetricDatasetIndex))
+            {
+                SaveProjectManifest();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear all"))
+        {
+            ClearVolumetricDatasets();
+            SaveProjectManifest();
+        }
+        if (!hasDataset)
+        {
+            ImGui::EndDisabled();
+        }
+
+        if (!m_LastVolumetricMessage.empty())
+        {
+            ImVec4 color = m_LastVolumetricOperationFailed ? ImVec4(0.95f, 0.42f, 0.42f, 1.0f) : ImVec4(0.64f, 0.88f, 0.68f, 1.0f);
+            ImGui::TextColored(color, "%s", m_LastVolumetricMessage.c_str());
+        }
+
+        if (m_VolumetricDatasets.empty())
+        {
+            ImGui::SeparatorText("Expected structure");
+            ImGui::BulletText("Each current sample file contains the same BN structure header and two volumetric blocks.");
+            ImGui::BulletText("Typical workflow: load one or more PARCHG datasets, inspect blocks, then choose iso settings for rendering.");
+            ImGui::BulletText("These files are large, so preview decimation will matter for interactive rendering.");
+            ImGui::End();
+            return;
+        }
+
+        std::size_t totalMemoryBytes = 0;
+        for (const VolumetricDataset &dataset : m_VolumetricDatasets)
+        {
+            totalMemoryBytes += dataset.TotalMemoryBytes();
+        }
+
+        ImGui::SeparatorText("Loaded datasets");
+        ImGui::Text("Count: %d", static_cast<int>(m_VolumetricDatasets.size()));
+        ImGui::SameLine();
+        ImGui::TextDisabled("| Total memory: %s", formatBytes(totalMemoryBytes).c_str());
+
+        if (ImGui::BeginChild("VolumetricDatasetList", ImVec2(0.0f, 140.0f), true))
+        {
+            for (std::size_t datasetIndex = 0; datasetIndex < m_VolumetricDatasets.size(); ++datasetIndex)
+            {
+                const VolumetricDataset &dataset = m_VolumetricDatasets[datasetIndex];
+                const bool isSelected = (static_cast<int>(datasetIndex) == m_ActiveVolumetricDatasetIndex);
+
+                std::ostringstream label;
+                label << dataset.sourceLabel << "##VolumetricDataset" << datasetIndex;
+                if (ImGui::Selectable(label.str().c_str(), isSelected))
+                {
+                    m_ActiveVolumetricDatasetIndex = static_cast<int>(datasetIndex);
+                    m_ActiveVolumetricBlockIndex = 0;
+                }
+
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(dataset.sourcePath.c_str());
+                    ImGui::Text("Blocks: %d", static_cast<int>(dataset.blocks.size()));
+                    ImGui::Text("Memory: %s", formatBytes(dataset.TotalMemoryBytes()).c_str());
+                    ImGui::EndTooltip();
+                }
+            }
+        }
+        ImGui::EndChild();
+
+        EnsureVolumetricSelection();
+        if (m_ActiveVolumetricDatasetIndex < 0 || m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            ImGui::End();
+            return;
+        }
+
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        ImGui::SeparatorText("Dataset details");
+        ImGui::Text("File kind: %s", VolumetricFileKindName(dataset.kind));
+        ImGui::Text("Structure title: %s", dataset.title.empty() ? "(empty)" : dataset.title.c_str());
+        ImGui::Text("Atoms in header: %d", dataset.structure.GetAtomCount());
+        if (m_HasStructureLoaded)
+        {
+            const bool matchesCurrentScene = (dataset.structure.GetAtomCount() == m_WorkingStructure.GetAtomCount());
+            ImGui::TextColored(matchesCurrentScene ? ImVec4(0.64f, 0.88f, 0.68f, 1.0f) : ImVec4(0.95f, 0.72f, 0.38f, 1.0f),
+                               "Matches current scene atom count: %s",
+                               matchesCurrentScene ? "yes" : "no");
+        }
+
+        if (!dataset.blocks.empty())
+        {
+            std::vector<const char *> blockLabels;
+            blockLabels.reserve(dataset.blocks.size());
+            for (const ScalarFieldBlock &block : dataset.blocks)
+            {
+                blockLabels.push_back(block.label.c_str());
+            }
+
+            ImGui::SeparatorText("Block");
+            ImGui::Combo("Active block", &m_ActiveVolumetricBlockIndex, blockLabels.data(), static_cast<int>(blockLabels.size()));
+            m_ActiveVolumetricBlockIndex = std::clamp(m_ActiveVolumetricBlockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+
+            const ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(m_ActiveVolumetricBlockIndex)];
+            ImGui::Text("Grid: %d x %d x %d", block.dimensions.x, block.dimensions.y, block.dimensions.z);
+            ImGui::Text("Samples: %zu", block.SampleCount());
+            ImGui::Text("Block memory: %s", formatBytes(block.MemoryBytes()).c_str());
+
+            ImGui::SeparatorText("Statistics");
+            ImGui::BulletText("Min: %.9g", block.statistics.minValue);
+            ImGui::BulletText("Max: %.9g", block.statistics.maxValue);
+            ImGui::BulletText("Mean: %.9g", block.statistics.meanValue);
+            ImGui::BulletText("Abs max: %.9g", block.statistics.absMaxValue);
+
+            ImGui::SeparatorText("Preview / reduction planning");
+            if (ImGui::SliderInt("Preview max axis", &m_VolumetricPreviewMaxDimension, 32, 512))
+            {
+                settingsChanged = true;
+                MarkVolumetricMeshesDirty();
+            }
+
+            const int decimationStep = block.SuggestedDecimationStep(m_VolumetricPreviewMaxDimension);
+            const glm::ivec3 downsampledDimensions = block.DownsampledDimensions(m_VolumetricPreviewMaxDimension);
+            const std::size_t downsampledSamples = block.DownsampledSampleCount(m_VolumetricPreviewMaxDimension);
+            const std::size_t downsampledBytes = downsampledSamples * sizeof(float);
+            ImGui::BulletText("Suggested uniform step: %d", decimationStep);
+            ImGui::BulletText("Downsampled grid: %d x %d x %d", downsampledDimensions.x, downsampledDimensions.y, downsampledDimensions.z);
+            ImGui::BulletText("Downsampled samples: %zu", downsampledSamples);
+            ImGui::BulletText("Approx preview memory: %s", formatBytes(downsampledBytes).c_str());
+            ImGui::TextWrapped("For these sample PARCHG files, a decimated preview is the safest way to keep interactivity while preserving the full-resolution data for final isosurface extraction.");
+
+            if (dataset.blocks.size() == 2)
+            {
+                ImGui::SeparatorText("Block interpretation");
+                ImGui::TextWrapped("This file currently looks like a two-block volumetric dataset. For MVP we will treat them as neutral Block 1 / Block 2 and avoid naming them spin-up / spin-down until the generation convention is confirmed.");
+            }
+
+            auto drawSurfaceControls = [&](const char *label, const char *idSuffix, VolumetricSurfaceState &surfaceState, float defaultIsoFactor)
+            {
+                ImGui::SeparatorText(label);
+                if (ImGui::Checkbox((std::string("Enabled##") + idSuffix).c_str(), &surfaceState.enabled))
+                {
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                if (!surfaceState.enabled)
+                {
+                    ImGui::BeginDisabled();
+                }
+
+                if (ImGui::Combo((std::string("Block##") + idSuffix).c_str(), &surfaceState.blockIndex, blockLabels.data(), static_cast<int>(blockLabels.size())))
+                {
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+                surfaceState.blockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+
+                const ScalarFieldBlock &surfaceBlock = dataset.blocks[static_cast<std::size_t>(surfaceState.blockIndex)];
+                const float dragSpeed = std::max(surfaceBlock.statistics.absMaxValue * 0.0025f, 1e-6f);
+                const float dragMin = std::min(surfaceBlock.statistics.minValue, surfaceBlock.statistics.maxValue);
+                const float dragMax = std::max(surfaceBlock.statistics.minValue, surfaceBlock.statistics.maxValue);
+                ImGui::DragFloat((std::string("Iso value##") + idSuffix).c_str(), &surfaceState.isoValue, dragSpeed, dragMin, dragMax, "%.6g");
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                ImGui::ColorEdit3((std::string("Color##") + idSuffix).c_str(), &surfaceState.color.x);
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                ImGui::SliderFloat((std::string("Opacity##") + idSuffix).c_str(), &surfaceState.opacity, 0.05f, 0.95f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Button((std::string("Rebuild now##") + idSuffix).c_str()))
+                {
+                    surfaceState.dirty = true;
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button((std::string("Default iso##") + idSuffix).c_str()))
+                {
+                    surfaceState.isoValue =
+                        std::max(std::max(std::abs(surfaceBlock.statistics.meanValue) * 6.0f, surfaceBlock.statistics.absMaxValue * 0.05f),
+                                 surfaceBlock.statistics.absMaxValue * defaultIsoFactor);
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                if (surfaceState.enabled)
+                {
+                    ImGui::Text("Triangles: %zu", surfaceState.mesh.TriangleCount());
+                    ImGui::Text("Preview grid: %d x %d x %d",
+                                surfaceState.sampledDimensions.x,
+                                surfaceState.sampledDimensions.y,
+                                surfaceState.sampledDimensions.z);
+                    ImGui::Text("Decimation step: %d", surfaceState.decimationStep);
+                    ImGui::Text("Preview mesh memory: %s", formatBytes(surfaceState.mesh.MemoryBytes()).c_str());
+                    ImGui::Text("Last build: %.2f ms", surfaceState.lastBuildMilliseconds);
+                    if (!surfaceState.lastStatus.empty())
+                    {
+                        const bool surfaceOkay = surfaceState.hasMesh;
+                        ImGui::TextColored(surfaceOkay ? ImVec4(0.64f, 0.88f, 0.68f, 1.0f) : ImVec4(0.95f, 0.72f, 0.38f, 1.0f), "%s", surfaceState.lastStatus.c_str());
+                    }
+                }
+
+                if (!surfaceState.enabled)
+                {
+                    ImGui::EndDisabled();
+                }
+            };
+
+            ImGui::SeparatorText("Surface preview");
+            ImGui::TextWrapped("Current MVP renders preview isosurfaces from the active dataset only. The mesh is rebuilt only when the active file, selected block, preview resolution, or surface parameters change.");
+            drawSurfaceControls("Surface A", "PrimarySurface", m_PrimaryVolumetricSurface, 0.26f);
+            drawSurfaceControls("Surface B", "SecondarySurface", m_SecondaryVolumetricSurface, 0.42f);
+        }
+
+        ImGui::End();
     }
 
     void EditorLayer::DrawElementAppearanceWindow(bool &settingsChanged)
