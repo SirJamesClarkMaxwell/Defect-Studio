@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -304,7 +305,9 @@ namespace ds
         static constexpr const char *kLegacyAtomSettingsIniPath = "config/atom_settings.ini";
         static constexpr const char *kProjectConfigDirectory = "config/project";
         static constexpr const char *kProjectAppearancePath = "config/project/project_appearance.yaml";
+        static constexpr const char *kProjectManifestPath = "project.yaml";
         static constexpr const char *kFallbackStartupImportPath = "assets/samples/reduced_diamond_bulk.vasp";
+        static constexpr std::size_t kMaxRecentProjects = 8;
 
         void ApplyTheme(ThemePreset preset);
         void ApplyFontScale(float scale);
@@ -333,6 +336,20 @@ namespace ds
         glm::vec3 ResolveElementColor(const std::string &element) const;
         float ResolveElementVisualScale(const std::string &element) const;
         SelectionStrokeMode ResolveSelectionStrokeMode(bool additiveSelection) const;
+        std::filesystem::path GetAppRootPath() const;
+        std::filesystem::path GetProjectRootPath() const;
+        std::filesystem::path ResolveProjectPath(const std::filesystem::path &relativePath) const;
+        std::filesystem::path GetProjectConfigDirectoryPath() const;
+        std::filesystem::path GetProjectAppearanceFilePath() const;
+        std::filesystem::path GetProjectSceneStateFilePath() const;
+        std::filesystem::path GetProjectManifestFilePath() const;
+        std::filesystem::path ResolveProjectStructurePath() const;
+        void AddRecentProjectPath(const std::filesystem::path &path);
+        void SaveProjectManifest() const;
+        void LoadProjectManifest();
+        bool CreateProjectAt(const std::filesystem::path &folderPath);
+        bool OpenProjectAt(const std::filesystem::path &folderPath);
+        void ResetProjectSceneState();
         void EnsureElementAppearanceSelection();
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
@@ -390,6 +407,7 @@ namespace ds
         bool PasteClipboard();
         bool DuplicateCurrentSelection();
         bool DuplicateCollection(int collectionIndex);
+        bool ExtractSelectionToNewCollection();
         bool DeleteCollectionAtIndex(int collectionIndex, std::string *outStatusMessage = nullptr);
         void BeginCollectionRename(int collectionIndex);
         void ResetProjectAppearanceOverrides();
@@ -424,6 +442,7 @@ namespace ds
         float ResolveBondThresholdScaleForPair(const std::string &elementA, const std::string &elementB) const;
         void StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll = std::nullopt);
         void UpdateCameraOrbitTransition(float deltaTime);
+        bool FocusCameraOnCursor();
 
         bool m_ShowDemoWindow = false;
         bool m_ShowLogPanel = true;
@@ -453,6 +472,11 @@ namespace ds
         std::optional<Structure> m_OriginalStructure;
         Structure m_WorkingStructure;
         bool m_HasStructureLoaded = false;
+        std::string m_AppRootPath;
+        std::string m_ProjectRootPath;
+        std::string m_ProjectName = "Default Project";
+        std::string m_ProjectStructurePath;
+        std::vector<std::string> m_RecentProjectPaths;
 
         std::array<char, 512> m_ImportPathBuffer = {};
         std::array<char, 512> m_ExportPathBuffer = {};
@@ -495,6 +519,7 @@ namespace ds
         bool m_ReopenViewportSelectionContextMenu = false;
         bool m_ShowAddAtomDialog = false;
         bool m_AutoBondGenerationEnabled = true;
+        bool m_AutoRecalculateBondsOnEdit = true;
         bool m_AutoBondsDirty = true;
         bool m_ShowBondLengthLabels = true;
         float m_BondThresholdScale = 1.12f;
@@ -612,6 +637,8 @@ namespace ds
         int m_TranslateEmptyIndex = -1;
         glm::vec3 m_TranslateEmptyInitialPosition = glm::vec3(0.0f);
         glm::vec3 m_TranslateCurrentOffset = glm::vec3(0.0f);
+        std::string m_TranslateTypedDistanceBuffer;
+        bool m_TranslateTypedDistanceActive = false;
         bool m_RotateModeActive = false;
         int m_RotateConstraintAxis = -1;
         glm::vec2 m_RotateLastMousePos = glm::vec2(0.0f, 0.0f);

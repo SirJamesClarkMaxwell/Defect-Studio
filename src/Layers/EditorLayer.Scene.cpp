@@ -1217,6 +1217,73 @@ namespace ds
         return PasteClipboard();
     }
 
+    bool EditorLayer::ExtractSelectionToNewCollection()
+    {
+        const bool hasSelectedAtoms = !m_SelectedAtomIndices.empty();
+        const bool hasSelectedEmpty = m_SelectedTransformEmptyIndex >= 0 &&
+                                      m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size());
+        if (!hasSelectedAtoms && !hasSelectedEmpty)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Extract to collection failed: no atoms or Empty selected.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        PushUndoSnapshot("Extract selection to new collection");
+
+        SceneCollection collection;
+        collection.id = GenerateSceneUUID();
+        char label[64] = {};
+        std::snprintf(label, sizeof(label), "Collection %d", m_CollectionCounter++);
+        collection.name = label;
+        m_Collections.push_back(collection);
+        const int newCollectionIndex = static_cast<int>(m_Collections.size()) - 1;
+        m_ActiveCollectionIndex = newCollectionIndex;
+
+        std::size_t movedAtomCount = 0;
+        for (std::size_t atomIndex : m_SelectedAtomIndices)
+        {
+            if (atomIndex < m_AtomCollectionIndices.size())
+            {
+                m_AtomCollectionIndices[atomIndex] = newCollectionIndex;
+                ++movedAtomCount;
+            }
+        }
+
+        if (hasSelectedEmpty)
+        {
+            TransformEmpty &selectedEmpty = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)];
+            selectedEmpty.collectionIndex = newCollectionIndex;
+            selectedEmpty.collectionId = collection.id;
+
+            bool parentStillInCollection = false;
+            if (selectedEmpty.parentEmptyId != 0)
+            {
+                for (const TransformEmpty &empty : m_TransformEmpties)
+                {
+                    if (empty.id == selectedEmpty.parentEmptyId)
+                    {
+                        parentStillInCollection = (empty.collectionIndex == newCollectionIndex);
+                        break;
+                    }
+                }
+            }
+            if (!parentStillInCollection)
+            {
+                selectedEmpty.parentEmptyId = 0;
+            }
+        }
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage =
+            "Extracted selection to new collection '" + collection.name +
+            "' (atoms=" + std::to_string(movedAtomCount) +
+            ", empty=" + std::to_string(hasSelectedEmpty ? 1 : 0) + ").";
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
     bool EditorLayer::DeleteCollectionAtIndex(int collectionIndex, std::string *outStatusMessage)
     {
         if (collectionIndex <= 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
@@ -1740,6 +1807,44 @@ namespace ds
         m_AddAtomCoordinateModeIndex = 1;
         m_LastStructureOperationFailed = false;
         m_LastStructureMessage = "3D cursor moved to selection center of mass.";
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::FocusCameraOnCursor()
+    {
+        if (!m_Camera)
+        {
+            return false;
+        }
+
+        const float currentDistance = m_Camera->GetDistance();
+        float focusDistance = std::max(1.5f, currentDistance * 0.35f);
+        if (!m_SelectedAtomIndices.empty())
+        {
+            float maxRadius = 0.0f;
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex >= m_WorkingStructure.atoms.size())
+                {
+                    continue;
+                }
+                maxRadius = std::max(maxRadius, glm::length(GetAtomCartesianPosition(atomIndex) - m_CursorPosition));
+            }
+            if (maxRadius > 0.0f)
+            {
+                focusDistance = std::max(focusDistance, maxRadius * 2.2f);
+            }
+        }
+
+        StartCameraOrbitTransition(
+            m_CursorPosition,
+            focusDistance,
+            m_Camera->GetYaw(),
+            m_Camera->GetPitch(),
+            m_Camera->GetRoll());
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Camera focused on 3D cursor.";
         LogInfo(m_LastStructureMessage);
         return true;
     }

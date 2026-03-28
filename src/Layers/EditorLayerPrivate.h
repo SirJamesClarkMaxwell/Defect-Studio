@@ -51,6 +51,7 @@
 #endif
 #include <Windows.h>
 #include <commdlg.h>
+#include <ShlObj.h>
 #endif
 
 
@@ -623,7 +624,7 @@ namespace ds
             dialog.nMaxFile = kDialogBufferSize;
             dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 2;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "vasp";
 
             if (GetOpenFileNameA(&dialog) != FALSE)
@@ -685,7 +686,7 @@ namespace ds
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
             dialog.lpstrFilter = "VASP files (*.vasp;*.poscar;*.contcar)\0*.vasp;*.poscar;*.contcar\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 1;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "vasp";
 
             if (GetSaveFileNameA(&dialog) != FALSE)
@@ -713,7 +714,7 @@ namespace ds
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
             dialog.lpstrFilter = "PNG image (*.png)\0*.png\0JPEG image (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 1;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "png";
 
             if (GetSaveFileNameA(&dialog) != FALSE)
@@ -729,10 +730,11 @@ namespace ds
 #endif
         }
 
-        bool OpenNativeYamlDialog(std::string &outPath)
+        bool OpenNativeYamlDialog(std::string &outPath, const std::string &defaultPath = "project_appearance.yaml")
         {
 #ifdef _WIN32
-            char pathBuffer[MAX_PATH] = "project_appearance.yaml";
+            char pathBuffer[MAX_PATH] = {};
+            std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", defaultPath.c_str());
 
             OPENFILENAMEA dialog = {};
             dialog.lStructSize = sizeof(dialog);
@@ -741,7 +743,7 @@ namespace ds
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
             dialog.lpstrFilter = "YAML files (*.yaml;*.yml)\0*.yaml;*.yml\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 1;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "yaml";
 
             if (GetOpenFileNameA(&dialog) != FALSE)
@@ -757,10 +759,11 @@ namespace ds
 #endif
         }
 
-        bool SaveNativeYamlDialog(std::string &outPath)
+        bool SaveNativeYamlDialog(std::string &outPath, const std::string &defaultPath = "project_appearance.yaml")
         {
 #ifdef _WIN32
-            char pathBuffer[MAX_PATH] = "project_appearance.yaml";
+            char pathBuffer[MAX_PATH] = {};
+            std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", defaultPath.c_str());
 
             OPENFILENAMEA dialog = {};
             dialog.lStructSize = sizeof(dialog);
@@ -769,7 +772,7 @@ namespace ds
             dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
             dialog.lpstrFilter = "YAML files (*.yaml;*.yml)\0*.yaml;*.yml\0All files (*.*)\0*.*\0";
             dialog.nFilterIndex = 1;
-            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "yaml";
 
             if (GetSaveFileNameA(&dialog) != FALSE)
@@ -781,6 +784,37 @@ namespace ds
             return false;
 #else
             (void)outPath;
+            return false;
+#endif
+        }
+
+        bool OpenNativeFolderDialog(std::string &outPath, const char *title = "Select folder")
+        {
+#ifdef _WIN32
+            BROWSEINFOA browseInfo = {};
+            browseInfo.hwndOwner = nullptr;
+            browseInfo.lpszTitle = title;
+            browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+
+            LPITEMIDLIST itemIdList = SHBrowseForFolderA(&browseInfo);
+            if (itemIdList == nullptr)
+            {
+                return false;
+            }
+
+            char folderPath[MAX_PATH] = {};
+            const BOOL success = SHGetPathFromIDListA(itemIdList, folderPath);
+            CoTaskMemFree(itemIdList);
+            if (success == FALSE)
+            {
+                return false;
+            }
+
+            outPath = folderPath;
+            return true;
+#else
+            (void)outPath;
+            (void)title;
             return false;
 #endif
         }

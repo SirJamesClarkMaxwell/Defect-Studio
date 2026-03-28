@@ -104,7 +104,7 @@ namespace ds
 
             if (m_AutoBondGenerationEnabled)
             {
-                if (m_AutoBondsDirty)
+                if (m_AutoBondsDirty && m_AutoRecalculateBondsOnEdit)
                 {
                     RebuildAutoBonds(atomCartesianPositions);
                     m_AutoBondsDirty = false;

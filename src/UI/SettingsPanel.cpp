@@ -100,6 +100,50 @@ namespace ds
             ImGui::SameLine();
             drawHelpMarker(description);
         };
+        auto beginSettingsTable = [&](const char *id) -> bool
+        {
+            return ImGui::BeginTable(
+                id,
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_NoSavedSettings);
+        };
+        auto beginSettingsRow = [&](const char *label, const char *description = nullptr)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(label);
+            if (description != nullptr)
+            {
+                ImGui::SameLine();
+                drawHelpMarker(description);
+            }
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0f);
+        };
+        auto drawHotkeyComboRow = [&](const char *comboId, std::uint32_t &binding)
+        {
+            const std::string preview = keyDisplayName(binding);
+            if (ImGui::BeginCombo(comboId, preview.c_str()))
+            {
+                for (ImGuiKey key : kHotkeyOptions)
+                {
+                    const std::uint32_t keyValue = static_cast<std::uint32_t>(key);
+                    const bool isSelected = (binding == keyValue);
+                    const std::string optionLabel = keyDisplayName(keyValue);
+                    if (ImGui::Selectable(optionLabel.c_str(), isSelected))
+                    {
+                        binding = keyValue;
+                        settingsChanged = true;
+                    }
+                    if (isSelected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        };
         auto resetInputDefaults = [&]()
         {
             editor.m_TouchpadNavigationEnabled = true;
@@ -444,21 +488,40 @@ namespace ds
 
         if (ImGui::CollapsingHeader("Snap", defaultOpenFlags))
         {
-            if (ImGui::Checkbox("Gizmo snap", &editor.m_GizmoSnapEnabled))
+            if (beginSettingsTable("SettingsSnapTable"))
             {
-                settingsChanged = true;
-            }
-            if (editor.m_GizmoOperationIndex == 0)
-            {
-                ImGui::SliderFloat("Translate snap", &editor.m_GizmoTranslateSnap, 0.01f, 2.0f, "%.2f");
-            }
-            else if (editor.m_GizmoOperationIndex == 1)
-            {
-                ImGui::SliderFloat("Rotate snap (deg)", &editor.m_GizmoRotateSnapDeg, 1.0f, 90.0f, "%.1f");
-            }
-            else
-            {
-                ImGui::SliderFloat("Scale snap", &editor.m_GizmoScaleSnap, 0.01f, 1.0f, "%.2f");
+                beginSettingsRow("Gizmo snap", "Keeps snapping always on. Holding Ctrl in the viewport also enables temporary snap.");
+                if (ImGui::Checkbox("##GizmoSnap", &editor.m_GizmoSnapEnabled))
+                {
+                    settingsChanged = true;
+                }
+
+                if (editor.m_GizmoOperationIndex == 0)
+                {
+                    beginSettingsRow("Translate snap");
+                    if (ImGui::SliderFloat("##TranslateSnap", &editor.m_GizmoTranslateSnap, 0.01f, 2.0f, "%.2f"))
+                    {
+                        settingsChanged = true;
+                    }
+                }
+                else if (editor.m_GizmoOperationIndex == 1)
+                {
+                    beginSettingsRow("Rotate snap (deg)");
+                    if (ImGui::SliderFloat("##RotateSnap", &editor.m_GizmoRotateSnapDeg, 1.0f, 90.0f, "%.1f"))
+                    {
+                        settingsChanged = true;
+                    }
+                }
+                else
+                {
+                    beginSettingsRow("Scale snap");
+                    if (ImGui::SliderFloat("##ScaleSnap", &editor.m_GizmoScaleSnap, 0.01f, 1.0f, "%.2f"))
+                    {
+                        settingsChanged = true;
+                    }
+                }
+
+                ImGui::EndTable();
             }
         }
 
@@ -483,74 +546,120 @@ namespace ds
 
         if (ImGui::CollapsingHeader("Input & Navigation", defaultOpenFlags))
         {
-            if (ImGui::Checkbox("Touchpad-friendly navigation", &editor.m_TouchpadNavigationEnabled))
+            if (beginSettingsTable("SettingsInputNavigationTable"))
             {
-                settingsChanged = true;
-            }
-            ImGui::SameLine();
-            drawHelpMarker("Enables Alt+LMB orbit, Alt+Shift+LMB pan and Alt+RMB zoom for laptop / touchpad workflows.");
+                beginSettingsRow("Touchpad-friendly navigation", "Enables Alt+LMB orbit, Alt+Shift+LMB pan and Alt+RMB zoom for laptop / touchpad workflows.");
+                if (ImGui::Checkbox("##TouchpadNavigation", &editor.m_TouchpadNavigationEnabled))
+                {
+                    settingsChanged = true;
+                }
 
-            if (ImGui::Checkbox("Invert viewport zoom", &editor.m_InvertViewportZoom))
-            {
-                settingsChanged = true;
-            }
-            ImGui::SameLine();
-            drawHelpMarker("Flips mouse-wheel and touchpad zoom direction in the 3D viewport.");
+                beginSettingsRow("Invert viewport zoom", "Flips mouse-wheel and touchpad zoom direction in the 3D viewport.");
+                if (ImGui::Checkbox("##InvertViewportZoom", &editor.m_InvertViewportZoom))
+                {
+                    settingsChanged = true;
+                }
 
-            if (ImGui::Checkbox("Invert circle-select wheel", &editor.m_InvertCircleSelectWheel))
-            {
-                settingsChanged = true;
-            }
-            ImGui::SameLine();
-            drawHelpMarker("Reverses how the mouse wheel changes the circle-select radius while the C tool is armed.");
+                beginSettingsRow("Invert circle-select wheel", "Reverses how the mouse wheel changes the circle-select radius while the C tool is armed.");
+                if (ImGui::Checkbox("##InvertCircleWheel", &editor.m_InvertCircleSelectWheel))
+                {
+                    settingsChanged = true;
+                }
 
-            if (ImGui::SliderFloat("Circle-select wheel step", &editor.m_CircleSelectWheelStep, 1.0f, 32.0f, "%.0f px"))
-            {
-                settingsChanged = true;
-            }
-            ImGui::SameLine();
-            drawHelpMarker("How much the selection circle grows or shrinks per wheel tick.");
+                beginSettingsRow("Circle-select wheel step", "How much the selection circle grows or shrinks per wheel tick.");
+                if (ImGui::SliderFloat("##CircleWheelStep", &editor.m_CircleSelectWheelStep, 1.0f, 32.0f, "%.0f px"))
+                {
+                    settingsChanged = true;
+                }
 
-            ImGui::SeparatorText("Hotkeys");
-            drawHotkeyCombo("Add object popup", editor.m_HotkeyAddMenu, "Used together with Shift. Default: Shift+A.");
-            drawHotkeyCombo("Render image dialog", editor.m_HotkeyOpenRender, "Opens the Render Image popup and preview. Default: F12.");
-            drawHotkeyCombo("Toggle side panels", editor.m_HotkeyToggleSidePanels, "Shows or hides the docked workflow sidebars. Default: N.");
-            drawHotkeyCombo("Delete selection", editor.m_HotkeyDeleteSelection, "Deletes the current selection or active bond label. Default: Delete.");
-            drawHotkeyCombo("Hide selection", editor.m_HotkeyHideSelection, "H hides, Alt+same key unhides all scene elements. Default: H.");
-            drawHotkeyCombo("Arm box select", editor.m_HotkeyBoxSelect, "Arms rectangle selection in the viewport. Default: B.");
-            drawHotkeyCombo("Arm circle select", editor.m_HotkeyCircleSelect, "Arms circle selection in the viewport. Default: C.");
-            drawHotkeyCombo("Modal translate", editor.m_HotkeyTranslateModal, "Starts Blender-style modal translate. Default: G.");
-            drawHotkeyCombo("Translate gizmo", editor.m_HotkeyTranslateGizmo, "Switches the transform gizmo to translate mode. Default: T.");
-            drawHotkeyCombo("Rotate gizmo", editor.m_HotkeyRotateGizmo, "Switches the transform gizmo to rotate mode. Default: R.");
-            drawHotkeyCombo("Scale gizmo", editor.m_HotkeyScaleGizmo, "Switches the transform gizmo to scale mode. Default: S.");
+                beginSettingsRow("Add object popup", "Used together with Shift. Default: Shift+A.");
+                drawHotkeyComboRow("##HotkeyAddMenu", editor.m_HotkeyAddMenu);
 
-            if (ImGui::Button("Reset input defaults"))
-            {
-                resetInputDefaults();
+                beginSettingsRow("Render image dialog", "Opens the Render Image popup and preview. Default: F12.");
+                drawHotkeyComboRow("##HotkeyOpenRender", editor.m_HotkeyOpenRender);
+
+                beginSettingsRow("Toggle side panels", "Shows or hides the docked workflow sidebars. Default: N.");
+                drawHotkeyComboRow("##HotkeyTogglePanels", editor.m_HotkeyToggleSidePanels);
+
+                beginSettingsRow("Delete selection", "Deletes the current selection or active bond label. Default: Delete.");
+                drawHotkeyComboRow("##HotkeyDeleteSelection", editor.m_HotkeyDeleteSelection);
+
+                beginSettingsRow("Hide selection", "H hides, Alt+same key unhides all scene elements. Default: H.");
+                drawHotkeyComboRow("##HotkeyHideSelection", editor.m_HotkeyHideSelection);
+
+                beginSettingsRow("Arm box select", "Arms rectangle selection in the viewport. Default: B.");
+                drawHotkeyComboRow("##HotkeyBoxSelect", editor.m_HotkeyBoxSelect);
+
+                beginSettingsRow("Arm circle select", "Arms circle selection in the viewport. Default: C.");
+                drawHotkeyComboRow("##HotkeyCircleSelect", editor.m_HotkeyCircleSelect);
+
+                beginSettingsRow("Modal translate", "Starts Blender-style modal translate. Default: G.");
+                drawHotkeyComboRow("##HotkeyTranslateModal", editor.m_HotkeyTranslateModal);
+
+                beginSettingsRow("Translate gizmo", "Switches the transform gizmo to translate mode. Default: T.");
+                drawHotkeyComboRow("##HotkeyTranslateGizmo", editor.m_HotkeyTranslateGizmo);
+
+                beginSettingsRow("Rotate gizmo", "Switches the transform gizmo to rotate mode. Default: R.");
+                drawHotkeyComboRow("##HotkeyRotateGizmo", editor.m_HotkeyRotateGizmo);
+
+                beginSettingsRow("Scale gizmo", "Switches the transform gizmo to scale mode. Default: S.");
+                drawHotkeyComboRow("##HotkeyScaleGizmo", editor.m_HotkeyScaleGizmo);
+
+                beginSettingsRow("Reset input defaults");
+                if (ImGui::Button("Reset##InputDefaults"))
+                {
+                    resetInputDefaults();
+                }
+
+                ImGui::EndTable();
             }
         }
 
         if (ImGui::CollapsingHeader("Windows & Diagnostics", defaultOpenFlags))
         {
-            if (ImGui::Checkbox("Show log / errors", &editor.m_ShowLogPanel))
+            if (beginSettingsTable("SettingsWindowsDiagnosticsTable"))
             {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Show stats", &editor.m_ShowStatsPanel))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Show viewport info", &editor.m_ShowViewportInfoPanel))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Show shortcuts", &editor.m_ShowShortcutReferencePanel))
-            {
-                settingsChanged = true;
-            }
-            if (ImGui::Checkbox("Show ImGui Demo", &editor.m_ShowDemoWindow))
-            {
-                settingsChanged = true;
+                beginSettingsRow("Show log / errors");
+                if (ImGui::Checkbox("##ShowLogPanel", &editor.m_ShowLogPanel))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Show stats");
+                if (ImGui::Checkbox("##ShowStatsPanel", &editor.m_ShowStatsPanel))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Show viewport info");
+                if (ImGui::Checkbox("##ShowViewportInfoPanel", &editor.m_ShowViewportInfoPanel))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Show shortcuts");
+                if (ImGui::Checkbox("##ShowShortcutReferencePanel", &editor.m_ShowShortcutReferencePanel))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Show ImGui Demo");
+                if (ImGui::Checkbox("##ShowDemoWindow", &editor.m_ShowDemoWindow))
+                {
+                    settingsChanged = true;
+                }
+
+                beginSettingsRow("Open diagnostics windows");
+                if (ImGui::Button("Open##DiagnosticsWindows"))
+                {
+                    editor.m_ShowLogPanel = true;
+                    editor.m_ShowStatsPanel = true;
+                    editor.m_ShowViewportInfoPanel = true;
+                    editor.m_ShowShortcutReferencePanel = true;
+                    settingsChanged = true;
+                }
+
+                ImGui::EndTable();
             }
 
             ImGui::SeparatorText("Profiler");
@@ -561,62 +670,60 @@ namespace ds
 #endif
             ImGui::SameLine();
             drawHelpMarker("Use the Stats panel for quick frame timing in-app. Tracy captures are available only in builds compiled with TRACY_ENABLE.");
-
-            if (ImGui::Button("Open diagnostics windows"))
-            {
-                editor.m_ShowLogPanel = true;
-                editor.m_ShowStatsPanel = true;
-                editor.m_ShowViewportInfoPanel = true;
-                editor.m_ShowShortcutReferencePanel = true;
-                settingsChanged = true;
-            }
         }
 
         if (ImGui::CollapsingHeader("Persistence", defaultOpenFlags))
         {
-            if (ImGui::Button("Save UI settings"))
+            if (beginSettingsTable("SettingsPersistenceTable"))
             {
-                editor.SaveSettings();
-            }
-            ImGui::SameLine();
-            ImGui::TextUnformatted("(auto-save on change enabled)");
+                beginSettingsRow("Current project");
+                ImGui::TextWrapped("%s", editor.GetProjectRootPath().string().c_str());
 
-            if (ImGui::Button("Save current ImGui style"))
-            {
-                ImGuiLayer::SaveCurrentStyle();
-            }
-            ImGui::SameLine();
-            drawHelpMarker("Use after tweaking colors, rounding or spacing in the ImGui Demo style editor.");
-
-            if (ImGui::Button("Load saved ImGui style"))
-            {
-                if (ImGuiLayer::LoadSavedStyle())
+                beginSettingsRow("Save UI settings");
+                if (ImGui::Button("Save##UiSettings"))
                 {
+                    editor.SaveSettings();
+                }
+                ImGui::SameLine();
+                ImGui::TextUnformatted("Auto-save on change is enabled");
+
+                beginSettingsRow("Save current ImGui style", "Use after tweaking colors, rounding or spacing in the ImGui Demo style editor.");
+                if (ImGui::Button("Save##ImGuiStyle"))
+                {
+                    ImGuiLayer::SaveCurrentStyle();
+                }
+
+                beginSettingsRow("Load saved ImGui style");
+                if (ImGui::Button("Load##ImGuiStyle"))
+                {
+                    if (ImGuiLayer::LoadSavedStyle())
+                    {
+                        settingsChanged = true;
+                    }
+                }
+
+                beginSettingsRow("Reset saved ImGui style");
+                if (ImGui::Button("Reset##ImGuiStyle"))
+                {
+                    ImGuiLayer::ResetSavedStyle();
+                    editor.ApplyTheme(editor.m_CurrentTheme);
                     settingsChanged = true;
                 }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Reset saved ImGui style"))
-            {
-                ImGuiLayer::ResetSavedStyle();
-                editor.ApplyTheme(editor.m_CurrentTheme);
-                settingsChanged = true;
-            }
 
-            ImGui::SeparatorText("Defaults");
-            if (ImGui::Button("Reset viewport performance"))
-            {
-                resetViewportPerformanceDefaults();
-            }
-            ImGui::SameLine();
-            drawHelpMarker("Restores native viewport rendering scale and the default allowed render-scale range.");
+                beginSettingsRow("Reset viewport performance", "Restores native viewport rendering scale and the default allowed render-scale range.");
+                if (ImGui::Button("Reset##ViewportPerformance"))
+                {
+                    resetViewportPerformanceDefaults();
+                }
 
-            if (ImGui::Button("Reset dock layout"))
-            {
-                resetDockLayoutDefaults();
+                beginSettingsRow("Reset dock layout", "Restores the default Hazel-like docking arrangement and panel visibility.");
+                if (ImGui::Button("Reset##DockLayout"))
+                {
+                    resetDockLayoutDefaults();
+                }
+
+                ImGui::EndTable();
             }
-            ImGui::SameLine();
-            drawHelpMarker("Restores the default Hazel-like docking arrangement and panel visibility.");
         }
 
         ImGui::End();

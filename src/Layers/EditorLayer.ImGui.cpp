@@ -163,11 +163,58 @@ namespace ds
                     }
                 }
 
+                ImGui::Separator();
+
+                if (ImGui::MenuItem("Create Project..."))
+                {
+                    std::string projectFolder;
+                    if (OpenNativeFolderDialog(projectFolder, "Create DefectsStudio project"))
+                    {
+                        settingsChanged |= CreateProjectAt(projectFolder);
+                    }
+                }
+
+                if (ImGui::MenuItem("Open Project..."))
+                {
+                    std::string projectFolder;
+                    if (OpenNativeFolderDialog(projectFolder, "Open DefectsStudio project"))
+                    {
+                        settingsChanged |= OpenProjectAt(projectFolder);
+                    }
+                }
+
+                if (ImGui::BeginMenu("Open Recent Project"))
+                {
+                    if (m_RecentProjectPaths.empty())
+                    {
+                        ImGui::MenuItem("(none)", nullptr, false, false);
+                    }
+                    else
+                    {
+                        for (const std::string &recentProjectPath : m_RecentProjectPaths)
+                        {
+                            const std::filesystem::path recentPath(recentProjectPath);
+                            const std::string label = recentPath.filename().string().empty() ? recentProjectPath : recentPath.filename().string();
+                            if (ImGui::MenuItem(label.c_str()))
+                            {
+                                settingsChanged |= OpenProjectAt(recentProjectPath);
+                            }
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                            {
+                                ImGui::SetTooltip("%s", recentProjectPath.c_str());
+                            }
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
+
                 if (ImGui::MenuItem("Render Image", "F12"))
                 {
                     SyncRenderAppearanceFromViewport();
                     m_ShowRenderImageDialog = true;
                 }
+                ImGui::Separator();
+                ImGui::TextDisabled("Project: %s", m_ProjectName.c_str());
                 ImGui::EndMenu();
             }
 
@@ -364,6 +411,8 @@ namespace ds
             m_TranslateConstraintAxis = -1;
             m_TranslatePlaneLockAxis = -1;
             m_TranslateSpecialNode = 0;
+            m_TranslateTypedDistanceBuffer.clear();
+            m_TranslateTypedDistanceActive = false;
 
             for (std::size_t atomIndex : m_SelectedAtomIndices)
             {
@@ -486,6 +535,8 @@ namespace ds
             m_TranslateConstraintAxis = -1;
             m_TranslatePlaneLockAxis = -1;
             m_TranslateSpecialNode = 0;
+            m_TranslateTypedDistanceBuffer.clear();
+            m_TranslateTypedDistanceActive = false;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Translate mode canceled.";
             cancelPendingTransformUndo();
@@ -523,6 +574,8 @@ namespace ds
             m_TranslateConstraintAxis = -1;
             m_TranslatePlaneLockAxis = -1;
             m_TranslateSpecialNode = 0;
+            m_TranslateTypedDistanceBuffer.clear();
+            m_TranslateTypedDistanceActive = false;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Translate mode applied.";
             commitPendingTransformUndo();
@@ -1094,6 +1147,17 @@ namespace ds
             m_BlockSelectionThisFrame = settingsChanged;
         }
 
+        if (m_ViewportFocused &&
+            !io.WantTextInput &&
+            !ImGui::IsAnyItemActive() &&
+            !m_TranslateModeActive &&
+            !m_RotateModeActive &&
+            (ImGui::IsKeyPressed(ImGuiKey_Period, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal, false)))
+        {
+            settingsChanged |= FocusCameraOnCursor();
+            m_BlockSelectionThisFrame = settingsChanged;
+        }
+
         if (m_ViewportFocused && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyDeleteSelection))
         {
             const auto selectedLabelIt = m_BondLabelStates.find(m_SelectedBondLabelKey);
@@ -1263,6 +1327,70 @@ namespace ds
                     }
                 }
 
+                auto appendTypedTranslateChar = [&](char character)
+                {
+                    if (m_TranslateConstraintAxis < 0 || m_TranslateConstraintAxis >= 3 || m_TranslatePlaneLockAxis >= 0)
+                    {
+                        m_LastStructureOperationFailed = true;
+                        m_LastStructureMessage = "Typed translate distance needs a single X/Y/Z axis constraint.";
+                        return;
+                    }
+
+                    if (character == '-' && !m_TranslateTypedDistanceBuffer.empty())
+                    {
+                        return;
+                    }
+                    if (character == '.' && m_TranslateTypedDistanceBuffer.find('.') != std::string::npos)
+                    {
+                        return;
+                    }
+
+                    m_TranslateTypedDistanceActive = true;
+                    m_TranslateTypedDistanceBuffer.push_back(character);
+                };
+
+                if (!io.KeyCtrl && !io.KeyAlt)
+                {
+                    if (ImGui::IsKeyPressed(ImGuiKey_Backspace, false) && m_TranslateTypedDistanceActive)
+                    {
+                        if (!m_TranslateTypedDistanceBuffer.empty())
+                        {
+                            m_TranslateTypedDistanceBuffer.pop_back();
+                        }
+                        if (m_TranslateTypedDistanceBuffer.empty())
+                        {
+                            m_TranslateTypedDistanceActive = false;
+                        }
+                    }
+
+                    const std::array<std::pair<ImGuiKey, char>, 12> numericKeys = {
+                        std::pair{ImGuiKey_0, '0'},
+                        std::pair{ImGuiKey_1, '1'},
+                        std::pair{ImGuiKey_2, '2'},
+                        std::pair{ImGuiKey_3, '3'},
+                        std::pair{ImGuiKey_4, '4'},
+                        std::pair{ImGuiKey_5, '5'},
+                        std::pair{ImGuiKey_6, '6'},
+                        std::pair{ImGuiKey_7, '7'},
+                        std::pair{ImGuiKey_8, '8'},
+                        std::pair{ImGuiKey_9, '9'},
+                        std::pair{ImGuiKey_KeypadDecimal, '.'},
+                        std::pair{ImGuiKey_Period, '.'}};
+
+                    for (const auto &[key, character] : numericKeys)
+                    {
+                        if (ImGui::IsKeyPressed(key, false))
+                        {
+                            appendTypedTranslateChar(character);
+                        }
+                    }
+
+                    if (ImGui::IsKeyPressed(ImGuiKey_Minus, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, false))
+                    {
+                        appendTypedTranslateChar('-');
+                    }
+                }
+
                 const glm::vec2 mousePos(io.MousePos.x, io.MousePos.y);
                 const glm::vec2 mouseDelta = mousePos - m_TranslateLastMousePos;
                 m_TranslateLastMousePos = mousePos;
@@ -1388,10 +1516,36 @@ namespace ds
                     frameDelta -= axis[m_TranslatePlaneLockAxis] * glm::dot(frameDelta, axis[m_TranslatePlaneLockAxis]);
                 }
 
-                m_TranslateCurrentOffset += frameDelta;
+                std::optional<float> typedDistance;
+                if (m_TranslateTypedDistanceActive &&
+                    m_TranslateConstraintAxis >= 0 &&
+                    m_TranslateConstraintAxis < 3 &&
+                    !m_TranslateTypedDistanceBuffer.empty() &&
+                    m_TranslateTypedDistanceBuffer != "-" &&
+                    m_TranslateTypedDistanceBuffer != "." &&
+                    m_TranslateTypedDistanceBuffer != "-.")
+                {
+                    try
+                    {
+                        typedDistance = std::stof(m_TranslateTypedDistanceBuffer);
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+
+                if (!typedDistance.has_value())
+                {
+                    m_TranslateCurrentOffset += frameDelta;
+                }
 
                 glm::vec3 appliedOffset = m_TranslateCurrentOffset;
-                if (io.KeyCtrl)
+                if (typedDistance.has_value())
+                {
+                    appliedOffset = axis[m_TranslateConstraintAxis] * *typedDistance;
+                    m_TranslateCurrentOffset = appliedOffset;
+                }
+                else if (io.KeyCtrl)
                 {
                     const float snapStep = std::max(0.001f, m_GizmoTranslateSnap);
 
@@ -2356,6 +2510,7 @@ namespace ds
                             snapValues[1] = m_GizmoScaleSnap;
                             snapValues[2] = m_GizmoScaleSnap;
                         }
+                        const bool gizmoSnapActive = m_GizmoSnapEnabled || io.KeyCtrl;
 
                         const bool manipulated = ImGuizmo::Manipulate(
                             glm::value_ptr(m_Camera->GetViewMatrix()),
@@ -2364,7 +2519,7 @@ namespace ds
                             mode,
                             glm::value_ptr(gizmoTransform),
                             glm::value_ptr(deltaTransform),
-                            m_GizmoSnapEnabled ? snapValues : nullptr);
+                            gizmoSnapActive ? snapValues : nullptr);
                         ImGuizmo::PopID();
 
                         const bool gizmoOver = ImGuizmo::IsOver();
@@ -2442,7 +2597,7 @@ namespace ds
                                     float deltaAngle = NormalizeAngleRadians(currentAngle - m_FallbackRotateLastAngle);
                                     m_FallbackRotateLastAngle = currentAngle;
 
-                                    if (m_GizmoSnapEnabled)
+                                    if (m_GizmoSnapEnabled || io.KeyCtrl)
                                     {
                                         const float snapStep = glm::radians(std::max(0.1f, m_GizmoRotateSnapDeg));
                                         m_FallbackDragAccumulated += deltaAngle;
@@ -2498,7 +2653,7 @@ namespace ds
                                     const float deltaOnAxisWorld = deltaOnAxisPixels / std::max(1.0f, m_FallbackDragPixelsPerWorld);
 
                                     float worldToApply = deltaOnAxisWorld;
-                                    if (m_GizmoSnapEnabled)
+                                    if (m_GizmoSnapEnabled || io.KeyCtrl)
                                     {
                                         const float snapStep = (m_FallbackGizmoOperation == 2)
                                                                    ? std::max(0.001f, m_GizmoScaleSnap)
@@ -3276,6 +3431,10 @@ namespace ds
                     if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, canDuplicateSelection))
                     {
                         settingsChanged |= DuplicateCurrentSelection();
+                    }
+                    if (ImGui::MenuItem("Extract to New Collection", nullptr, false, canCopySelection))
+                    {
+                        settingsChanged |= ExtractSelectionToNewCollection();
                     }
                     if (ImGui::MenuItem("Delete selection", nullptr, false, canDuplicateSelection || !m_SelectedBondKeys.empty()))
                     {
@@ -5149,6 +5308,16 @@ namespace ds
                     }
                     settingsChanged = true;
                 }
+                if (ImGui::Checkbox("Auto-recalculate after edits", &m_AutoRecalculateBondsOnEdit))
+                {
+                    if (m_AutoRecalculateBondsOnEdit && m_AutoBondGenerationEnabled)
+                    {
+                        m_AutoBondsDirty = true;
+                    }
+                    settingsChanged = true;
+                }
+                ImGui::SameLine();
+                DrawInlineHelpMarker("When disabled, atom edits mark bonds dirty but do not rebuild them until you press Regenerate bonds.");
 
                 const char *selectionFilters[] = {"Atoms", "Atoms + Bonds", "Bonds", "Bonds labels"};
                 int selectionFilterIndex = static_cast<int>(m_SelectionFilter);
@@ -5504,6 +5673,21 @@ namespace ds
                 settingsChanged = true;
             }
             if (!canAssignAtomsToCollection)
+            {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::SameLine();
+            const bool canExtractSelectionToCollection = !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0;
+            if (!canExtractSelectionToCollection)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Extract selection -> new collection") && canExtractSelectionToCollection)
+            {
+                settingsChanged |= ExtractSelectionToNewCollection();
+            }
+            if (!canExtractSelectionToCollection)
             {
                 ImGui::EndDisabled();
             }
@@ -6221,6 +6405,7 @@ namespace ds
                                                   {deleteShortcut.c_str(), "Delete current selection"},
                                                   {"Ctrl+C / Ctrl+V", "Copy and paste selection with internal editor clipboard"},
                                                   {"Ctrl+D", "Duplicate current selection"},
+                                                  {".", "Focus camera on 3D cursor"},
                                                   {"F2", "Rename active collection in Scene Outliner"},
                                                   {"Mouse Wheel", "Zoom viewport / adjust circle radius while C-select"},
                                                   {"MMB / Shift+MMB", "Orbit / pan viewport"},
@@ -6897,7 +7082,7 @@ namespace ds
         if (ImGui::Button("Import overrides..."))
         {
             std::string importPath;
-            if (OpenNativeYamlDialog(importPath))
+            if (OpenNativeYamlDialog(importPath, GetProjectAppearanceFilePath().string()))
             {
                 PushUndoSnapshot("Import project appearance overrides");
                 if (ImportProjectAppearanceOverrides(importPath))
@@ -6913,7 +7098,7 @@ namespace ds
         if (ImGui::Button("Export overrides..."))
         {
             std::string exportPath;
-            if (SaveNativeYamlDialog(exportPath))
+            if (SaveNativeYamlDialog(exportPath, GetProjectAppearanceFilePath().string()))
             {
                 if (ExportProjectAppearanceOverrides(exportPath))
                 {
