@@ -2,7 +2,23 @@
 
 namespace ds
 {
-    void EditorLayer::SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection)
+    EditorLayer::SelectionStrokeMode EditorLayer::ResolveSelectionStrokeMode(bool additiveSelection) const
+    {
+        const ImGuiIO &io = ImGui::GetIO();
+        if (io.KeyShift)
+        {
+            return SelectionStrokeMode::Subtract;
+        }
+
+        if (additiveSelection)
+        {
+            return SelectionStrokeMode::Add;
+        }
+
+        return SelectionStrokeMode::Replace;
+    }
+
+    void EditorLayer::SelectAtomsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, SelectionStrokeMode strokeMode)
     {
         if (!m_Camera || !m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
         {
@@ -14,7 +30,7 @@ namespace ds
         const float top = std::min(screenStart.y, screenEnd.y);
         const float bottom = std::max(screenStart.y, screenEnd.y);
 
-        if (!additiveSelection)
+        if (strokeMode == SelectionStrokeMode::Replace)
         {
             m_SelectedAtomIndices.clear();
         }
@@ -59,7 +75,13 @@ namespace ds
 
             if (screenX >= left && screenX <= right && screenY >= top && screenY <= bottom)
             {
-                if (!IsAtomSelected(i))
+                if (strokeMode == SelectionStrokeMode::Subtract)
+                {
+                    m_SelectedAtomIndices.erase(
+                        std::remove(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), i),
+                        m_SelectedAtomIndices.end());
+                }
+                else if (!IsAtomSelected(i))
                 {
                     m_SelectedAtomIndices.push_back(i);
                     ++addedCount;
@@ -70,12 +92,12 @@ namespace ds
         AppendSelectionDebugLog(
             "Box selection: rect=(" + std::to_string(left) + "," + std::to_string(top) + ")-" +
             "(" + std::to_string(right) + "," + std::to_string(bottom) + ")" +
-            " additive=" + (additiveSelection ? std::string("1") : std::string("0")) +
+            " stroke=" + std::to_string(static_cast<int>(strokeMode)) +
             " selected=" + std::to_string(m_SelectedAtomIndices.size()) +
             " added=" + std::to_string(addedCount));
     }
 
-    void EditorLayer::SelectBondsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, bool additiveSelection)
+    void EditorLayer::SelectBondsInScreenRect(const glm::vec2 &screenStart, const glm::vec2 &screenEnd, SelectionStrokeMode strokeMode)
     {
         if (!m_Camera || m_GeneratedBonds.empty())
         {
@@ -87,7 +109,7 @@ namespace ds
         const float top = std::min(screenStart.y, screenEnd.y);
         const float bottom = std::max(screenStart.y, screenEnd.y);
 
-        if (!additiveSelection)
+        if (strokeMode == SelectionStrokeMode::Replace)
         {
             m_SelectedBondKeys.clear();
         }
@@ -146,21 +168,28 @@ namespace ds
                 }
             }
 
-            const auto [it, inserted] = m_SelectedBondKeys.insert(key);
-            (void)it;
-            if (inserted)
+            if (strokeMode == SelectionStrokeMode::Subtract)
             {
-                ++addedCount;
+                m_SelectedBondKeys.erase(key);
+            }
+            else
+            {
+                const auto [it, inserted] = m_SelectedBondKeys.insert(key);
+                (void)it;
+                if (inserted)
+                {
+                    ++addedCount;
+                }
             }
         }
 
         AppendSelectionDebugLog(
-            "Bond box selection: additive=" + std::string(additiveSelection ? "1" : "0") +
+            "Bond box selection: stroke=" + std::to_string(static_cast<int>(strokeMode)) +
             " selected=" + std::to_string(m_SelectedBondKeys.size()) +
             " added=" + std::to_string(addedCount));
     }
 
-    void EditorLayer::SelectAtomsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection)
+    void EditorLayer::SelectAtomsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, SelectionStrokeMode strokeMode)
     {
         if (!m_Camera || !m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
         {
@@ -169,7 +198,7 @@ namespace ds
 
         const float radius = std::max(1.0f, screenRadius);
         const float radiusSq = radius * radius;
-        if (!additiveSelection)
+        if (strokeMode == SelectionStrokeMode::Replace)
         {
             m_SelectedAtomIndices.clear();
         }
@@ -185,6 +214,11 @@ namespace ds
         std::size_t addedCount = 0;
         for (std::size_t i = 0; i < m_WorkingStructure.atoms.size(); ++i)
         {
+            if (IsAtomHidden(i) || !IsAtomCollectionVisible(i) || !IsAtomCollectionSelectable(i))
+            {
+                continue;
+            }
+
             glm::vec3 center = m_WorkingStructure.atoms[i].position;
             if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
             {
@@ -209,7 +243,13 @@ namespace ds
 
             if (glm::length2(screenPos - screenCenter) <= radiusSq)
             {
-                if (!IsAtomSelected(i))
+                if (strokeMode == SelectionStrokeMode::Subtract)
+                {
+                    m_SelectedAtomIndices.erase(
+                        std::remove(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), i),
+                        m_SelectedAtomIndices.end());
+                }
+                else if (!IsAtomSelected(i))
                 {
                     m_SelectedAtomIndices.push_back(i);
                     ++addedCount;
@@ -220,11 +260,12 @@ namespace ds
         AppendSelectionDebugLog(
             "Circle atom selection: center=(" + std::to_string(screenCenter.x) + "," + std::to_string(screenCenter.y) + ")" +
             " radius=" + std::to_string(radius) +
+            " stroke=" + std::to_string(static_cast<int>(strokeMode)) +
             " selected=" + std::to_string(m_SelectedAtomIndices.size()) +
             " added=" + std::to_string(addedCount));
     }
 
-    void EditorLayer::SelectBondsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, bool additiveSelection)
+    void EditorLayer::SelectBondsInScreenCircle(const glm::vec2 &screenCenter, float screenRadius, SelectionStrokeMode strokeMode)
     {
         if (!m_Camera || m_GeneratedBonds.empty())
         {
@@ -233,7 +274,7 @@ namespace ds
 
         const float radius = std::max(1.0f, screenRadius);
         const float radiusSq = radius * radius;
-        if (!additiveSelection)
+        if (strokeMode == SelectionStrokeMode::Replace)
         {
             m_SelectedBondKeys.clear();
         }
@@ -250,7 +291,11 @@ namespace ds
         for (const BondSegment &bond : m_GeneratedBonds)
         {
             const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
-            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end())
+            if (m_DeletedBondKeys.find(key) != m_DeletedBondKeys.end() ||
+                m_HiddenBondKeys.find(key) != m_HiddenBondKeys.end() ||
+                IsAtomHidden(bond.atomA) || IsAtomHidden(bond.atomB) ||
+                !IsAtomCollectionVisible(bond.atomA) || !IsAtomCollectionVisible(bond.atomB) ||
+                !IsAtomCollectionSelectable(bond.atomA) || !IsAtomCollectionSelectable(bond.atomB))
             {
                 continue;
             }
@@ -275,17 +320,25 @@ namespace ds
                 continue;
             }
 
-            const auto [it, inserted] = m_SelectedBondKeys.insert(key);
-            (void)it;
-            if (inserted)
+            if (strokeMode == SelectionStrokeMode::Subtract)
             {
-                ++addedCount;
+                m_SelectedBondKeys.erase(key);
+            }
+            else
+            {
+                const auto [it, inserted] = m_SelectedBondKeys.insert(key);
+                (void)it;
+                if (inserted)
+                {
+                    ++addedCount;
+                }
             }
         }
 
         AppendSelectionDebugLog(
             "Circle bond selection: center=(" + std::to_string(screenCenter.x) + "," + std::to_string(screenCenter.y) + ")" +
             " radius=" + std::to_string(radius) +
+            " stroke=" + std::to_string(static_cast<int>(strokeMode)) +
             " selected=" + std::to_string(m_SelectedBondKeys.size()) +
             " added=" + std::to_string(addedCount));
     }

@@ -1173,12 +1173,17 @@ namespace ds
 
     void EditorLayer::PushUndoSnapshot(std::string label)
     {
+        PushUndoSnapshot(std::move(label), CaptureSceneSnapshot());
+    }
+
+    void EditorLayer::PushUndoSnapshot(std::string label, const EditorSceneSnapshot &snapshot)
+    {
         if (m_SuspendUndoCapture)
         {
             return;
         }
 
-        m_UndoStack.push_back(EditorSceneHistoryEntry{std::move(label), CaptureSceneSnapshot()});
+        m_UndoStack.push_back(EditorSceneHistoryEntry{std::move(label), snapshot});
         if (m_UndoStack.size() > kMaxSceneHistoryEntries)
         {
             m_UndoStack.erase(m_UndoStack.begin(), m_UndoStack.begin() + static_cast<std::ptrdiff_t>(m_UndoStack.size() - kMaxSceneHistoryEntries));
@@ -3603,10 +3608,251 @@ namespace ds
         out << emitter.c_str();
     }
 
+    void EditorLayer::LoadProjectAppearanceYaml()
+    {
+        if (!std::filesystem::exists(kProjectAppearancePath))
+        {
+            return;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(kProjectAppearancePath);
+            const YAML::Node elements = root["elements"];
+            if (!elements || !elements.IsMap())
+            {
+                m_ElementColorOverrides.clear();
+                m_ElementScaleOverrides.clear();
+                return;
+            }
+
+            std::unordered_map<std::string, glm::vec3> colorOverrides;
+            std::unordered_map<std::string, float> scaleOverrides;
+            for (const auto &entry : elements)
+            {
+                const std::string element = NormalizeElementSymbol(entry.first.as<std::string>());
+                if (element.empty())
+                {
+                    continue;
+                }
+
+                const YAML::Node visualOverrides = entry.second["visualOverrides"] ? entry.second["visualOverrides"] : entry.second["visual"];
+                if (!visualOverrides)
+                {
+                    continue;
+                }
+
+                glm::vec3 color(0.0f);
+                TryLoadYamlVec3(visualOverrides["color"], color);
+                if (visualOverrides["color"])
+                {
+                    colorOverrides[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                }
+
+                float scale = 1.0f;
+                TryLoadYamlScalar(visualOverrides, "scale", scale);
+                if (visualOverrides["scale"])
+                {
+                    scaleOverrides[element] = std::clamp(scale, 0.1f, 4.0f);
+                }
+            }
+
+            m_ElementColorOverrides = std::move(colorOverrides);
+            m_ElementScaleOverrides = std::move(scaleOverrides);
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("LoadProjectAppearanceYaml failed: ") + exception.what());
+        }
+    }
+
+    void EditorLayer::SaveProjectAppearanceYaml() const
+    {
+        std::filesystem::create_directories(kProjectConfigDirectory);
+
+        YAML::Node root;
+        root["version"] = 1;
+
+        std::unordered_set<std::string> elementKeys;
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            elementKeys.insert(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            elementKeys.insert(element);
+        }
+
+        std::vector<std::string> sortedKeys(elementKeys.begin(), elementKeys.end());
+        std::sort(sortedKeys.begin(), sortedKeys.end());
+        for (const std::string &element : sortedKeys)
+        {
+            root["elements"][element]["identity"]["symbol"] = element;
+            const auto colorIt = m_ElementColorOverrides.find(element);
+            if (colorIt != m_ElementColorOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["color"] = MakeColorNode(glm::clamp(colorIt->second, glm::vec3(0.0f), glm::vec3(1.0f)));
+            }
+
+            const auto scaleIt = m_ElementScaleOverrides.find(element);
+            if (scaleIt != m_ElementScaleOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["scale"] = std::clamp(scaleIt->second, 0.1f, 4.0f);
+            }
+        }
+
+        std::ofstream out(kProjectAppearancePath, std::ios::trunc);
+        if (!out.is_open())
+        {
+            return;
+        }
+
+        YAML::Emitter emitter;
+        emitter.SetIndent(2);
+        emitter << root;
+        out << emitter.c_str();
+    }
+
+    void EditorLayer::MigrateLegacyProjectAppearanceFromSceneStateIfNeeded()
+    {
+        if (std::filesystem::exists(kProjectAppearancePath))
+        {
+            return;
+        }
+
+        if (m_ElementColorOverrides.empty() && m_ElementScaleOverrides.empty())
+        {
+            return;
+        }
+
+        SaveProjectAppearanceYaml();
+        LogInfo("MigrateLegacyProjectAppearanceFromSceneStateIfNeeded: created config/project/project_appearance.yaml from legacy scene state overrides");
+    }
+
+    void EditorLayer::ResetProjectAppearanceOverrides()
+    {
+        m_ElementColorOverrides.clear();
+        m_ElementScaleOverrides.clear();
+    }
+
+    bool EditorLayer::ImportProjectAppearanceOverrides(const std::string &path)
+    {
+        if (path.empty())
+        {
+            return false;
+        }
+
+        try
+        {
+            const YAML::Node root = YAML::LoadFile(path);
+            const YAML::Node elements = root["elements"];
+            if (!elements || !elements.IsMap())
+            {
+                return false;
+            }
+
+            std::unordered_map<std::string, glm::vec3> importedColors;
+            std::unordered_map<std::string, float> importedScales;
+            for (const auto &entry : elements)
+            {
+                const std::string element = NormalizeElementSymbol(entry.first.as<std::string>());
+                if (element.empty())
+                {
+                    continue;
+                }
+
+                const YAML::Node visualOverrides = entry.second["visualOverrides"] ? entry.second["visualOverrides"] : entry.second["visual"];
+                if (!visualOverrides)
+                {
+                    continue;
+                }
+
+                glm::vec3 color(0.0f);
+                TryLoadYamlVec3(visualOverrides["color"], color);
+                if (visualOverrides["color"])
+                {
+                    importedColors[element] = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
+                }
+
+                float scale = 1.0f;
+                TryLoadYamlScalar(visualOverrides, "scale", scale);
+                if (visualOverrides["scale"])
+                {
+                    importedScales[element] = std::clamp(scale, 0.1f, 4.0f);
+                }
+            }
+
+            m_ElementColorOverrides = std::move(importedColors);
+            m_ElementScaleOverrides = std::move(importedScales);
+            return true;
+        }
+        catch (const YAML::Exception &exception)
+        {
+            LogWarn(std::string("ImportProjectAppearanceOverrides failed: ") + exception.what());
+            return false;
+        }
+    }
+
+    bool EditorLayer::ExportProjectAppearanceOverrides(const std::string &path) const
+    {
+        if (path.empty())
+        {
+            return false;
+        }
+
+        YAML::Node root;
+        root["version"] = 1;
+
+        std::unordered_set<std::string> elementKeys;
+        for (const auto &[element, color] : m_ElementColorOverrides)
+        {
+            (void)color;
+            elementKeys.insert(element);
+        }
+        for (const auto &[element, scale] : m_ElementScaleOverrides)
+        {
+            (void)scale;
+            elementKeys.insert(element);
+        }
+
+        std::vector<std::string> sortedKeys(elementKeys.begin(), elementKeys.end());
+        std::sort(sortedKeys.begin(), sortedKeys.end());
+        for (const std::string &element : sortedKeys)
+        {
+            root["elements"][element]["identity"]["symbol"] = element;
+            const auto colorIt = m_ElementColorOverrides.find(element);
+            if (colorIt != m_ElementColorOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["color"] = MakeColorNode(glm::clamp(colorIt->second, glm::vec3(0.0f), glm::vec3(1.0f)));
+            }
+
+            const auto scaleIt = m_ElementScaleOverrides.find(element);
+            if (scaleIt != m_ElementScaleOverrides.end())
+            {
+                root["elements"][element]["visualOverrides"]["scale"] = std::clamp(scaleIt->second, 0.1f, 4.0f);
+            }
+        }
+
+        std::ofstream out(path, std::ios::trunc);
+        if (!out.is_open())
+        {
+            return false;
+        }
+
+        YAML::Emitter emitter;
+        emitter.SetIndent(2);
+        emitter << root;
+        out << emitter.c_str();
+        return true;
+    }
+
     void EditorLayer::SaveSettings() const
     {
         SaveUiSettingsYaml();
         SaveAtomSettings();
+        SaveProjectAppearanceYaml();
         ImGuiLayer::SaveCurrentStyle();
         SaveSceneState();
     }
@@ -4022,9 +4268,6 @@ namespace ds
             out << prefix << "visible=" << (collection.visible ? 1 : 0) << '\n';
             out << prefix << "selectable=" << (collection.selectable ? 1 : 0) << '\n';
         }
-        out << "scene_project_element_color_overrides=" << SerializeElementColorOverrides(m_ElementColorOverrides) << '\n';
-        out << "scene_project_element_scale_overrides=" << SerializeElementScaleOverrides(m_ElementScaleOverrides) << '\n';
-
         out << "scene_empty_count=" << m_TransformEmpties.size() << '\n';
         for (std::size_t i = 0; i < m_TransformEmpties.size(); ++i)
         {

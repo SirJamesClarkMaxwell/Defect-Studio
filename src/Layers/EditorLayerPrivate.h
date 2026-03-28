@@ -729,6 +729,62 @@ namespace ds
 #endif
         }
 
+        bool OpenNativeYamlDialog(std::string &outPath)
+        {
+#ifdef _WIN32
+            char pathBuffer[MAX_PATH] = "project_appearance.yaml";
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer;
+            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFilter = "YAML files (*.yaml;*.yml)\0*.yaml;*.yml\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER;
+            dialog.lpstrDefExt = "yaml";
+
+            if (GetOpenFileNameA(&dialog) != FALSE)
+            {
+                outPath = pathBuffer;
+                return true;
+            }
+
+            return false;
+#else
+            (void)outPath;
+            return false;
+#endif
+        }
+
+        bool SaveNativeYamlDialog(std::string &outPath)
+        {
+#ifdef _WIN32
+            char pathBuffer[MAX_PATH] = "project_appearance.yaml";
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer;
+            dialog.nMaxFile = static_cast<DWORD>(sizeof(pathBuffer));
+            dialog.lpstrFilter = "YAML files (*.yaml;*.yml)\0*.yaml;*.yml\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+            dialog.lpstrDefExt = "yaml";
+
+            if (GetSaveFileNameA(&dialog) != FALSE)
+            {
+                outPath = pathBuffer;
+                return true;
+            }
+
+            return false;
+#else
+            (void)outPath;
+            return false;
+#endif
+        }
+
         glm::vec3 ColorFromElement(const std::string &element)
         {
             std::uint32_t hash = 2166136261u;

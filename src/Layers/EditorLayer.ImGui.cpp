@@ -102,6 +102,7 @@ namespace ds
         static bool s_LastGizmoUsing = false;
         static bool s_LastGizmoManipulated = false;
         static bool s_GizmoStateInitialized = false;
+        static bool s_GizmoInteractionActive = false;
         static std::size_t s_LastSelectedCount = 0;
 
         ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
@@ -174,6 +175,10 @@ namespace ds
             {
                 const bool canUndoSceneEdit = !m_UndoStack.empty();
                 const bool canRedoSceneEdit = !m_RedoStack.empty();
+                const bool canCopySelection =
+                    !m_SelectedAtomIndices.empty() ||
+                    (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+                const bool canPasteClipboard = HasClipboardPayload();
                 if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndoSceneEdit))
                 {
                     settingsChanged |= UndoSceneEdit();
@@ -181,6 +186,19 @@ namespace ds
                 if (ImGui::MenuItem("Redo", "Ctrl+Y / Ctrl+Shift+Z", false, canRedoSceneEdit))
                 {
                     settingsChanged |= RedoSceneEdit();
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Copy", "Ctrl+C", false, canCopySelection))
+                {
+                    CopyCurrentSelectionToClipboard();
+                }
+                if (ImGui::MenuItem("Paste", "Ctrl+V", false, canPasteClipboard))
+                {
+                    settingsChanged |= PasteClipboard();
+                }
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, canCopySelection))
+                {
+                    settingsChanged |= DuplicateCurrentSelection();
                 }
                 ImGui::EndMenu();
             }
@@ -286,6 +304,35 @@ namespace ds
         m_BlockSelectionThisFrame = false;
         m_GizmoConsumedMouseThisFrame = false;
 
+        auto beginPendingTransformUndo = [&](const char *label)
+        {
+            m_PendingTransformUndoSnapshot = CaptureSceneSnapshot();
+            m_PendingTransformUndoLabel = (label != nullptr) ? label : "Transform selection";
+            m_PendingTransformUndoValid = true;
+            m_PendingTransformUndoDirty = false;
+        };
+
+        auto cancelPendingTransformUndo = [&]()
+        {
+            m_PendingTransformUndoValid = false;
+            m_PendingTransformUndoDirty = false;
+            m_PendingTransformUndoLabel.clear();
+        };
+
+        auto commitPendingTransformUndo = [&]()
+        {
+            if (!m_PendingTransformUndoValid)
+            {
+                return;
+            }
+
+            if (m_PendingTransformUndoDirty)
+            {
+                PushUndoSnapshot(m_PendingTransformUndoLabel.empty() ? "Transform selection" : m_PendingTransformUndoLabel, m_PendingTransformUndoSnapshot);
+            }
+            cancelPendingTransformUndo();
+        };
+
         auto beginTranslateMode = [&]()
         {
             if (m_RotateModeActive)
@@ -350,6 +397,7 @@ namespace ds
                 return;
             }
 
+            beginPendingTransformUndo("Translate selection");
             m_TranslateModeActive = true;
             m_InteractionMode = InteractionMode::Translate;
             m_GizmoOperationIndex = 0;
@@ -395,6 +443,7 @@ namespace ds
                 return;
             }
 
+            beginPendingTransformUndo("Rotate selection");
             m_RotateModeActive = true;
             m_InteractionMode = InteractionMode::Rotate;
             m_GizmoOperationIndex = 1;
@@ -439,6 +488,7 @@ namespace ds
             m_TranslateSpecialNode = 0;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Translate mode canceled.";
+            cancelPendingTransformUndo();
             AppendSelectionDebugLog("Translate mode canceled (Esc/RMB)");
         };
 
@@ -447,6 +497,20 @@ namespace ds
             if (!m_TranslateModeActive)
             {
                 return;
+            }
+
+            bool hasAppliedChange = glm::length2(m_TranslateCurrentOffset) > 1e-10f;
+            if (!hasAppliedChange && m_TranslateEmptyIndex >= 0 && m_TranslateEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
+            {
+                hasAppliedChange = glm::length2(m_TransformEmpties[static_cast<std::size_t>(m_TranslateEmptyIndex)].position - m_TranslateEmptyInitialPosition) > 1e-10f;
+            }
+            if (!hasAppliedChange && m_TranslateSpecialNode == 1)
+            {
+                hasAppliedChange = glm::length2(m_LightPosition - m_TranslateEmptyInitialPosition) > 1e-10f;
+            }
+            if (hasAppliedChange)
+            {
+                m_PendingTransformUndoDirty = true;
             }
 
             m_TranslateModeActive = false;
@@ -461,6 +525,7 @@ namespace ds
             m_TranslateSpecialNode = 0;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Translate mode applied.";
+            commitPendingTransformUndo();
             AppendSelectionDebugLog("Translate mode applied (LMB/Enter)");
         };
 
@@ -485,6 +550,7 @@ namespace ds
             m_RotateCurrentAngle = 0.0f;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Rotate mode canceled.";
+            cancelPendingTransformUndo();
             AppendSelectionDebugLog("Rotate mode canceled (Esc/RMB)");
         };
 
@@ -495,6 +561,11 @@ namespace ds
                 return;
             }
 
+            if (std::abs(m_RotateCurrentAngle) > 1e-6f)
+            {
+                m_PendingTransformUndoDirty = true;
+            }
+
             m_RotateModeActive = false;
             m_InteractionMode = InteractionMode::Select;
             m_RotateConstraintAxis = -1;
@@ -503,6 +574,7 @@ namespace ds
             m_RotateCurrentAngle = 0.0f;
             m_LastStructureOperationFailed = false;
             m_LastStructureMessage = "Rotate mode applied around 3D cursor.";
+            commitPendingTransformUndo();
             AppendSelectionDebugLog("Rotate mode applied (LMB/Enter/R)");
         };
 
@@ -1003,6 +1075,22 @@ namespace ds
         else if (!io.WantTextInput && io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_Y, false))
         {
             settingsChanged |= RedoSceneEdit();
+            m_BlockSelectionThisFrame = settingsChanged;
+        }
+
+        if (!io.WantTextInput && io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_C, false))
+        {
+            const bool copied = CopyCurrentSelectionToClipboard();
+            m_BlockSelectionThisFrame = copied;
+        }
+        else if (!io.WantTextInput && io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_V, false))
+        {
+            settingsChanged |= PasteClipboard();
+            m_BlockSelectionThisFrame = settingsChanged;
+        }
+        else if (!io.WantTextInput && io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_D, false))
+        {
+            settingsChanged |= DuplicateCurrentSelection();
             m_BlockSelectionThisFrame = settingsChanged;
         }
 
@@ -2303,10 +2391,23 @@ namespace ds
                             m_GizmoConsumedMouseThisFrame = true;
                         }
 
+                        if (gizmoUsing && !s_GizmoInteractionActive)
+                        {
+                            beginPendingTransformUndo(
+                                (activeOperation == 1) ? "Rotate selection"
+                                                       : ((activeOperation == 2) ? "Scale selection"
+                                                                                 : "Translate selection"));
+                            s_GizmoInteractionActive = true;
+                        }
+
                         if (!gizmoOver && !gizmoUsing && pivotInViewport && !m_FallbackGizmoDragging && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                         {
                             if (hoveredFallbackAxis >= 0)
                             {
+                                beginPendingTransformUndo(
+                                    (activeOperation == 1) ? "Rotate selection"
+                                                           : ((activeOperation == 2) ? "Scale selection"
+                                                                                     : "Translate selection"));
                                 m_FallbackGizmoDragging = true;
                                 m_FallbackGizmoOperation = activeOperation;
                                 m_FallbackGizmoAxis = hoveredFallbackAxis;
@@ -2352,6 +2453,7 @@ namespace ds
 
                                     if (std::abs(deltaAngle) > 1e-6f)
                                     {
+                                        m_PendingTransformUndoDirty = true;
                                         const glm::vec3 axisWorld = glm::normalize(m_FallbackDragAxisWorldDir);
                                         const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), deltaAngle, axisWorld);
                                         if (hasSelectedEmpty)
@@ -2412,6 +2514,7 @@ namespace ds
                                         const float factor = glm::clamp(1.0f + worldToApply, 0.05f, 20.0f);
                                         if (std::abs(factor - 1.0f) > 1e-6f)
                                         {
+                                            m_PendingTransformUndoDirty = true;
                                             if (hasSelectedEmpty)
                                             {
                                                 TransformEmpty &selectedEmpty = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)];
@@ -2453,6 +2556,7 @@ namespace ds
                                         const glm::vec3 worldDelta = m_FallbackDragAxisWorldDir * worldToApply;
                                         if (glm::length(worldDelta) > 0.000001f)
                                         {
+                                            m_PendingTransformUndoDirty = true;
                                             if (hasSelectedEmpty)
                                             {
                                                 TransformEmpty &selectedEmpty = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)];
@@ -2497,12 +2601,21 @@ namespace ds
                                 m_FallbackDragAccumulated = 0.0f;
                                 m_FallbackDragApplied = 0.0f;
                                 m_FallbackRotateLastAngle = 0.0f;
+                                if (m_PendingTransformUndoDirty)
+                                {
+                                    commitPendingTransformUndo();
+                                }
+                                else
+                                {
+                                    cancelPendingTransformUndo();
+                                }
                                 AppendSelectionDebugLog("Fallback axis drag ended");
                             }
                         }
 
                         if (manipulated && ImGuizmo::IsUsing())
                         {
+                            m_PendingTransformUndoDirty = true;
                             if (hasSelectedEmpty)
                             {
                                 TransformEmpty &selectedEmpty = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)];
@@ -2543,17 +2656,40 @@ namespace ds
                                 m_LastStructureMessage = "Gizmo transform applied to selection (" + std::to_string(m_SelectedAtomIndices.size()) + " atoms).";
                             }
                         }
+
+                        if (s_GizmoInteractionActive && !gizmoUsing)
+                        {
+                            if (m_PendingTransformUndoDirty)
+                            {
+                                commitPendingTransformUndo();
+                            }
+                            else
+                            {
+                                cancelPendingTransformUndo();
+                            }
+                            s_GizmoInteractionActive = false;
+                        }
                     }
                     else if (s_LastValidPivot)
                     {
                         AppendSelectionDebugLog("Gizmo pivot unavailable: selected atoms are not valid indices.");
                         s_LastValidPivot = false;
+                        if (s_GizmoInteractionActive)
+                        {
+                            cancelPendingTransformUndo();
+                            s_GizmoInteractionActive = false;
+                        }
                     }
                 }
                 else if (s_LastValidPivot)
                 {
                     AppendSelectionDebugLog("Gizmo pivot reset: transform gizmo preconditions no longer met.");
                     s_LastValidPivot = false;
+                    if (s_GizmoInteractionActive)
+                    {
+                        cancelPendingTransformUndo();
+                        s_GizmoInteractionActive = false;
+                    }
                     m_FallbackGizmoDragging = false;
                     m_FallbackGizmoOperation = -1;
                     m_FallbackGizmoAxis = -1;
@@ -3122,6 +3258,34 @@ namespace ds
                 {
                     const bool hasLoadedAtoms = m_HasStructureLoaded && !m_WorkingStructure.atoms.empty();
                     const glm::vec2 contextMouse(io.MousePos.x, io.MousePos.y);
+                    const bool hasSelectedEmpty =
+                        (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+                    const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
+                    const bool canCopySelection = !m_SelectedAtomIndices.empty() || hasSelectedEmpty;
+                    const bool canPasteSelection = HasClipboardPayload();
+                    const bool canDuplicateSelection = canCopySelection;
+
+                    if (ImGui::MenuItem("Copy", "Ctrl+C", false, canCopySelection))
+                    {
+                        CopyCurrentSelectionToClipboard();
+                    }
+                    if (ImGui::MenuItem("Paste", "Ctrl+V", false, canPasteSelection))
+                    {
+                        settingsChanged |= PasteClipboard();
+                    }
+                    if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, canDuplicateSelection))
+                    {
+                        settingsChanged |= DuplicateCurrentSelection();
+                    }
+                    if (ImGui::MenuItem("Delete selection", nullptr, false, canDuplicateSelection || !m_SelectedBondKeys.empty()))
+                    {
+                        deleteCurrentSelection();
+                    }
+                    if (ImGui::MenuItem("Hide selection", nullptr, false, !m_SelectedAtomIndices.empty() || !m_SelectedBondKeys.empty() || m_SelectedBondLabelKey != 0))
+                    {
+                        hideCurrentSelection();
+                    }
+                    ImGui::Separator();
 
                     if (!m_SelectedAtomIndices.empty())
                     {
@@ -3411,8 +3575,6 @@ namespace ds
 
                     if (ImGui::BeginMenu("Selection Utilities"))
                     {
-                        const bool hasSelectedEmpty = (m_SelectedTransformEmptyIndex >= 0 && m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
-                        const bool hasSelectedLight = (m_SelectedSpecialNode == SpecialNodeSelection::Light);
                         if (ImGui::BeginMenu("Change selected atom type", !m_SelectedAtomIndices.empty()))
                         {
                             ImGui::SetNextItemWidth(110.0f);
@@ -3437,6 +3599,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Move selected objects to 3D cursor", nullptr, false, !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight))
                         {
+                            PushUndoSnapshot("Move selection to 3D cursor");
                             if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
                             {
                                 m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_CursorPosition;
@@ -3470,6 +3633,7 @@ namespace ds
 
                         if (ImGui::MenuItem("Move selected to Origin", nullptr, false, !m_SelectedAtomIndices.empty() || hasSelectedEmpty || hasSelectedLight))
                         {
+                            PushUndoSnapshot("Move selection to origin");
                             if (hasSelectedEmpty && m_SelectedAtomIndices.empty())
                             {
                                 m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)].position = m_SceneOriginPosition;
@@ -3578,7 +3742,7 @@ namespace ds
                         else
                         {
                             m_BoxSelectEnd = mousePos;
-                            const bool additiveSelection = io.KeyCtrl;
+                            const SelectionStrokeMode strokeMode = ResolveSelectionStrokeMode(io.KeyCtrl);
                             const bool includeAtoms =
                                 (m_SelectionFilter == SelectionFilter::AtomsOnly) ||
                                 (m_SelectionFilter == SelectionFilter::AtomsAndBonds);
@@ -3588,9 +3752,9 @@ namespace ds
                                 (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
                             if (includeAtoms)
                             {
-                                SelectAtomsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, additiveSelection);
+                                SelectAtomsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, strokeMode);
                             }
-                            else if (!additiveSelection)
+                            else if (strokeMode == SelectionStrokeMode::Replace)
                             {
                                 m_SelectedAtomIndices.clear();
                                 m_SelectedTransformEmptyIndex = -1;
@@ -3598,9 +3762,9 @@ namespace ds
                             }
                             if (includeBonds)
                             {
-                                SelectBondsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, additiveSelection);
+                                SelectBondsInScreenRect(m_BoxSelectStart, m_BoxSelectEnd, strokeMode);
                             }
-                            else if (!additiveSelection)
+                            else if (strokeMode == SelectionStrokeMode::Replace)
                             {
                                 m_SelectedBondKeys.clear();
                                 m_SelectedBondLabelKey = 0;
@@ -3613,7 +3777,7 @@ namespace ds
 
                     if (m_CircleSelectArmed && !m_CircleSelecting && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && insideViewport)
                     {
-                        const bool additiveSelection = io.KeyCtrl;
+                        const SelectionStrokeMode strokeMode = ResolveSelectionStrokeMode(io.KeyCtrl);
                         m_CircleSelecting = true;
                         const bool includeAtoms =
                             (m_SelectionFilter == SelectionFilter::AtomsOnly) ||
@@ -3621,12 +3785,12 @@ namespace ds
                         const bool includeBonds =
                             (m_SelectionFilter == SelectionFilter::AtomsAndBonds) ||
                             (m_SelectionFilter == SelectionFilter::BondsOnly) ||
-                            (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
+                                (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
                         if (includeAtoms)
                         {
-                            SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, additiveSelection);
+                            SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, strokeMode);
                         }
-                        else if (!additiveSelection)
+                        else if (strokeMode == SelectionStrokeMode::Replace)
                         {
                             m_SelectedAtomIndices.clear();
                             m_SelectedTransformEmptyIndex = -1;
@@ -3634,9 +3798,9 @@ namespace ds
                         }
                         if (includeBonds)
                         {
-                            SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, additiveSelection);
+                            SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, strokeMode);
                         }
-                        else if (!additiveSelection)
+                        else if (strokeMode == SelectionStrokeMode::Replace)
                         {
                             m_SelectedBondKeys.clear();
                             m_SelectedBondLabelKey = 0;
@@ -3657,13 +3821,14 @@ namespace ds
                                     (m_SelectionFilter == SelectionFilter::AtomsAndBonds) ||
                                     (m_SelectionFilter == SelectionFilter::BondsOnly) ||
                                     (m_SelectionFilter == SelectionFilter::BondLabelsOnly);
+                                const SelectionStrokeMode strokeMode = io.KeyShift ? SelectionStrokeMode::Subtract : SelectionStrokeMode::Add;
                                 if (includeAtoms)
                                 {
-                                    SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, true);
+                                    SelectAtomsInScreenCircle(mousePos, m_CircleSelectRadius, strokeMode);
                                 }
                                 if (includeBonds)
                                 {
-                                    SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, true);
+                                    SelectBondsInScreenCircle(mousePos, m_CircleSelectRadius, strokeMode);
                                 }
                             }
                             m_BlockSelectionThisFrame = true;
@@ -3703,10 +3868,18 @@ namespace ds
                     ImDrawList *drawList = ImGui::GetWindowDrawList();
                     const ImVec2 center(io.MousePos.x, io.MousePos.y);
                     const float radius = glm::clamp(m_CircleSelectRadius, 8.0f, 260.0f);
-                    drawList->AddCircleFilled(center, radius, IM_COL32(94, 185, 255, 36), 48);
-                    drawList->AddCircle(center, radius, IM_COL32(124, 210, 255, 225), 48, 1.6f);
+                    const SelectionStrokeMode previewStrokeMode = ResolveSelectionStrokeMode(io.KeyCtrl);
+                    const ImU32 fillColor = (previewStrokeMode == SelectionStrokeMode::Subtract)
+                                                ? IM_COL32(255, 118, 118, 42)
+                                                : IM_COL32(94, 185, 255, 36);
+                    const ImU32 outlineColor = (previewStrokeMode == SelectionStrokeMode::Subtract)
+                                                   ? IM_COL32(255, 148, 148, 235)
+                                                   : IM_COL32(124, 210, 255, 225);
+                    drawList->AddCircleFilled(center, radius, fillColor, 48);
+                    drawList->AddCircle(center, radius, outlineColor, 48, 1.6f);
                     char radiusLabel[64] = {};
-                    std::snprintf(radiusLabel, sizeof(radiusLabel), "C-select r=%.0f", radius);
+                    const char *modeLabel = (previewStrokeMode == SelectionStrokeMode::Subtract) ? "subtract" : ((previewStrokeMode == SelectionStrokeMode::Add) ? "add" : "replace");
+                    std::snprintf(radiusLabel, sizeof(radiusLabel), "C-select %s r=%.0f", modeLabel, radius);
                     drawList->AddText(ImVec2(center.x + 10.0f, center.y - radius - 18.0f), IM_COL32(210, 232, 248, 235), radiusLabel);
                 }
             }
@@ -5303,88 +5476,7 @@ namespace ds
             if (ImGui::Button("Delete active collection") && canDeleteCollection)
             {
                 PushUndoSnapshot("Delete collection");
-                const int deletedCollectionIndex = m_ActiveCollectionIndex;
-                std::vector<std::size_t> atomIndicesToDelete;
-                atomIndicesToDelete.reserve(m_AtomCollectionIndices.size());
-                for (std::size_t atomIndex = 0; atomIndex < m_AtomCollectionIndices.size(); ++atomIndex)
-                {
-                    if (m_AtomCollectionIndices[atomIndex] == deletedCollectionIndex)
-                    {
-                        atomIndicesToDelete.push_back(atomIndex);
-                    }
-                }
-
-                std::vector<int> emptyIndicesToDelete;
-                emptyIndicesToDelete.reserve(m_TransformEmpties.size());
-                for (int emptyIndex = 0; emptyIndex < static_cast<int>(m_TransformEmpties.size()); ++emptyIndex)
-                {
-                    if (m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].collectionIndex == deletedCollectionIndex)
-                    {
-                        emptyIndicesToDelete.push_back(emptyIndex);
-                    }
-                }
-
-                const std::size_t removedAtomCount = atomIndicesToDelete.size();
-                if (!atomIndicesToDelete.empty())
-                {
-                    m_SelectedAtomIndices = atomIndicesToDelete;
-                    m_SelectedTransformEmptyIndex = -1;
-                    m_SelectedSpecialNode = SpecialNodeSelection::None;
-                    m_SelectedBondKeys.clear();
-                    m_SelectedBondLabelKey = 0;
-                    m_SuspendUndoCapture = true;
-                    deleteCurrentSelection();
-                    m_SuspendUndoCapture = false;
-                }
-
-                const std::size_t removedEmptyCount = emptyIndicesToDelete.size();
-                for (auto it = emptyIndicesToDelete.rbegin(); it != emptyIndicesToDelete.rend(); ++it)
-                {
-                    DeleteTransformEmptyAtIndex(*it);
-                }
-
-                m_Collections.erase(m_Collections.begin() + deletedCollectionIndex);
-
-                for (int &collectionIndex : m_AtomCollectionIndices)
-                {
-                    if (collectionIndex > deletedCollectionIndex)
-                    {
-                        --collectionIndex;
-                    }
-                }
-                EnsureAtomCollectionAssignments();
-
-                for (TransformEmpty &empty : m_TransformEmpties)
-                {
-                    if (empty.collectionIndex > deletedCollectionIndex)
-                    {
-                        --empty.collectionIndex;
-                    }
-
-                    if (empty.collectionIndex < 0 || empty.collectionIndex >= static_cast<int>(m_Collections.size()))
-                    {
-                        empty.collectionIndex = 0;
-                    }
-
-                    if (!m_Collections.empty())
-                    {
-                        empty.collectionId = m_Collections[static_cast<std::size_t>(empty.collectionIndex)].id;
-                    }
-                }
-
-                if (m_ActiveCollectionIndex >= static_cast<int>(m_Collections.size()))
-                {
-                    m_ActiveCollectionIndex = static_cast<int>(m_Collections.size()) - 1;
-                }
-                if (m_ActiveCollectionIndex < 0)
-                {
-                    m_ActiveCollectionIndex = 0;
-                }
-
-                settingsChanged = true;
-                m_LastStructureOperationFailed = false;
-                m_LastStructureMessage = "Deleted active collection with atoms=" + std::to_string(removedAtomCount) +
-                                         ", empties=" + std::to_string(removedEmptyCount) + ".";
+                settingsChanged |= DeleteCollectionAtIndex(m_ActiveCollectionIndex);
             }
             if (!canDeleteCollection)
             {
@@ -5440,9 +5532,7 @@ namespace ds
                 ImGui::IsKeyPressed(ImGuiKey_F2, false) &&
                 !ImGui::IsAnyItemActive())
             {
-                const std::string &activeName = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)].name;
-                std::snprintf(m_RenameCollectionBuffer.data(), m_RenameCollectionBuffer.size(), "%s", activeName.c_str());
-                m_RenameCollectionDialogOpen = true;
+                BeginCollectionRename(m_ActiveCollectionIndex);
             }
 
             if (m_RenameCollectionDialogOpen)
@@ -5484,21 +5574,27 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Cancel"))
                 {
+                    m_RenameCollectionTargetIndex = -1;
                     ImGui::CloseCurrentPopup();
                 }
 
-                if (confirmRename && canRenameCollection)
+                const bool canConfirmRename =
+                    m_RenameCollectionTargetIndex >= 0 &&
+                    m_RenameCollectionTargetIndex < static_cast<int>(m_Collections.size());
+                if (confirmRename && canConfirmRename)
                 {
                     const std::string trimmedName = trimCollectionName(std::string(m_RenameCollectionBuffer.data()));
                     if (!trimmedName.empty())
                     {
-                        SceneCollection &collection = m_Collections[static_cast<std::size_t>(m_ActiveCollectionIndex)];
+                        SceneCollection &collection = m_Collections[static_cast<std::size_t>(m_RenameCollectionTargetIndex)];
                         if (trimmedName != collection.name)
                         {
                             PushUndoSnapshot("Rename collection");
                             collection.name = trimmedName;
+                            m_ActiveCollectionIndex = m_RenameCollectionTargetIndex;
                             settingsChanged = true;
                         }
+                        m_RenameCollectionTargetIndex = -1;
                         ImGui::CloseCurrentPopup();
                     }
                 }
@@ -5543,6 +5639,22 @@ namespace ds
                 }
             };
 
+            auto trimOutlinerName = [](std::string value) -> std::string
+            {
+                const std::string whitespace = " \t\r\n";
+                const std::size_t first = value.find_first_not_of(whitespace);
+                if (first == std::string::npos)
+                {
+                    return std::string();
+                }
+
+                const std::size_t last = value.find_last_not_of(whitespace);
+                return value.substr(first, last - first + 1);
+            };
+
+            static std::array<char, 128> s_EmptyRenameBuffer = {};
+            static int s_EmptyRenameIndex = -1;
+
             for (std::size_t collectionIndex = 0; collectionIndex < m_Collections.size(); ++collectionIndex)
             {
                 SceneCollection &collection = m_Collections[collectionIndex];
@@ -5565,6 +5677,32 @@ namespace ds
                 if (ImGui::Selectable(collection.name.c_str(), isActiveCollection))
                 {
                     m_ActiveCollectionIndex = static_cast<int>(collectionIndex);
+                }
+                if (ImGui::BeginPopupContextItem("CollectionContext"))
+                {
+                    m_ActiveCollectionIndex = static_cast<int>(collectionIndex);
+                    if (ImGui::MenuItem("Rename", "F2"))
+                    {
+                        BeginCollectionRename(static_cast<int>(collectionIndex));
+                    }
+                    if (ImGui::MenuItem("Copy", "Ctrl+C"))
+                    {
+                        CopyCollectionToClipboard(static_cast<int>(collectionIndex));
+                    }
+                    if (ImGui::MenuItem("Paste", "Ctrl+V", false, HasClipboardPayload()))
+                    {
+                        settingsChanged |= PasteClipboard();
+                    }
+                    if (ImGui::MenuItem("Duplicate"))
+                    {
+                        settingsChanged |= DuplicateCollection(static_cast<int>(collectionIndex));
+                    }
+                    if (ImGui::MenuItem("Delete", nullptr, false, collectionIndex > 0))
+                    {
+                        PushUndoSnapshot("Delete collection");
+                        settingsChanged |= DeleteCollectionAtIndex(static_cast<int>(collectionIndex));
+                    }
+                    ImGui::EndPopup();
                 }
 
                 if (ImGui::BeginDragDropTarget())
@@ -5611,6 +5749,57 @@ namespace ds
                                 m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
                                 m_SelectedAtomIndices.clear();
                                 m_OutlinerAtomSelectionAnchor.reset();
+                            }
+                            if (ImGui::BeginPopupContextItem("EmptyContext"))
+                            {
+                                m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                m_ActiveTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                m_SelectedAtomIndices.clear();
+                                m_OutlinerAtomSelectionAnchor.reset();
+
+                                if (s_EmptyRenameIndex != static_cast<int>(emptyIndex) || ImGui::IsWindowAppearing())
+                                {
+                                    std::snprintf(s_EmptyRenameBuffer.data(), s_EmptyRenameBuffer.size(), "%s", empty.name.c_str());
+                                    s_EmptyRenameIndex = static_cast<int>(emptyIndex);
+                                }
+
+                                ImGui::TextUnformatted("Rename");
+                                ImGui::SetNextItemWidth(180.0f);
+                                const bool renameSubmitted = ImGui::InputText("##RenameEmptyInline", s_EmptyRenameBuffer.data(), s_EmptyRenameBuffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+                                if (renameSubmitted || ImGui::SmallButton("Apply name"))
+                                {
+                                    const std::string trimmedName = trimOutlinerName(std::string(s_EmptyRenameBuffer.data()));
+                                    if (!trimmedName.empty() && trimmedName != empty.name)
+                                    {
+                                        PushUndoSnapshot("Rename empty");
+                                        empty.name = trimmedName;
+                                        settingsChanged = true;
+                                    }
+                                }
+
+                                if (ImGui::MenuItem("Copy", "Ctrl+C"))
+                                {
+                                    m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                    m_SelectedAtomIndices.clear();
+                                    CopyCurrentSelectionToClipboard();
+                                }
+                                if (ImGui::MenuItem("Paste", "Ctrl+V", false, HasClipboardPayload()))
+                                {
+                                    settingsChanged |= PasteClipboard();
+                                }
+                                if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+                                {
+                                    m_SelectedTransformEmptyIndex = static_cast<int>(emptyIndex);
+                                    m_SelectedAtomIndices.clear();
+                                    settingsChanged |= DuplicateCurrentSelection();
+                                }
+                                if (ImGui::MenuItem("Delete"))
+                                {
+                                    PushUndoSnapshot("Delete empty");
+                                    DeleteTransformEmptyAtIndex(static_cast<int>(emptyIndex));
+                                    settingsChanged = true;
+                                }
+                                ImGui::EndPopup();
                             }
 
                             const int dragIndex = static_cast<int>(emptyIndex);
@@ -5729,6 +5918,51 @@ namespace ds
                                         m_OutlinerAtomSelectionAnchor = atomIndex;
                                     }
                                 }
+                                if (ImGui::BeginPopupContextItem("AtomContext"))
+                                {
+                                    if (!hidden)
+                                    {
+                                        m_SelectedAtomIndices.clear();
+                                        m_SelectedAtomIndices.push_back(atomIndex);
+                                        m_OutlinerAtomSelectionAnchor = atomIndex;
+                                    }
+                                    m_SelectedTransformEmptyIndex = -1;
+
+                                    if (ImGui::MenuItem("Copy", "Ctrl+C", false, !hidden && selectableAtom))
+                                    {
+                                        CopyCurrentSelectionToClipboard();
+                                    }
+                                    if (ImGui::MenuItem("Paste", "Ctrl+V", false, HasClipboardPayload()))
+                                    {
+                                        settingsChanged |= PasteClipboard();
+                                    }
+                                    if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, !hidden && selectableAtom))
+                                    {
+                                        settingsChanged |= DuplicateCurrentSelection();
+                                    }
+                                    if (ImGui::MenuItem("Delete", nullptr, false, !hidden && selectableAtom))
+                                    {
+                                        deleteCurrentSelection();
+                                    }
+
+                                    ImGui::SeparatorText("Change type");
+                                    ImGui::SetNextItemWidth(96.0f);
+                                    ImGui::InputText("##OutlinerAtomType", m_ChangeAtomElementBuffer.data(), m_ChangeAtomElementBuffer.size());
+                                    ImGui::SameLine();
+                                    if (ImGui::SmallButton("Table"))
+                                    {
+                                        OpenPeriodicTable(PeriodicTableTarget::ChangeSelectedAtoms, true);
+                                    }
+                                    ImGui::SameLine();
+                                    if (ImGui::SmallButton("Apply"))
+                                    {
+                                        if (ApplyElementToSelectedAtoms(std::string(m_ChangeAtomElementBuffer.data())))
+                                        {
+                                            settingsChanged = true;
+                                        }
+                                    }
+                                    ImGui::EndPopup();
+                                }
 
                                 if (!selectableAtom)
                                 {
@@ -5757,6 +5991,32 @@ namespace ds
                                 {
                                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
                                     SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
+                                }
+                                if (ImGui::BeginPopupContextItem("GroupContextTree"))
+                                {
+                                    m_ActiveGroupIndex = static_cast<int>(groupIndex);
+                                    if (ImGui::MenuItem("Select"))
+                                    {
+                                        SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
+                                    }
+                                    if (ImGui::MenuItem("Add current selection", nullptr, false, !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0))
+                                    {
+                                        PushUndoSnapshot("Add selection to group");
+                                        SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
+                                        settingsChanged = true;
+                                    }
+                                    if (ImGui::MenuItem("Remove current selection", nullptr, false, !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0))
+                                    {
+                                        PushUndoSnapshot("Remove selection from group");
+                                        SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
+                                        settingsChanged = true;
+                                    }
+                                    if (ImGui::MenuItem("Delete"))
+                                    {
+                                        PushUndoSnapshot("Delete group");
+                                        settingsChanged |= SceneGroupingBackend::DeleteGroup(*this, m_ActiveGroupIndex);
+                                    }
+                                    ImGui::EndPopup();
                                 }
                                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                                 {
@@ -5843,6 +6103,32 @@ namespace ds
                     m_ActiveGroupIndex = static_cast<int>(groupIndex);
                     SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
                 }
+                if (ImGui::BeginPopupContextItem("GroupContextList"))
+                {
+                    m_ActiveGroupIndex = static_cast<int>(groupIndex);
+                    if (ImGui::MenuItem("Select"))
+                    {
+                        SceneGroupingBackend::SelectGroup(*this, m_ActiveGroupIndex);
+                    }
+                    if (ImGui::MenuItem("Add current selection", nullptr, false, !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0))
+                    {
+                        PushUndoSnapshot("Add selection to group");
+                        SceneGroupingBackend::AddCurrentSelectionToGroup(*this, m_ActiveGroupIndex);
+                        settingsChanged = true;
+                    }
+                    if (ImGui::MenuItem("Remove current selection", nullptr, false, !m_SelectedAtomIndices.empty() || m_SelectedTransformEmptyIndex >= 0))
+                    {
+                        PushUndoSnapshot("Remove selection from group");
+                        SceneGroupingBackend::RemoveCurrentSelectionFromGroup(*this, m_ActiveGroupIndex);
+                        settingsChanged = true;
+                    }
+                    if (ImGui::MenuItem("Delete"))
+                    {
+                        PushUndoSnapshot("Delete group");
+                        settingsChanged |= SceneGroupingBackend::DeleteGroup(*this, m_ActiveGroupIndex);
+                    }
+                    ImGui::EndPopup();
+                }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
                     ImGui::SetTooltip("Atoms: %zu | Empties: %zu", group.atomIndices.size(), group.emptyIndices.size());
@@ -5914,6 +6200,7 @@ namespace ds
             drawShortcutSection("Selection & View", {
                                                        {"LMB", "Select atom, bond or helper"},
                                                        {"Ctrl+LMB", "Add or remove from selection"},
+                                                       {"Shift + C-drag", "Subtract from circle selection"},
                                                        {boxShortcut.c_str(), "Arm box selection"},
                                                        {circleShortcut.c_str(), "Arm circle selection"},
                                                        {"Tab", "Hold radial mode pie menu"},
@@ -5932,6 +6219,8 @@ namespace ds
             drawShortcutSection("Scene Tools", {
                                                   {addMenuShortcut.c_str(), "Open Add Scene Object popup"},
                                                   {deleteShortcut.c_str(), "Delete current selection"},
+                                                  {"Ctrl+C / Ctrl+V", "Copy and paste selection with internal editor clipboard"},
+                                                  {"Ctrl+D", "Duplicate current selection"},
                                                   {"F2", "Rename active collection in Scene Outliner"},
                                                   {"Mouse Wheel", "Zoom viewport / adjust circle radius while C-select"},
                                                   {"MMB / Shift+MMB", "Orbit / pan viewport"},
@@ -6462,7 +6751,7 @@ namespace ds
             return;
         }
 
-        ImGui::TextWrapped("Global element defaults come from atom_settings.yaml. Project-specific color and size overrides are stored with the current scene state.");
+        ImGui::TextWrapped("Global element defaults come from atom_settings.yaml. Project-specific color and size overrides are stored in config/project/project_appearance.yaml.");
 
         ImGui::SeparatorText("Selection source");
         if (ImGui::RadioButton("Periodic table", !m_ElementCatalogFollowViewportSelection))
@@ -6605,6 +6894,43 @@ namespace ds
         ImGui::TextDisabled("Fallback after reset: procedural palette + 1.00x size.");
 
         ImGui::SeparatorText("Project overrides");
+        if (ImGui::Button("Import overrides..."))
+        {
+            std::string importPath;
+            if (OpenNativeYamlDialog(importPath))
+            {
+                PushUndoSnapshot("Import project appearance overrides");
+                if (ImportProjectAppearanceOverrides(importPath))
+                {
+                    settingsChanged = true;
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Imported project appearance overrides: " + importPath;
+                    LogInfo(m_LastStructureMessage);
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export overrides..."))
+        {
+            std::string exportPath;
+            if (SaveNativeYamlDialog(exportPath))
+            {
+                if (ExportProjectAppearanceOverrides(exportPath))
+                {
+                    m_LastStructureOperationFailed = false;
+                    m_LastStructureMessage = "Exported project appearance overrides: " + exportPath;
+                    LogInfo(m_LastStructureMessage);
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset project overrides"))
+        {
+            PushUndoSnapshot("Reset project appearance overrides");
+            ResetProjectAppearanceOverrides();
+            settingsChanged = true;
+        }
+
         bool hasProjectColorOverride = (m_ElementColorOverrides.find(element) != m_ElementColorOverrides.end());
         if (ImGui::Checkbox("Override color in current project", &hasProjectColorOverride))
         {

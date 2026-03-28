@@ -90,22 +90,45 @@ namespace ds
     {
         if (m_TranslateModeActive)
         {
+            bool hasAppliedChange = glm::length2(m_TranslateCurrentOffset) > 1e-10f;
+            if (!hasAppliedChange && m_TranslateEmptyIndex >= 0 && m_TranslateEmptyIndex < static_cast<int>(m_TransformEmpties.size()))
+            {
+                hasAppliedChange = glm::length2(m_TransformEmpties[static_cast<std::size_t>(m_TranslateEmptyIndex)].position - m_TranslateEmptyInitialPosition) > 1e-10f;
+            }
+            if (!hasAppliedChange && m_TranslateSpecialNode == 1)
+            {
+                hasAppliedChange = glm::length2(m_LightPosition - m_TranslateEmptyInitialPosition) > 1e-10f;
+            }
+            if (hasAppliedChange && m_PendingTransformUndoValid)
+            {
+                PushUndoSnapshot(m_PendingTransformUndoLabel.empty() ? "Translate selection" : m_PendingTransformUndoLabel, m_PendingTransformUndoSnapshot);
+            }
             m_TranslateModeActive = false;
             m_TranslateConstraintAxis = -1;
             m_TranslatePlaneLockAxis = -1;
             m_TranslateIndices.clear();
             m_TranslateInitialCartesian.clear();
             m_TranslateCurrentOffset = glm::vec3(0.0f);
+            m_PendingTransformUndoValid = false;
+            m_PendingTransformUndoDirty = false;
+            m_PendingTransformUndoLabel.clear();
             AppendSelectionDebugLog("Translate mode exited by Tab");
         }
 
         if (m_RotateModeActive)
         {
+            if (std::abs(m_RotateCurrentAngle) > 1e-6f && m_PendingTransformUndoValid)
+            {
+                PushUndoSnapshot(m_PendingTransformUndoLabel.empty() ? "Rotate selection" : m_PendingTransformUndoLabel, m_PendingTransformUndoSnapshot);
+            }
             m_RotateModeActive = false;
             m_RotateConstraintAxis = -1;
             m_RotateIndices.clear();
             m_RotateInitialCartesian.clear();
             m_RotateCurrentAngle = 0.0f;
+            m_PendingTransformUndoValid = false;
+            m_PendingTransformUndoDirty = false;
+            m_PendingTransformUndoLabel.clear();
             AppendSelectionDebugLog("Rotate mode exited by Tab");
         }
 
@@ -792,6 +815,604 @@ namespace ds
         {
             m_SelectedTransformEmptyIndex -= 1;
         }
+    }
+
+    bool EditorLayer::HasClipboardPayload() const
+    {
+        if (m_EditorClipboard.kind == ClipboardPayloadKind::None)
+        {
+            return false;
+        }
+
+        return !m_EditorClipboard.atoms.empty() || !m_EditorClipboard.empties.empty();
+    }
+
+    void EditorLayer::BeginCollectionRename(int collectionIndex)
+    {
+        if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return;
+        }
+
+        m_ActiveCollectionIndex = collectionIndex;
+        m_RenameCollectionTargetIndex = collectionIndex;
+        const std::string &activeName = m_Collections[static_cast<std::size_t>(collectionIndex)].name;
+        std::snprintf(m_RenameCollectionBuffer.data(), m_RenameCollectionBuffer.size(), "%s", activeName.c_str());
+        m_RenameCollectionDialogOpen = true;
+    }
+
+    bool EditorLayer::CopyCurrentSelectionToClipboard()
+    {
+        const bool hasSelectedEmpty =
+            (m_SelectedTransformEmptyIndex >= 0 &&
+             m_SelectedTransformEmptyIndex < static_cast<int>(m_TransformEmpties.size()));
+        if ((!m_HasStructureLoaded || m_SelectedAtomIndices.empty()) && !hasSelectedEmpty)
+        {
+            return false;
+        }
+
+        m_EditorClipboard = EditorClipboard{};
+        m_EditorClipboard.kind = ClipboardPayloadKind::Selection;
+        m_EditorClipboard.label = "Selection";
+
+        glm::vec3 pivot(0.0f);
+        std::size_t pivotCount = 0;
+
+        if (m_HasStructureLoaded)
+        {
+            for (std::size_t atomIndex : m_SelectedAtomIndices)
+            {
+                if (atomIndex >= m_WorkingStructure.atoms.size())
+                {
+                    continue;
+                }
+
+                ClipboardAtom atom;
+                atom.element = NormalizeElementSymbol(m_WorkingStructure.atoms[atomIndex].element);
+                atom.positionCartesian = GetAtomCartesianPosition(atomIndex);
+                atom.collectionIndex = ResolveAtomCollectionIndex(atomIndex);
+                if (atomIndex < m_AtomNodeIds.size())
+                {
+                    atom.sourceAtomId = m_AtomNodeIds[atomIndex];
+                    const auto overrideIt = m_AtomColorOverrides.find(atom.sourceAtomId);
+                    if (overrideIt != m_AtomColorOverrides.end())
+                    {
+                        atom.hasCustomColorOverride = true;
+                        atom.customColorOverride = overrideIt->second;
+                    }
+                }
+
+                pivot += atom.positionCartesian;
+                ++pivotCount;
+                m_EditorClipboard.sourceCollectionIndex = atom.collectionIndex;
+                m_EditorClipboard.atoms.push_back(atom);
+            }
+        }
+
+        if (hasSelectedEmpty)
+        {
+            const TransformEmpty &sourceEmpty = m_TransformEmpties[static_cast<std::size_t>(m_SelectedTransformEmptyIndex)];
+            ClipboardEmpty empty;
+            empty.sourceId = sourceEmpty.id;
+            empty.empty = sourceEmpty;
+            m_EditorClipboard.empties.push_back(empty);
+            pivot += sourceEmpty.position;
+            ++pivotCount;
+            m_EditorClipboard.sourceCollectionIndex = sourceEmpty.collectionIndex;
+        }
+
+        if (pivotCount > 0)
+        {
+            m_EditorClipboard.sourcePivot = pivot / static_cast<float>(pivotCount);
+        }
+        else
+        {
+            m_EditorClipboard.sourcePivot = m_CursorPosition;
+        }
+
+        const bool hasPayload = HasClipboardPayload();
+        if (hasPayload)
+        {
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Copied current selection to editor clipboard.";
+            LogInfo(m_LastStructureMessage);
+        }
+        return hasPayload;
+    }
+
+    bool EditorLayer::CopyCollectionToClipboard(int collectionIndex)
+    {
+        if (collectionIndex < 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return false;
+        }
+
+        m_EditorClipboard = EditorClipboard{};
+        m_EditorClipboard.kind = ClipboardPayloadKind::Collection;
+        m_EditorClipboard.sourceCollectionIndex = collectionIndex;
+        m_EditorClipboard.label = m_Collections[static_cast<std::size_t>(collectionIndex)].name;
+
+        glm::vec3 pivot(0.0f);
+        std::size_t pivotCount = 0;
+
+        if (m_HasStructureLoaded)
+        {
+            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+            {
+                if (ResolveAtomCollectionIndex(atomIndex) != collectionIndex)
+                {
+                    continue;
+                }
+
+                ClipboardAtom atom;
+                atom.element = NormalizeElementSymbol(m_WorkingStructure.atoms[atomIndex].element);
+                atom.positionCartesian = GetAtomCartesianPosition(atomIndex);
+                atom.collectionIndex = collectionIndex;
+                if (atomIndex < m_AtomNodeIds.size())
+                {
+                    atom.sourceAtomId = m_AtomNodeIds[atomIndex];
+                    const auto overrideIt = m_AtomColorOverrides.find(atom.sourceAtomId);
+                    if (overrideIt != m_AtomColorOverrides.end())
+                    {
+                        atom.hasCustomColorOverride = true;
+                        atom.customColorOverride = overrideIt->second;
+                    }
+                }
+
+                pivot += atom.positionCartesian;
+                ++pivotCount;
+                m_EditorClipboard.atoms.push_back(atom);
+            }
+        }
+
+        for (const TransformEmpty &sourceEmpty : m_TransformEmpties)
+        {
+            if (sourceEmpty.collectionIndex != collectionIndex)
+            {
+                continue;
+            }
+
+            ClipboardEmpty empty;
+            empty.sourceId = sourceEmpty.id;
+            empty.empty = sourceEmpty;
+            pivot += sourceEmpty.position;
+            ++pivotCount;
+            m_EditorClipboard.empties.push_back(empty);
+        }
+
+        if (pivotCount > 0)
+        {
+            m_EditorClipboard.sourcePivot = pivot / static_cast<float>(pivotCount);
+        }
+
+        const bool hasPayload = HasClipboardPayload();
+        if (hasPayload)
+        {
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Copied collection to editor clipboard: " + m_EditorClipboard.label;
+            LogInfo(m_LastStructureMessage);
+        }
+        return hasPayload;
+    }
+
+    bool EditorLayer::PasteClipboard()
+    {
+        if (!HasClipboardPayload())
+        {
+            return false;
+        }
+
+        const bool clipboardHasAtoms = !m_EditorClipboard.atoms.empty();
+        if (clipboardHasAtoms && !m_HasStructureLoaded)
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Paste failed: atom clipboard payload requires a loaded structure.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        auto computeSceneAwareOffset = [&]() -> glm::vec3
+        {
+            float baseOffset = 0.35f;
+            if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
+            {
+                glm::vec3 boundsMin(std::numeric_limits<float>::max());
+                glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+                for (const Atom &atom : m_WorkingStructure.atoms)
+                {
+                    glm::vec3 position = atom.position;
+                    if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+                    {
+                        position = m_WorkingStructure.DirectToCartesian(position);
+                    }
+
+                    boundsMin = glm::min(boundsMin, position);
+                    boundsMax = glm::max(boundsMax, position);
+                }
+
+                const float diagonal = glm::length(boundsMax - boundsMin);
+                baseOffset = glm::clamp(diagonal * 0.06f, 0.20f, 1.40f);
+            }
+
+            return glm::vec3(baseOffset, baseOffset * 0.30f, 0.0f);
+        };
+
+        auto makeUniqueCollectionName = [&](const std::string &baseName) -> std::string
+        {
+            std::string candidate = baseName.empty() ? "Collection Copy" : baseName;
+            auto nameExists = [&](const std::string &name)
+            {
+                return std::any_of(m_Collections.begin(), m_Collections.end(), [&](const SceneCollection &collection)
+                                   { return collection.name == name; });
+            };
+
+            if (!nameExists(candidate))
+            {
+                return candidate;
+            }
+
+            int suffix = 2;
+            while (true)
+            {
+                const std::string numbered = candidate + " " + std::to_string(suffix);
+                if (!nameExists(numbered))
+                {
+                    return numbered;
+                }
+                ++suffix;
+            }
+        };
+
+        auto resolveTargetCollectionIndex = [&](int preferredCollectionIndex) -> int
+        {
+            if (preferredCollectionIndex >= 0 && preferredCollectionIndex < static_cast<int>(m_Collections.size()))
+            {
+                return preferredCollectionIndex;
+            }
+            if (m_ActiveCollectionIndex >= 0 && m_ActiveCollectionIndex < static_cast<int>(m_Collections.size()))
+            {
+                return m_ActiveCollectionIndex;
+            }
+            return 0;
+        };
+
+        const glm::vec3 pasteOffset = computeSceneAwareOffset();
+        std::vector<std::size_t> pastedAtomIndices;
+        int pastedEmptyIndex = -1;
+        std::unordered_map<SceneUUID, SceneUUID> emptyIdRemap;
+        std::vector<std::size_t> newlyAddedEmptyIndices;
+
+        PushUndoSnapshot(m_EditorClipboard.kind == ClipboardPayloadKind::Collection ? "Paste collection" : "Paste selection");
+
+        int destinationCollectionIndex = resolveTargetCollectionIndex(m_EditorClipboard.sourceCollectionIndex);
+        if (m_EditorClipboard.kind == ClipboardPayloadKind::Collection)
+        {
+            SceneCollection newCollection = m_Collections[static_cast<std::size_t>(destinationCollectionIndex)];
+            newCollection.id = GenerateSceneUUID();
+            newCollection.name = makeUniqueCollectionName((m_EditorClipboard.label.empty() ? "Collection" : m_EditorClipboard.label) + " Copy");
+            destinationCollectionIndex = std::clamp(m_EditorClipboard.sourceCollectionIndex + 1, 0, static_cast<int>(m_Collections.size()));
+            m_Collections.insert(m_Collections.begin() + destinationCollectionIndex, newCollection);
+
+            for (int &collectionIndex : m_AtomCollectionIndices)
+            {
+                if (collectionIndex >= destinationCollectionIndex)
+                {
+                    ++collectionIndex;
+                }
+            }
+            for (TransformEmpty &empty : m_TransformEmpties)
+            {
+                if (empty.collectionIndex >= destinationCollectionIndex)
+                {
+                    ++empty.collectionIndex;
+                }
+            }
+
+            m_ActiveCollectionIndex = destinationCollectionIndex;
+        }
+
+        if (clipboardHasAtoms)
+        {
+            for (const ClipboardAtom &copiedAtom : m_EditorClipboard.atoms)
+            {
+                Atom atom;
+                atom.element = copiedAtom.element;
+                atom.selectiveDynamics = false;
+                atom.selectiveFlags = {true, true, true};
+
+                const glm::vec3 pastedPosition = copiedAtom.positionCartesian + pasteOffset;
+                atom.position = (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+                                    ? m_WorkingStructure.CartesianToDirect(pastedPosition)
+                                    : pastedPosition;
+
+                m_WorkingStructure.atoms.push_back(atom);
+                const SceneUUID newAtomId = GenerateSceneUUID();
+                m_AtomNodeIds.push_back(newAtomId);
+                const int atomCollectionIndex = (m_EditorClipboard.kind == ClipboardPayloadKind::Collection)
+                                                    ? destinationCollectionIndex
+                                                    : resolveTargetCollectionIndex(copiedAtom.collectionIndex);
+                m_AtomCollectionIndices.push_back(atomCollectionIndex);
+                pastedAtomIndices.push_back(m_WorkingStructure.atoms.size() - 1);
+
+                if (copiedAtom.hasCustomColorOverride)
+                {
+                    m_AtomColorOverrides[newAtomId] = copiedAtom.customColorOverride;
+                }
+            }
+        }
+
+        for (const ClipboardEmpty &copiedEmpty : m_EditorClipboard.empties)
+        {
+            TransformEmpty empty = copiedEmpty.empty;
+            emptyIdRemap[copiedEmpty.sourceId] = GenerateSceneUUID();
+            empty.id = emptyIdRemap[copiedEmpty.sourceId];
+            empty.position += pasteOffset;
+            empty.collectionIndex = (m_EditorClipboard.kind == ClipboardPayloadKind::Collection)
+                                        ? destinationCollectionIndex
+                                        : resolveTargetCollectionIndex(copiedEmpty.empty.collectionIndex);
+            empty.collectionId = (!m_Collections.empty() && empty.collectionIndex >= 0 && empty.collectionIndex < static_cast<int>(m_Collections.size()))
+                                     ? m_Collections[static_cast<std::size_t>(empty.collectionIndex)].id
+                                     : 0;
+            m_TransformEmpties.push_back(empty);
+            newlyAddedEmptyIndices.push_back(m_TransformEmpties.size() - 1);
+            if (pastedEmptyIndex < 0)
+            {
+                pastedEmptyIndex = static_cast<int>(m_TransformEmpties.size()) - 1;
+            }
+        }
+
+        for (std::size_t emptyIndex : newlyAddedEmptyIndices)
+        {
+            TransformEmpty &empty = m_TransformEmpties[emptyIndex];
+            const auto remapIt = emptyIdRemap.find(empty.parentEmptyId);
+            if (remapIt != emptyIdRemap.end())
+            {
+                empty.parentEmptyId = remapIt->second;
+            }
+        }
+
+        if (clipboardHasAtoms)
+        {
+            m_WorkingStructure.RebuildSpeciesFromAtoms();
+        }
+        EnsureAtomCollectionAssignments();
+        m_CollectionCounter = std::max(m_CollectionCounter, static_cast<int>(m_Collections.size()) + 1);
+        m_TransformEmptyCounter = std::max(m_TransformEmptyCounter, static_cast<int>(m_TransformEmpties.size()) + 1);
+        m_AutoBondsDirty = true;
+
+        m_SelectedAtomIndices = std::move(pastedAtomIndices);
+        m_OutlinerAtomSelectionAnchor = m_SelectedAtomIndices.empty() ? std::optional<std::size_t>{} : std::optional<std::size_t>(m_SelectedAtomIndices.back());
+        m_SelectedTransformEmptyIndex = pastedEmptyIndex;
+        if (pastedEmptyIndex >= 0)
+        {
+            m_ActiveTransformEmptyIndex = pastedEmptyIndex;
+        }
+        m_SelectedBondKeys.clear();
+        m_SelectedBondLabelKey = 0;
+        m_SelectedSpecialNode = SpecialNodeSelection::None;
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = (m_EditorClipboard.kind == ClipboardPayloadKind::Collection ? "Pasted collection copy." : "Pasted selection copy.");
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::DuplicateCurrentSelection()
+    {
+        if (!CopyCurrentSelectionToClipboard())
+        {
+            return false;
+        }
+
+        return PasteClipboard();
+    }
+
+    bool EditorLayer::DuplicateCollection(int collectionIndex)
+    {
+        if (!CopyCollectionToClipboard(collectionIndex))
+        {
+            return false;
+        }
+
+        return PasteClipboard();
+    }
+
+    bool EditorLayer::DeleteCollectionAtIndex(int collectionIndex, std::string *outStatusMessage)
+    {
+        if (collectionIndex <= 0 || collectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            return false;
+        }
+
+        auto deleteAtomsByIndices = [&](const std::vector<std::size_t> &atomIndices) -> std::size_t
+        {
+            if (!m_HasStructureLoaded)
+            {
+                return 0;
+            }
+
+            std::vector<std::size_t> uniqueIndices = atomIndices;
+            std::sort(uniqueIndices.begin(), uniqueIndices.end());
+            uniqueIndices.erase(std::unique(uniqueIndices.begin(), uniqueIndices.end()), uniqueIndices.end());
+            uniqueIndices.erase(
+                std::remove_if(uniqueIndices.begin(), uniqueIndices.end(), [&](std::size_t atomIndex)
+                               { return atomIndex >= m_WorkingStructure.atoms.size(); }),
+                uniqueIndices.end());
+
+            if (uniqueIndices.empty())
+            {
+                return 0;
+            }
+
+            for (auto it = uniqueIndices.rbegin(); it != uniqueIndices.rend(); ++it)
+            {
+                const std::size_t atomIndex = *it;
+                m_WorkingStructure.atoms.erase(m_WorkingStructure.atoms.begin() + static_cast<std::ptrdiff_t>(atomIndex));
+                m_HiddenAtomIndices.erase(atomIndex);
+                if (atomIndex < m_AtomNodeIds.size())
+                {
+                    m_AtomColorOverrides.erase(m_AtomNodeIds[atomIndex]);
+                    m_AtomNodeIds.erase(m_AtomNodeIds.begin() + static_cast<std::ptrdiff_t>(atomIndex));
+                }
+                if (atomIndex < m_AtomCollectionIndices.size())
+                {
+                    m_AtomCollectionIndices.erase(m_AtomCollectionIndices.begin() + static_cast<std::ptrdiff_t>(atomIndex));
+                }
+            }
+
+            if (!m_HiddenAtomIndices.empty())
+            {
+                std::unordered_set<std::size_t> remappedHidden;
+                remappedHidden.reserve(m_HiddenAtomIndices.size());
+                for (std::size_t hiddenIndex : m_HiddenAtomIndices)
+                {
+                    std::size_t shift = 0;
+                    for (std::size_t removedIndex : uniqueIndices)
+                    {
+                        if (removedIndex < hiddenIndex)
+                        {
+                            ++shift;
+                        }
+                    }
+                    if (shift <= hiddenIndex)
+                    {
+                        remappedHidden.insert(hiddenIndex - shift);
+                    }
+                }
+                m_HiddenAtomIndices = std::move(remappedHidden);
+            }
+
+            if (!m_AngleLabelStates.empty())
+            {
+                auto remapIndexAfterDelete = [&](std::size_t oldIndex, std::size_t &outIndex) -> bool
+                {
+                    if (std::binary_search(uniqueIndices.begin(), uniqueIndices.end(), oldIndex))
+                    {
+                        return false;
+                    }
+
+                    const std::size_t shift = static_cast<std::size_t>(
+                        std::lower_bound(uniqueIndices.begin(), uniqueIndices.end(), oldIndex) - uniqueIndices.begin());
+                    outIndex = oldIndex - shift;
+                    return true;
+                };
+
+                std::unordered_map<std::string, AngleLabelState> remappedAngleLabels;
+                remappedAngleLabels.reserve(m_AngleLabelStates.size());
+
+                for (const auto &[key, state] : m_AngleLabelStates)
+                {
+                    (void)key;
+                    std::size_t mappedA = 0;
+                    std::size_t mappedB = 0;
+                    std::size_t mappedC = 0;
+                    if (!remapIndexAfterDelete(state.atomA, mappedA) ||
+                        !remapIndexAfterDelete(state.atomB, mappedB) ||
+                        !remapIndexAfterDelete(state.atomC, mappedC))
+                    {
+                        continue;
+                    }
+                    if (mappedA == mappedB || mappedB == mappedC || mappedA == mappedC)
+                    {
+                        continue;
+                    }
+
+                    AngleLabelState remappedState;
+                    remappedState.atomA = mappedA;
+                    remappedState.atomB = mappedB;
+                    remappedState.atomC = mappedC;
+                    remappedAngleLabels[MakeAngleTripletKey(mappedA, mappedB, mappedC)] = remappedState;
+                }
+
+                m_AngleLabelStates = std::move(remappedAngleLabels);
+            }
+
+            EnsureAtomCollectionAssignments();
+            m_WorkingStructure.RebuildSpeciesFromAtoms();
+            m_AutoBondsDirty = true;
+            m_SelectedAtomIndices.clear();
+            m_SelectedTransformEmptyIndex = -1;
+            m_SelectedBondKeys.clear();
+            m_SelectedBondLabelKey = 0;
+            m_OutlinerAtomSelectionAnchor.reset();
+            return uniqueIndices.size();
+        };
+
+        std::vector<std::size_t> atomIndicesToDelete;
+        atomIndicesToDelete.reserve(m_AtomCollectionIndices.size());
+        for (std::size_t atomIndex = 0; atomIndex < m_AtomCollectionIndices.size(); ++atomIndex)
+        {
+            if (m_AtomCollectionIndices[atomIndex] == collectionIndex)
+            {
+                atomIndicesToDelete.push_back(atomIndex);
+            }
+        }
+
+        std::vector<int> emptyIndicesToDelete;
+        emptyIndicesToDelete.reserve(m_TransformEmpties.size());
+        for (int emptyIndex = 0; emptyIndex < static_cast<int>(m_TransformEmpties.size()); ++emptyIndex)
+        {
+            if (m_TransformEmpties[static_cast<std::size_t>(emptyIndex)].collectionIndex == collectionIndex)
+            {
+                emptyIndicesToDelete.push_back(emptyIndex);
+            }
+        }
+
+        const std::size_t removedAtomCount = deleteAtomsByIndices(atomIndicesToDelete);
+        const std::size_t removedEmptyCount = emptyIndicesToDelete.size();
+        for (auto it = emptyIndicesToDelete.rbegin(); it != emptyIndicesToDelete.rend(); ++it)
+        {
+            DeleteTransformEmptyAtIndex(*it);
+        }
+
+        m_Collections.erase(m_Collections.begin() + collectionIndex);
+        for (int &assignedCollectionIndex : m_AtomCollectionIndices)
+        {
+            if (assignedCollectionIndex > collectionIndex)
+            {
+                --assignedCollectionIndex;
+            }
+        }
+
+        for (TransformEmpty &empty : m_TransformEmpties)
+        {
+            if (empty.collectionIndex > collectionIndex)
+            {
+                --empty.collectionIndex;
+            }
+            if (empty.collectionIndex < 0 || empty.collectionIndex >= static_cast<int>(m_Collections.size()))
+            {
+                empty.collectionIndex = 0;
+            }
+            if (!m_Collections.empty())
+            {
+                empty.collectionId = m_Collections[static_cast<std::size_t>(empty.collectionIndex)].id;
+            }
+        }
+
+        if (m_ActiveCollectionIndex >= static_cast<int>(m_Collections.size()))
+        {
+            m_ActiveCollectionIndex = static_cast<int>(m_Collections.size()) - 1;
+        }
+        if (m_ActiveCollectionIndex < 0)
+        {
+            m_ActiveCollectionIndex = 0;
+        }
+
+        for (int groupIndex = 0; groupIndex < static_cast<int>(m_ObjectGroups.size()); ++groupIndex)
+        {
+            SceneGroupingBackend::SanitizeGroup(*this, groupIndex);
+        }
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Deleted collection with atoms=" + std::to_string(removedAtomCount) +
+                                 ", empties=" + std::to_string(removedEmptyCount) + ".";
+        if (outStatusMessage != nullptr)
+        {
+            *outStatusMessage = m_LastStructureMessage;
+        }
+        LogInfo(m_LastStructureMessage);
+        return true;
     }
 
     bool EditorLayer::AlignEmptyZAxisFromSelectedAtoms(int emptyIndex)

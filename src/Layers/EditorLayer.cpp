@@ -71,6 +71,12 @@ namespace ds
         LogInfo("Loading scene state from config/scene_state.ini");
         LoadSceneState();
 
+        LogInfo("Migrating legacy project appearance if needed");
+        MigrateLegacyProjectAppearanceFromSceneStateIfNeeded();
+
+        LogInfo("Loading project appearance from config/project/project_appearance.yaml");
+        LoadProjectAppearanceYaml();
+
         LogInfo("Applying scene defaults and validation");
         EnsureSceneDefaults();
         SyncRenderAppearanceFromViewport();
