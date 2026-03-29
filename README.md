@@ -95,7 +95,13 @@ Planned future areas include:
 - Windows 10 / 11
 - Visual Studio 2022
 - C++ toolset v143
-- PowerShell
+- Python 3.11+
+
+For the Windows Python tooling workflow:
+
+- `scripts/Tooling.bat` / `scripts/Tooling.ps1` are the single bootstrap entrypoints
+- they install `uv` when needed, install a managed Python 3.11+ interpreter through `uv` when needed, then dispatch the underlying Python tooling
+- `uv` is used to create/sync `.venv`
 
 ## Setup
 
@@ -104,7 +110,7 @@ Planned future areas include:
 2. If needed, sync submodules manually:
    `git submodule update --init --recursive`
 3. Run:
-   `./scripts/Setup.bat`
+   `scripts\\Tooling.bat setup`
 4. Open:
    `DefectsStudio.sln`
 5. Build:
@@ -118,10 +124,19 @@ Set **DefectsStudio** as the startup project and run with `F5`.
 
 Included helper scripts:
 
-- `scripts/Setup.bat` - generate / refresh the Visual Studio solution
-- `scripts/Verify-Build.bat` - verify Debug and Release builds
+- `scripts/Tooling.bat` - canonical Windows bootstrap entrypoint for setup/build tooling
+- `scripts/Tooling.ps1` - PowerShell equivalent of the Windows bootstrap entrypoint
+- `scripts/setup.py` - underlying Python setup workflow, creates/syncs `.venv`, refreshes dependencies, and generates project files
+- `scripts/verify_build.py` - underlying Python build verification workflow for Debug and Release
 - `scripts/Verify-Build-And-Run.bat` - build and then launch the app
 - `scripts/Run.bat` - run an existing Debug / Release build
+
+Compatibility wrappers still exist for older workflows:
+
+- `scripts/Setup.bat`
+- `scripts/Verify-Build.bat`
+- `scripts/Setup.ps1`
+- `scripts/Verify-Build.ps1`
 
 External dependencies are managed through git submodules, including:
 
@@ -133,7 +148,7 @@ External dependencies are managed through git submodules, including:
 - `vendor/imviewguizmo`
 - `vendor/tracy`
 
-If project files or resource wiring change, rerun `scripts/Setup.bat`.
+If project files, Python tooling, or resource wiring change, rerun `scripts\\Tooling.bat setup`.
 
 ---
 
@@ -146,6 +161,8 @@ Current render/export workflow highlights:
 - render preview is live and dockable
 - preview/export rendering is independent from the main viewport render target
 - export supports crop rectangles and label composition
+
+Volumetric datasets are loaded either manually through the editor or from the current project manifest. The app no longer auto-loads a hardcoded profiling sample on startup.
 
 ---
 

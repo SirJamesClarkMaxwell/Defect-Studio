@@ -55,7 +55,7 @@ if (-not $appAlreadyRunning) {
     }
     else {
         Write-Host "Could not find DefectsStudio executable in Debug or Release output folders." -ForegroundColor Red
-        Write-Host "Build first, e.g. with scripts/Verify-Build.bat" -ForegroundColor Yellow
+        Write-Host "Build first, e.g. with scripts\\Tooling.bat verify-build" -ForegroundColor Yellow
         exit 1
     }
 }

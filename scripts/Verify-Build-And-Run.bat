@@ -5,7 +5,7 @@ set ROOT_DIR=%~dp0..
 cd /d "%ROOT_DIR%"
 
 echo === Verify build ===
-call scripts\Verify-Build.bat
+call scripts\Tooling.bat verify-build %*
 set VERIFY_EXIT=%errorlevel%
 if not "%VERIFY_EXIT%"=="0" (
     echo Verify step failed with exit code %VERIFY_EXIT%.

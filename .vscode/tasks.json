@@ -4,12 +4,9 @@
         {
             "label": "setup: generate vs2022 solution",
             "type": "shell",
-            "command": "powershell",
+            "command": "${workspaceFolder}/scripts/Tooling.bat",
             "args": [
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/Setup.ps1"
+                "setup"
             ],
             "group": "build",
             "problemMatcher": []
@@ -17,12 +14,9 @@
         {
             "label": "verify: full build check",
             "type": "shell",
-            "command": "powershell",
+            "command": "${workspaceFolder}/scripts/Tooling.bat",
             "args": [
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/scripts/Verify-Build.ps1"
+                "verify-build"
             ],
             "group": "test",
             "problemMatcher": []

@@ -2,20 +2,33 @@
 
 ## Current state
 - Integration target: `main`
-- Recently completed task: `T11 - Volumetrics MVP`
-- Recommended next branch: `task/12-scripts-python-migration`
+- Recently completed task: `T12 - Windows Python tooling migration`
+- Recommended next branch: `task/13-bug-fixes`
 - Build status in this session:
-  - `scripts/Verify-Build.bat` passes in `Debug|x64` and `Release|x64`
+  - Full Windows setup wrapper now passes end-to-end: uv, `.venv`, submodules, premake, MSVC detection, build, and app launch
+  - Windows Python tooling workflow passes in `Debug|x64` and `Release|x64`
   - Remaining warning is the known `stb_image_write.h` `C4996`
 
-## What changed in the finished T11 pass
+## What changed in the finished T12 pass
+- Tooling workflow:
+  - added `pyproject.toml` + `uv.lock` for Python tooling dependencies
+  - added `scripts/setup.py` and `scripts/verify_build.py` as the underlying setup/build entrypoints
+  - added `scripts/Tooling.bat` / `scripts/Tooling.ps1` as the single Windows bootstrapper for Python tooling
+  - bootstrapper now installs `uv` when needed and installs Python 3.11+ as a uv-managed interpreter before dispatching Python scripts
+  - `scripts/Run.bat` / `scripts/Run.ps1` remain the separate application launcher
+- Compatibility and docs:
+  - old `Setup.*` / `Verify-Build.*` wrappers now delegate to the new tooling bootstrapper
+  - VS Code tasks now use the Windows tooling wrapper
+  - `README.md`, `TODO.md`, and `COPILOT_GUIDELINES.md` now point to the Windows tooling workflow
+
+## Important context carried over from the finished T11 pass
 - Volumetric dataset foundation:
   - scalar-field data model decoupled from atom / bond scene data
   - parser support for `CHG`, `CHGCAR`, and `PARCHG`-style headers plus scalar grids
   - multi-block dataset support with per-block metadata and statistics
 - Volumetric project workflow:
   - project manifest integration for volumetric datasets
-  - startup hardcoded profiling sample path for fast iteration on `PARCHG.0782.ALLK`
+  - volumetric datasets now load only from project manifests or manual import, not from a startup hardcoded profiling sample
   - shared file-dialog starting directory between structure import and volumetric import
   - optional application of crystal structure from volumetric file headers
 - Volumetric performance pass:
@@ -73,15 +86,17 @@
   - user-provided directional icons are wired in
   - remaining exact VESTA icon mapping can still be refined if needed
 
-## Recommended next task: T12
-Goal: replace the remaining batch-driven local workflow with Python tooling while keeping behavior stable.
+## Recommended next task: T13
+Goal: return to product bugs/features after finishing the Windows-only Python tooling migration.
 
 Recommended first steps:
-1. inventory current `.bat` scripts and their exit-code/output contracts
-2. define a minimal Python package/tool layout under `scripts/`
-3. migrate `Setup.bat` and `Verify-Build.bat` first, preserving behavior
-4. keep Windows-native usage first-class, then verify the same scripts under WSL
-5. update docs only after command names and behavior settle
+1. read `TODO.md` and prioritize the newly added bug-fix items
+2. keep `T12a` explicitly deferred unless Linux/WSL parity becomes urgent
+3. preserve the Windows tooling entrypoints:
+   - `scripts/Tooling.bat setup`
+   - `scripts/Tooling.bat verify-build`
+4. use `scripts/Run.bat` only for launching an already built app
+5. keep docs aligned with the Windows-only tooling scope
 
 ## Relevant files touched in late T11
 - `src/DataModel/VolumetricDataset.cpp`
@@ -103,11 +118,11 @@ Recommended first steps:
 - `docs/project-control/TODO.md`
 
 ## Ready-to-paste starter prompt for next chat
-I am continuing after the completed T11 volumetrics MVP pass.
+I am continuing after the completed T12 Windows Python tooling migration pass.
 Please:
 1. read `docs/project-control/TODO.md` and `docs/project-control/SESSION_HANDOFF.md`,
 2. confirm the current branch and git status,
-3. start `T12` on `task/12-scripts-python-migration`,
-4. inventory the existing batch scripts and document their behavior before changing them,
-5. migrate the setup/build verification workflow to Python while preserving output and exit-code behavior,
+3. continue from the Windows-only tooling baseline,
+4. leave Linux/WSL follow-up in `T12a` unless explicitly requested,
+5. start the next prioritized product task from `TODO.md`,
 6. summarize what was finished and what still needs validation.

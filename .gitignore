@@ -2,8 +2,11 @@
 .vscode/
 .idea/
 .venv/
+scripts/__pycache__/
 bin/
 bin-int/
+Makefile
+*.make
 
 tools/
 vendor/*
