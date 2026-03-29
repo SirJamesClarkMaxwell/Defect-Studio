@@ -70,7 +70,10 @@ namespace ds
             const std::vector<glm::vec3> &normals,
             std::uint64_t meshId,
             std::uint64_t meshRevision,
+            const glm::vec3 &cameraPosition,
             const glm::vec3 &surfaceColor,
+            const glm::vec3 &surfaceSpecularColor,
+            float surfaceShininess,
             float surfaceOpacity,
             const SceneRenderSettings &settings) = 0;
         virtual void EndFrame() = 0;

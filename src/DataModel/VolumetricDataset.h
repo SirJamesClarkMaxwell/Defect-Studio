@@ -20,6 +20,22 @@ namespace ds
         Parchg = 3
     };
 
+    enum class VolumetricFieldMode
+    {
+        SelectedBlock = 0,
+        TotalDensity = 1,
+        Magnetization = 2,
+        SpinUp = 3,
+        SpinDown = 4
+    };
+
+    enum class VolumetricIsosurfaceMode
+    {
+        PositiveOnly = 0,
+        NegativeOnly = 1,
+        PositiveAndNegative = 2
+    };
+
     struct ScalarFieldStatistics
     {
         float minValue = 0.0f;
@@ -67,5 +83,9 @@ namespace ds
 
     VolumetricFileKind InferVolumetricFileKind(const std::string &path);
     const char *VolumetricFileKindName(VolumetricFileKind kind);
+    bool VolumetricDatasetHasSpinSemantics(const VolumetricDataset &dataset);
+    const char *VolumetricFieldModeName(VolumetricFieldMode mode);
+    const char *VolumetricIsosurfaceModeName(VolumetricIsosurfaceMode mode);
+    std::string VolumetricBlockDefaultLabel(VolumetricFileKind kind, int blockIndex, int blockCount);
 
 } // namespace ds

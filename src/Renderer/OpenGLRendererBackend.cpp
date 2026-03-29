@@ -724,7 +724,10 @@ namespace ds
         const std::vector<glm::vec3> &normals,
         std::uint64_t meshId,
         std::uint64_t meshRevision,
+        const glm::vec3 &cameraPosition,
         const glm::vec3 &surfaceColor,
+        const glm::vec3 &surfaceSpecularColor,
+        float surfaceShininess,
         float surfaceOpacity,
         const SceneRenderSettings &settings)
     {
@@ -788,18 +791,21 @@ namespace ds
         m_SurfaceShader.SetMat4("u_ViewProjection", viewProjection);
         m_SurfaceShader.SetFloat3("u_LightDirection", glm::normalize(settings.lightDirection));
         m_SurfaceShader.SetFloat3("u_LightColor", settings.lightColor);
+        m_SurfaceShader.SetFloat3("u_CameraPosition", cameraPosition);
         m_SurfaceShader.SetFloat4(
             "u_SurfaceColor",
             surfaceColor.r,
             surfaceColor.g,
             surfaceColor.b,
             std::clamp(surfaceOpacity, 0.0f, 1.0f));
+        m_SurfaceShader.SetFloat3("u_SpecularColor", surfaceSpecularColor);
+        m_SurfaceShader.SetFloat("u_Shininess", std::max(surfaceShininess, 1.0f));
         m_SurfaceShader.SetFloat4(
             "u_LightFactors",
             std::max(settings.ambientStrength, 0.0f),
             std::max(settings.diffuseStrength, 0.0f),
             0.12f,
-            0.0f);
+            1.0f);
 
         {
             DS_PROFILE_SCOPE_N("OpenGLRendererBackend::DrawSurfaceMesh");

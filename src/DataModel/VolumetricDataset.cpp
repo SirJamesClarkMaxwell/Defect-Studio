@@ -136,4 +136,65 @@ namespace ds
         }
     }
 
+    bool VolumetricDatasetHasSpinSemantics(const VolumetricDataset &dataset)
+    {
+        return dataset.kind == VolumetricFileKind::Parchg && dataset.blocks.size() >= 2;
+    }
+
+    const char *VolumetricFieldModeName(VolumetricFieldMode mode)
+    {
+        switch (mode)
+        {
+        case VolumetricFieldMode::SelectedBlock:
+            return "Selected block";
+        case VolumetricFieldMode::TotalDensity:
+            return "Total density";
+        case VolumetricFieldMode::Magnetization:
+            return "Magnetization";
+        case VolumetricFieldMode::SpinUp:
+            return "Spin up (derived)";
+        case VolumetricFieldMode::SpinDown:
+            return "Spin down (derived)";
+        default:
+            return "Unknown";
+        }
+    }
+
+    const char *VolumetricIsosurfaceModeName(VolumetricIsosurfaceMode mode)
+    {
+        switch (mode)
+        {
+        case VolumetricIsosurfaceMode::PositiveOnly:
+            return "Positive";
+        case VolumetricIsosurfaceMode::NegativeOnly:
+            return "Negative";
+        case VolumetricIsosurfaceMode::PositiveAndNegative:
+            return "Positive and negative";
+        default:
+            return "Unknown";
+        }
+    }
+
+    std::string VolumetricBlockDefaultLabel(VolumetricFileKind kind, int blockIndex, int blockCount)
+    {
+        if (blockIndex < 0)
+        {
+            return "Block";
+        }
+
+        if (kind == VolumetricFileKind::Parchg)
+        {
+            if (blockIndex == 0)
+            {
+                return blockCount > 1 ? "Block 1 - Total density (up + down)" : "Total density (up + down)";
+            }
+            if (blockIndex == 1)
+            {
+                return "Block 2 - Magnetization (up - down)";
+            }
+        }
+
+        return "Block " + std::to_string(blockIndex + 1);
+    }
+
 } // namespace ds

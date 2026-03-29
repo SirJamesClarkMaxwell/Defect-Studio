@@ -41,6 +41,7 @@ namespace ds
         float GetYaw() const { return m_Yaw; }
         float GetPitch() const { return m_Pitch; }
         float GetRoll() const { return m_Roll; }
+        glm::vec3 GetPosition() const;
         float GetNearClip() const { return m_NearClip; }
         float GetFarClip() const { return m_FarClip; }
 

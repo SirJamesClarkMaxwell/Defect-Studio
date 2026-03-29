@@ -431,6 +431,11 @@ namespace ds
         void DrawRenderPreviewWindow(bool &settingsChanged);
         void DrawElementAppearanceWindow(bool &settingsChanged);
         void DrawVolumetricsWindow(bool &settingsChanged);
+        bool RotateCameraRelative(float yawDeltaRadians, float pitchDeltaRadians, float rollDeltaRadians = 0.0f);
+        bool PanCameraRelativePixels(float deltaXPixels, float deltaYPixels);
+        bool ZoomCameraRelativePercent(float zoomPercentDelta);
+        bool SetCameraViewToCrystalAxis(int axisIndex, bool reciprocalAxis, bool invertDirection);
+        std::string DescribeVolumetricStructureMatch(const Structure &datasetStructure, bool &outMatches) const;
         void MarkVolumetricMeshesDirty();
         void SyncVolumetricSurfaceDefaults();
         bool RebuildVolumetricSurfaceMesh(struct VolumetricSurfaceState &surfaceState);
@@ -605,24 +610,33 @@ namespace ds
         int m_ActiveVolumetricDatasetIndex = -1;
         int m_ActiveVolumetricBlockIndex = 0;
         int m_VolumetricPreviewMaxDimension = 96;
+        float m_ViewportPanStepPixels = 10.0f;
+        float m_ViewportZoomStepPercent = 10.0f;
         bool m_LastVolumetricOperationFailed = false;
         std::string m_LastVolumetricMessage;
         struct VolumetricSurfaceState
         {
             bool enabled = true;
             int blockIndex = 0;
+            VolumetricFieldMode fieldMode = VolumetricFieldMode::SelectedBlock;
+            VolumetricIsosurfaceMode isosurfaceMode = VolumetricIsosurfaceMode::PositiveOnly;
             float isoValue = 0.0f;
             glm::vec3 color = glm::vec3(1.0f, 0.92f, 0.14f);
-            float opacity = 0.42f;
+            float opacity = 0.90f;
+            glm::vec3 negativeColor = glm::vec3(0.10f, 0.22f, 0.96f);
+            float negativeOpacity = 0.90f;
             bool dirty = true;
             bool buildQueued = false;
             bool hasMesh = false;
+            bool hasNegativeMesh = false;
             glm::ivec3 sampledDimensions = glm::ivec3(0);
             int decimationStep = 1;
             double lastBuildMilliseconds = 0.0;
             std::string lastStatus;
             SurfaceTriangleMesh mesh;
+            SurfaceTriangleMesh negativeMesh;
             std::uint64_t meshRevision = 1;
+            std::uint64_t negativeMeshRevision = 1;
             std::uint64_t pendingBuildRequestId = 0;
         };
         struct VolumetricDatasetLoadResult
@@ -663,6 +677,7 @@ namespace ds
             std::string datasetPath;
             int blockIndex = -1;
             SurfaceTriangleMesh mesh;
+            SurfaceTriangleMesh negativeMesh;
             glm::ivec3 sampledDimensions = glm::ivec3(0);
             int decimationStep = 1;
             std::string error;
@@ -683,10 +698,16 @@ namespace ds
             VolumetricSurfaceState state;
             state.enabled = false;
             state.blockIndex = 1;
+            state.fieldMode = VolumetricFieldMode::SelectedBlock;
+            state.isosurfaceMode = VolumetricIsosurfaceMode::NegativeOnly;
             state.color = glm::vec3(0.10f, 0.22f, 0.96f);
-            state.opacity = 0.44f;
+            state.negativeColor = glm::vec3(0.10f, 0.22f, 0.96f);
+            state.opacity = 0.90f;
+            state.negativeOpacity = 0.90f;
             return state;
         }();
+        glm::vec3 m_VolumetricSpecularColor = glm::vec3(0.0f);
+        float m_VolumetricShininess = 100.0f;
         std::string m_VolumetricSurfaceDatasetKey;
         std::vector<PendingVolumetricDatasetLoad> m_PendingVolumetricDatasetLoads;
         std::vector<PendingVolumetricBlockLoad> m_PendingVolumetricBlockLoads;

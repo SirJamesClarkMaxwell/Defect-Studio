@@ -541,10 +541,16 @@ namespace ds
             VolumetricSurfaceState state;
             state.enabled = false;
             state.blockIndex = 1;
+            state.fieldMode = VolumetricFieldMode::SelectedBlock;
+            state.isosurfaceMode = VolumetricIsosurfaceMode::NegativeOnly;
             state.color = glm::vec3(0.10f, 0.22f, 0.96f);
-            state.opacity = 0.44f;
+            state.negativeColor = glm::vec3(0.10f, 0.22f, 0.96f);
+            state.opacity = 0.90f;
+            state.negativeOpacity = 0.90f;
             return state;
         }();
+        m_VolumetricSpecularColor = glm::vec3(0.0f);
+        m_VolumetricShininess = 100.0f;
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", "");
         m_Collections.clear();
         m_ActiveCollectionIndex = 0;
@@ -1111,11 +1117,14 @@ namespace ds
 
             const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
             if (m_HasStructureLoaded &&
-                dataset.structure.GetAtomCount() != 0 &&
-                dataset.structure.GetAtomCount() != m_WorkingStructure.GetAtomCount())
+                dataset.structure.GetAtomCount() != 0)
             {
-                LogWarn("Loaded volumetric dataset atom count (" + std::to_string(dataset.structure.GetAtomCount()) +
-                        ") differs from current scene atom count (" + std::to_string(m_WorkingStructure.GetAtomCount()) + ").");
+                bool structuresMatch = false;
+                const std::string matchDescription = DescribeVolumetricStructureMatch(dataset.structure, structuresMatch);
+                if (!structuresMatch)
+                {
+                    LogWarn("Loaded volumetric dataset structure differs from current scene: " + matchDescription);
+                }
             }
 
             m_LastVolumetricOperationFailed = false;
@@ -4198,12 +4207,24 @@ namespace ds
             m_VolumetricPreviewMaxDimension = 32;
         if (m_VolumetricPreviewMaxDimension > 512)
             m_VolumetricPreviewMaxDimension = 512;
-        m_PrimaryVolumetricSurface.opacity = glm::clamp(m_PrimaryVolumetricSurface.opacity, 0.05f, 0.95f);
-        m_SecondaryVolumetricSurface.opacity = glm::clamp(m_SecondaryVolumetricSurface.opacity, 0.05f, 0.95f);
+        m_ViewportPanStepPixels = glm::clamp(m_ViewportPanStepPixels, 1.0f, 512.0f);
+        m_ViewportZoomStepPercent = glm::clamp(m_ViewportZoomStepPercent, 1.0f, 90.0f);
+        m_PrimaryVolumetricSurface.opacity = glm::clamp(m_PrimaryVolumetricSurface.opacity, 0.05f, 1.0f);
+        m_PrimaryVolumetricSurface.negativeOpacity = glm::clamp(m_PrimaryVolumetricSurface.negativeOpacity, 0.05f, 1.0f);
+        m_SecondaryVolumetricSurface.opacity = glm::clamp(m_SecondaryVolumetricSurface.opacity, 0.05f, 1.0f);
+        m_SecondaryVolumetricSurface.negativeOpacity = glm::clamp(m_SecondaryVolumetricSurface.negativeOpacity, 0.05f, 1.0f);
+        m_PrimaryVolumetricSurface.color = glm::clamp(m_PrimaryVolumetricSurface.color, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_PrimaryVolumetricSurface.negativeColor = glm::clamp(m_PrimaryVolumetricSurface.negativeColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_SecondaryVolumetricSurface.color = glm::clamp(m_SecondaryVolumetricSurface.color, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_SecondaryVolumetricSurface.negativeColor = glm::clamp(m_SecondaryVolumetricSurface.negativeColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_VolumetricSpecularColor = glm::clamp(m_VolumetricSpecularColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_VolumetricShininess = glm::clamp(m_VolumetricShininess, 1.0f, 256.0f);
         if (!std::isfinite(m_PrimaryVolumetricSurface.isoValue))
             m_PrimaryVolumetricSurface.isoValue = 0.0f;
         if (!std::isfinite(m_SecondaryVolumetricSurface.isoValue))
             m_SecondaryVolumetricSurface.isoValue = 0.0f;
+        m_PrimaryVolumetricSurface.isoValue = std::abs(m_PrimaryVolumetricSurface.isoValue);
+        m_SecondaryVolumetricSurface.isoValue = std::abs(m_SecondaryVolumetricSurface.isoValue);
         MarkVolumetricMeshesDirty();
 
         m_SceneSettings.drawCellEdges = m_ShowCellEdges;
@@ -4457,6 +4478,8 @@ namespace ds
                 TryLoadYamlScalar(gizmos, "offsetRight", m_ViewGizmoOffsetRight);
                 TryLoadYamlScalar(gizmos, "offsetTop", m_ViewGizmoOffsetTop);
                 TryLoadYamlScalar(gizmos, "rotateStepDegrees", m_ViewportRotateStepDeg);
+                TryLoadYamlScalar(gizmos, "panStepPixels", m_ViewportPanStepPixels);
+                TryLoadYamlScalar(gizmos, "zoomStepPercent", m_ViewportZoomStepPercent);
                 TryLoadYamlScalar(gizmos, "fallbackMarkerScale", m_FallbackGizmoVisualScale);
                 TryLoadYamlScalar(gizmos, "showTransformEmpties", m_ShowTransformEmpties);
                 TryLoadYamlScalar(gizmos, "transformEmptyVisualScale", m_TransformEmptyVisualScale);
@@ -4539,16 +4562,36 @@ namespace ds
                 const YAML::Node primarySurface = volumetrics["surfaceA"];
                 TryLoadYamlScalar(primarySurface, "enabled", m_PrimaryVolumetricSurface.enabled);
                 TryLoadYamlScalar(primarySurface, "blockIndex", m_PrimaryVolumetricSurface.blockIndex);
+                int primaryFieldMode = static_cast<int>(m_PrimaryVolumetricSurface.fieldMode);
+                int primaryIsoMode = static_cast<int>(m_PrimaryVolumetricSurface.isosurfaceMode);
+                TryLoadYamlScalar(primarySurface, "fieldMode", primaryFieldMode);
+                TryLoadYamlScalar(primarySurface, "isosurfaceMode", primaryIsoMode);
+                m_PrimaryVolumetricSurface.fieldMode = static_cast<VolumetricFieldMode>(glm::clamp(primaryFieldMode, 0, 4));
+                m_PrimaryVolumetricSurface.isosurfaceMode = static_cast<VolumetricIsosurfaceMode>(glm::clamp(primaryIsoMode, 0, 2));
                 TryLoadYamlScalar(primarySurface, "isoValue", m_PrimaryVolumetricSurface.isoValue);
                 TryLoadYamlVec3(primarySurface["color"], m_PrimaryVolumetricSurface.color);
+                TryLoadYamlVec3(primarySurface["negativeColor"], m_PrimaryVolumetricSurface.negativeColor);
                 TryLoadYamlScalar(primarySurface, "opacity", m_PrimaryVolumetricSurface.opacity);
+                TryLoadYamlScalar(primarySurface, "negativeOpacity", m_PrimaryVolumetricSurface.negativeOpacity);
 
                 const YAML::Node secondarySurface = volumetrics["surfaceB"];
                 TryLoadYamlScalar(secondarySurface, "enabled", m_SecondaryVolumetricSurface.enabled);
                 TryLoadYamlScalar(secondarySurface, "blockIndex", m_SecondaryVolumetricSurface.blockIndex);
+                int secondaryFieldMode = static_cast<int>(m_SecondaryVolumetricSurface.fieldMode);
+                int secondaryIsoMode = static_cast<int>(m_SecondaryVolumetricSurface.isosurfaceMode);
+                TryLoadYamlScalar(secondarySurface, "fieldMode", secondaryFieldMode);
+                TryLoadYamlScalar(secondarySurface, "isosurfaceMode", secondaryIsoMode);
+                m_SecondaryVolumetricSurface.fieldMode = static_cast<VolumetricFieldMode>(glm::clamp(secondaryFieldMode, 0, 4));
+                m_SecondaryVolumetricSurface.isosurfaceMode = static_cast<VolumetricIsosurfaceMode>(glm::clamp(secondaryIsoMode, 0, 2));
                 TryLoadYamlScalar(secondarySurface, "isoValue", m_SecondaryVolumetricSurface.isoValue);
                 TryLoadYamlVec3(secondarySurface["color"], m_SecondaryVolumetricSurface.color);
+                TryLoadYamlVec3(secondarySurface["negativeColor"], m_SecondaryVolumetricSurface.negativeColor);
                 TryLoadYamlScalar(secondarySurface, "opacity", m_SecondaryVolumetricSurface.opacity);
+                TryLoadYamlScalar(secondarySurface, "negativeOpacity", m_SecondaryVolumetricSurface.negativeOpacity);
+
+                const YAML::Node material = volumetrics["material"];
+                TryLoadYamlVec3(material["specularColor"], m_VolumetricSpecularColor);
+                TryLoadYamlScalar(material, "shininess", m_VolumetricShininess);
             }
 
             const YAML::Node sceneOutliner = root["sceneOutliner"];
@@ -4756,6 +4799,8 @@ namespace ds
         root["viewport"]["gizmos"]["offsetRight"] = m_ViewGizmoOffsetRight;
         root["viewport"]["gizmos"]["offsetTop"] = m_ViewGizmoOffsetTop;
         root["viewport"]["gizmos"]["rotateStepDegrees"] = m_ViewportRotateStepDeg;
+        root["viewport"]["gizmos"]["panStepPixels"] = m_ViewportPanStepPixels;
+        root["viewport"]["gizmos"]["zoomStepPercent"] = m_ViewportZoomStepPercent;
         root["viewport"]["gizmos"]["fallbackMarkerScale"] = m_FallbackGizmoVisualScale;
         root["viewport"]["gizmos"]["showTransformEmpties"] = m_ShowTransformEmpties;
         root["viewport"]["gizmos"]["transformEmptyVisualScale"] = m_TransformEmptyVisualScale;
@@ -4803,14 +4848,24 @@ namespace ds
         root["volumetrics"]["previewMaxDimension"] = m_VolumetricPreviewMaxDimension;
         root["volumetrics"]["surfaceA"]["enabled"] = m_PrimaryVolumetricSurface.enabled;
         root["volumetrics"]["surfaceA"]["blockIndex"] = m_PrimaryVolumetricSurface.blockIndex;
+        root["volumetrics"]["surfaceA"]["fieldMode"] = static_cast<int>(m_PrimaryVolumetricSurface.fieldMode);
+        root["volumetrics"]["surfaceA"]["isosurfaceMode"] = static_cast<int>(m_PrimaryVolumetricSurface.isosurfaceMode);
         root["volumetrics"]["surfaceA"]["isoValue"] = m_PrimaryVolumetricSurface.isoValue;
         root["volumetrics"]["surfaceA"]["color"] = MakeColorNode(m_PrimaryVolumetricSurface.color);
+        root["volumetrics"]["surfaceA"]["negativeColor"] = MakeColorNode(m_PrimaryVolumetricSurface.negativeColor);
         root["volumetrics"]["surfaceA"]["opacity"] = m_PrimaryVolumetricSurface.opacity;
+        root["volumetrics"]["surfaceA"]["negativeOpacity"] = m_PrimaryVolumetricSurface.negativeOpacity;
         root["volumetrics"]["surfaceB"]["enabled"] = m_SecondaryVolumetricSurface.enabled;
         root["volumetrics"]["surfaceB"]["blockIndex"] = m_SecondaryVolumetricSurface.blockIndex;
+        root["volumetrics"]["surfaceB"]["fieldMode"] = static_cast<int>(m_SecondaryVolumetricSurface.fieldMode);
+        root["volumetrics"]["surfaceB"]["isosurfaceMode"] = static_cast<int>(m_SecondaryVolumetricSurface.isosurfaceMode);
         root["volumetrics"]["surfaceB"]["isoValue"] = m_SecondaryVolumetricSurface.isoValue;
         root["volumetrics"]["surfaceB"]["color"] = MakeColorNode(m_SecondaryVolumetricSurface.color);
+        root["volumetrics"]["surfaceB"]["negativeColor"] = MakeColorNode(m_SecondaryVolumetricSurface.negativeColor);
         root["volumetrics"]["surfaceB"]["opacity"] = m_SecondaryVolumetricSurface.opacity;
+        root["volumetrics"]["surfaceB"]["negativeOpacity"] = m_SecondaryVolumetricSurface.negativeOpacity;
+        root["volumetrics"]["material"]["specularColor"] = MakeColorNode(m_VolumetricSpecularColor);
+        root["volumetrics"]["material"]["shininess"] = m_VolumetricShininess;
         YAML::Node outlinerTreeOpenStates(YAML::NodeType::Map);
         for (const auto &[key, isOpen] : m_OutlinerTreeOpenStates)
         {

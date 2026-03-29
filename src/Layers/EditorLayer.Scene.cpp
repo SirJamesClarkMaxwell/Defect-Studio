@@ -2,6 +2,72 @@
 
 namespace ds
 {
+    namespace
+    {
+        void BuildOrbitBasis(const OrbitCamera &camera, glm::vec3 &outForward, glm::vec3 &outRight, glm::vec3 &outUp)
+        {
+            outForward = glm::normalize(camera.GetTarget() - camera.GetPosition());
+            const glm::vec3 worldUp(0.0f, 0.0f, 1.0f);
+            outRight = glm::cross(outForward, worldUp);
+            if (glm::dot(outRight, outRight) < 1e-8f)
+            {
+                outRight = glm::cross(outForward, glm::vec3(0.0f, 1.0f, 0.0f));
+            }
+            outRight = glm::normalize(outRight);
+            outUp = glm::normalize(glm::cross(outRight, outForward));
+
+            if (std::abs(camera.GetRoll()) > 1e-6f)
+            {
+                const glm::quat qRoll = glm::angleAxis(camera.GetRoll(), outForward);
+                outRight = glm::normalize(qRoll * outRight);
+                outUp = glm::normalize(qRoll * outUp);
+            }
+        }
+
+        void ComposeOrbitAngles(const glm::vec3 &forward, const glm::vec3 &desiredUp, float &outYaw, float &outPitch, float &outRoll)
+        {
+            const glm::vec3 safeForward = glm::normalize(forward);
+            outYaw = std::atan2(safeForward.x, safeForward.y);
+            outPitch = std::asin(glm::clamp(safeForward.z, -1.0f, 1.0f));
+
+            const glm::vec3 worldUpBasis(0.0f, 0.0f, 1.0f);
+            glm::vec3 baseRight = glm::cross(safeForward, worldUpBasis);
+            if (glm::dot(baseRight, baseRight) < 1e-8f)
+            {
+                baseRight = glm::cross(safeForward, glm::vec3(0.0f, 1.0f, 0.0f));
+            }
+            baseRight = glm::normalize(baseRight);
+            const glm::vec3 baseUp = glm::normalize(glm::cross(baseRight, safeForward));
+
+            glm::vec3 safeUp = desiredUp - glm::dot(desiredUp, safeForward) * safeForward;
+            if (glm::dot(safeUp, safeUp) < 1e-8f)
+            {
+                safeUp = baseUp;
+            }
+            safeUp = glm::normalize(safeUp);
+
+            const float sinRoll = glm::dot(glm::cross(baseUp, safeUp), safeForward);
+            const float cosRoll = glm::dot(baseUp, safeUp);
+            outRoll = std::atan2(sinRoll, cosRoll);
+
+            const float limit = glm::half_pi<float>() - 0.0015f;
+            outPitch = glm::clamp(outPitch, -limit, limit);
+            outRoll = NormalizeAngleRadians(outRoll);
+        }
+
+        glm::vec3 ResolveReciprocalAxis(const Structure &structure, int axisIndex)
+        {
+            const int axisA = (axisIndex + 1) % 3;
+            const int axisB = (axisIndex + 2) % 3;
+            glm::vec3 reciprocal = glm::cross(structure.lattice[axisA], structure.lattice[axisB]);
+            if (glm::dot(reciprocal, reciprocal) < 1e-8f)
+            {
+                reciprocal = structure.lattice[axisIndex];
+            }
+            return reciprocal;
+        }
+    } // namespace
+
     bool EditorLayer::IsAtomSelected(std::size_t index) const
     {
         return std::find(m_SelectedAtomIndices.begin(), m_SelectedAtomIndices.end(), index) != m_SelectedAtomIndices.end();
@@ -159,6 +225,189 @@ namespace ds
         m_InteractionMode = InteractionMode::Navigate;
         LogInfo("Interaction mode: Navigate");
         AppendSelectionDebugLog("Mode switched to Navigate");
+    }
+
+    bool EditorLayer::RotateCameraRelative(float yawDeltaRadians, float pitchDeltaRadians, float rollDeltaRadians)
+    {
+        if (!m_Camera)
+        {
+            return false;
+        }
+
+        glm::vec3 forward(0.0f);
+        glm::vec3 right(0.0f);
+        glm::vec3 up(0.0f);
+        BuildOrbitBasis(*m_Camera, forward, right, up);
+
+        if (std::abs(yawDeltaRadians) > 1e-6f)
+        {
+            const glm::quat qYaw = glm::angleAxis(-yawDeltaRadians, glm::normalize(up));
+            forward = glm::normalize(qYaw * forward);
+            right = glm::normalize(qYaw * right);
+        }
+
+        if (std::abs(pitchDeltaRadians) > 1e-6f)
+        {
+            const glm::quat qPitch = glm::angleAxis(-pitchDeltaRadians, glm::normalize(right));
+            forward = glm::normalize(qPitch * forward);
+            up = glm::normalize(qPitch * up);
+        }
+        else
+        {
+            up = glm::normalize(glm::cross(right, forward));
+        }
+
+        if (std::abs(rollDeltaRadians) > 1e-6f)
+        {
+            const glm::quat qRoll = glm::angleAxis(rollDeltaRadians, glm::normalize(forward));
+            up = glm::normalize(qRoll * up);
+        }
+
+        float yaw = 0.0f;
+        float pitch = 0.0f;
+        float roll = 0.0f;
+        ComposeOrbitAngles(forward, up, yaw, pitch, roll);
+        StartCameraOrbitTransition(m_Camera->GetTarget(), m_Camera->GetDistance(), yaw, pitch, roll);
+        m_LastStructureOperationFailed = false;
+        return true;
+    }
+
+    bool EditorLayer::PanCameraRelativePixels(float deltaXPixels, float deltaYPixels)
+    {
+        if (!m_Camera)
+        {
+            return false;
+        }
+
+        glm::vec3 forward(0.0f);
+        glm::vec3 right(0.0f);
+        glm::vec3 up(0.0f);
+        BuildOrbitBasis(*m_Camera, forward, right, up);
+
+        const float panSpeed = 0.006f * m_Camera->GetDistance() * m_CameraPanSensitivity;
+        const glm::vec3 newTarget = m_Camera->GetTarget() + (-right * deltaXPixels + up * deltaYPixels) * panSpeed;
+        StartCameraOrbitTransition(newTarget, m_Camera->GetDistance(), m_Camera->GetYaw(), m_Camera->GetPitch(), m_Camera->GetRoll());
+        m_LastStructureOperationFailed = false;
+        return true;
+    }
+
+    bool EditorLayer::ZoomCameraRelativePercent(float zoomPercentDelta)
+    {
+        if (!m_Camera)
+        {
+            return false;
+        }
+
+        const float clampedPercent = glm::clamp(zoomPercentDelta, -95.0f, 95.0f);
+        if (m_Camera->GetProjectionMode() == OrbitCamera::ProjectionMode::Perspective)
+        {
+            const float zoomScale = glm::clamp(1.0f - clampedPercent * 0.01f, 0.05f, 4.0f);
+            const float newDistance = glm::clamp(m_Camera->GetDistance() * zoomScale, 0.10f, 250.0f);
+            StartCameraOrbitTransition(m_Camera->GetTarget(), newDistance, m_Camera->GetYaw(), m_Camera->GetPitch(), m_Camera->GetRoll());
+        }
+        else
+        {
+            const float zoomScale = glm::clamp(1.0f - clampedPercent * 0.01f, 0.05f, 4.0f);
+            m_Camera->SetOrthographicSize(glm::clamp(m_Camera->GetOrthographicSize() * zoomScale, 0.05f, 500.0f));
+        }
+
+        m_LastStructureOperationFailed = false;
+        return true;
+    }
+
+    bool EditorLayer::SetCameraViewToCrystalAxis(int axisIndex, bool reciprocalAxis, bool invertDirection)
+    {
+        if (!m_Camera || axisIndex < 0 || axisIndex > 2)
+        {
+            return false;
+        }
+
+        const Structure &structure = m_HasStructureLoaded ? m_WorkingStructure : Structure{};
+        glm::vec3 axis = reciprocalAxis ? ResolveReciprocalAxis(structure, axisIndex) : structure.lattice[axisIndex];
+        if (glm::dot(axis, axis) < 1e-8f)
+        {
+            axis = (axisIndex == 0) ? glm::vec3(1.0f, 0.0f, 0.0f) :
+                   (axisIndex == 1) ? glm::vec3(0.0f, 1.0f, 0.0f) :
+                                      glm::vec3(0.0f, 0.0f, 1.0f);
+        }
+
+        axis = glm::normalize(invertDirection ? -axis : axis);
+        glm::vec3 upHint = (axisIndex == 2) ? structure.lattice[1] : structure.lattice[2];
+        if (glm::dot(upHint, upHint) < 1e-8f || std::abs(glm::dot(glm::normalize(upHint), axis)) > 0.98f)
+        {
+            upHint = (axisIndex == 0) ? structure.lattice[1] : structure.lattice[0];
+        }
+        if (glm::dot(upHint, upHint) < 1e-8f || std::abs(glm::dot(glm::normalize(upHint), axis)) > 0.98f)
+        {
+            upHint = glm::vec3(0.0f, 0.0f, 1.0f);
+        }
+
+        float yaw = 0.0f;
+        float pitch = 0.0f;
+        float roll = 0.0f;
+        ComposeOrbitAngles(axis, upHint, yaw, pitch, roll);
+        StartCameraOrbitTransition(m_Camera->GetTarget(), m_Camera->GetDistance(), yaw, pitch, roll);
+        m_LastStructureOperationFailed = false;
+        return true;
+    }
+
+    std::string EditorLayer::DescribeVolumetricStructureMatch(const Structure &datasetStructure, bool &outMatches) const
+    {
+        outMatches = false;
+        if (!m_HasStructureLoaded)
+        {
+            return "No active scene structure.";
+        }
+        if (datasetStructure.GetAtomCount() == 0)
+        {
+            return "Dataset header has no atoms.";
+        }
+        if (datasetStructure.GetAtomCount() != m_WorkingStructure.GetAtomCount())
+        {
+            return "Atom count differs.";
+        }
+        if (datasetStructure.coordinateMode != m_WorkingStructure.coordinateMode)
+        {
+            return "Coordinate mode differs.";
+        }
+        if (datasetStructure.species != m_WorkingStructure.species || datasetStructure.counts != m_WorkingStructure.counts)
+        {
+            return "Species order or counts differ.";
+        }
+
+        constexpr float kLatticeTolerance = 1e-4f;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            if (glm::length(datasetStructure.lattice[axis] - m_WorkingStructure.lattice[axis]) > kLatticeTolerance)
+            {
+                return "Lattice vectors differ.";
+            }
+        }
+
+        constexpr float kAtomPositionTolerance = 1e-3f;
+        for (std::size_t atomIndex = 0; atomIndex < datasetStructure.atoms.size(); ++atomIndex)
+        {
+            if (datasetStructure.atoms[atomIndex].element != m_WorkingStructure.atoms[atomIndex].element)
+            {
+                return "Atom element order differs.";
+            }
+
+            const glm::vec3 datasetPosition =
+                (datasetStructure.coordinateMode == CoordinateMode::Direct)
+                    ? datasetStructure.DirectToCartesian(datasetStructure.atoms[atomIndex].position)
+                    : datasetStructure.atoms[atomIndex].position;
+            const glm::vec3 scenePosition =
+                (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+                    ? m_WorkingStructure.DirectToCartesian(m_WorkingStructure.atoms[atomIndex].position)
+                    : m_WorkingStructure.atoms[atomIndex].position;
+            if (glm::length(datasetPosition - scenePosition) > kAtomPositionTolerance)
+            {
+                return "Atomic positions differ.";
+            }
+        }
+
+        outMatches = true;
+        return "Matches lattice, species, and atom positions.";
     }
 
     void EditorLayer::StartCameraOrbitTransition(const glm::vec3 &target, float distance, float yaw, float pitch, std::optional<float> roll)

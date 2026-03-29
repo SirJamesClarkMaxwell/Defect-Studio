@@ -639,7 +639,7 @@ namespace ds
                 }
 
                 ScalarFieldBlock block;
-                block.label = "Block " + std::to_string(blockIndex + 1);
+                block.label = VolumetricBlockDefaultLabel(dataset.kind, blockIndex, blockIndex + 1);
                 block.dimensions = dimensions;
                 const std::ptrdiff_t localDataOffset = cursor - blockDataBuffer.data();
                 block.dataOffsetBytes = static_cast<std::uint64_t>(blockDataSectionOffset + localDataOffset);
@@ -659,6 +659,14 @@ namespace ds
         {
             error = "No volumetric blocks were parsed from file";
             return false;
+        }
+
+        for (std::size_t i = 0; i < dataset.blocks.size(); ++i)
+        {
+            dataset.blocks[i].label = VolumetricBlockDefaultLabel(
+                dataset.kind,
+                static_cast<int>(i),
+                static_cast<int>(std::min<std::size_t>(dataset.blocks.size(), static_cast<std::size_t>(std::numeric_limits<int>::max()))));
         }
 
         const auto finishedAt = std::chrono::steady_clock::now();
@@ -701,7 +709,7 @@ namespace ds
         }
 
         ScalarFieldBlock block;
-        block.label = "Block 1";
+        block.label = VolumetricBlockDefaultLabel(dataset.kind, 0, 1);
         block.dimensions = dimensions;
         const std::streamoff dataOffset = static_cast<std::streamoff>(in.tellg());
         if (dataOffset <= 0)
