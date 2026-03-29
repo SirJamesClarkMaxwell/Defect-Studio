@@ -7,9 +7,9 @@
 - Track only significant tasks/features in this TODO; do not add tiny fixes
 
 ## Current priority queue (ordered)
-- [ ] P1: Start T11 volumetrics MVP (`CHGCAR` / `PARCHG`, iso controls, block handling)
-- [ ] P1: Run a focused manual smoke test for T10 project workflow, collection editing, and drag-drop
-- [ ] P2: Start T12 Python build-script migration after T11 is scoped
+- [ ] P1: Start T12 Python build-script migration
+- [ ] P1: Run a focused manual smoke test for T11 volumetrics look/controls against VESTA reference scenes
+- [ ] P2: Run a focused manual smoke test for T10 project workflow, collection editing, and drag-drop
 - [ ] P3: After T13a/T13b, start deferred advanced render architecture task (MSDF / SVG / multi-viewport / mesh-only follow-up)
 
 ## Milestones
@@ -174,7 +174,7 @@
 - [x] `Ctrl+D` and `Delete` for active collection while Scene Outliner is focused
 - [x] keyboard shortcuts for `Create Project`, `Open Project`, and `Open Recent Project`
 
-### [ ] T11 - Volumetrics MVP (`task/11-volumetrics-mvp`)
+### [x] T11 - Volumetrics MVP (`task/11-volumetrics-mvp`)
   - [x] Add a scalar-field data model decoupled from atom / bond scene data
   - [x] Parse POSCAR-like header from `CHG` / `CHGCAR` / `PARCHG` into lattice, species, counts, and positions
   - [x] Parse volumetric grid dimensions and scalar samples in VASP order
@@ -189,13 +189,16 @@
   - [x] Add dual-iso mode for two surfaces at once
   - [x] Add per-surface controls: iso value, color, opacity, visibility
   - [x] Add sensible defaults matching the current `PARCHG.0778-0782.ALLK` sample set
-  - [ ] Decide how to label multi-block data in UI: neutral `Block A/B` first vs inferred `spin up/down`
+  - [x] Decide how to label multi-block data in UI: neutral cache blocks plus interpreted fields for `Total density`, `Magnetization`, `Spin up`, and `Spin down`
   - [x] Add basic performance guardrails: rebuild only on parameter change and allow reduced preview resolution
-  - [ ] Move preview mesh build off the main thread and smooth out UI hitches during iso changes
-  - [ ] Reshape the `Volumetrics` panel toward a VESTA-like workflow: less text, side-by-side surfaces, and optional advanced controls only
-  - [ ] Add VESTA-like positive / negative surface semantics and decide how they map onto `Surface A / Surface B`
-  - [ ] Explain `iso value` clearly in UI/help in physical terms, not only as a raw number
+  - [x] Move preview mesh build off the main thread and smooth out UI hitches during iso changes
+  - [x] Reshape the `Volumetrics` panel toward a VESTA-like workflow: less text, side-by-side surfaces, and optional advanced controls only
+  - [x] Add VESTA-like positive / negative surface semantics and map them onto `Surface A / Surface B`
+  - [x] Explain `iso value` clearly in UI/help in physical terms, not only as a raw number
+  - [x] Add Tracy-focused profiling pass plus memory instrumentation for volumetric loading and preview meshing
+  - [x] Add camera-toolbar workflow improvements for VESTA-like view/orbit controls, including icon button support
   - [ ] Validate parser and visualization against `Example-Project/project/PARCHG.0778.ALLK` to `PARCHG.0782.ALLK`
+  - [ ] Improve visual parity with VESTA for the sample scenes (surface defaults, shading, and interpretation)
 
 ### [ ] T12 - Migrate build scripts to Python (`task/12-scripts-python-migration`)
 - [ ] Add uv as dependency to project
@@ -229,6 +232,7 @@
 - [ ] Do NOT propagate exceptions through OpenGL/render hot path - document this boundary explicitly
 - [ ] Add static_assert or comment at renderer boundary: "exception-free zone below this point"
 - [ ] Job window (tracking progress (progress bars), predicted time, total time, priority)
+- [ ] tracy like window with statistics how aplication is performing
 
 ### [ ] T13b - Local code documentation site (mdBook) (`task/13b-local-docs-mdbook`)
 - [ ] Start after T13a completion (minimum fallback: after T11)
@@ -353,6 +357,6 @@
 - [ ] Document global atom catalog vs per-project appearance override workflow
 
 ## Current focus
-- Recently completed: **T08/T09 config + UI pass (YAML configs, Element Catalog, dockable Periodic Table, panel taxonomy, logging UX, persistence, undo/redo)**
-- Next planned task: **T10 - Editing workflow polish**
-- Planned branch: **task/10-editing-workflow-polish**
+- Recently completed: **T11 volumetrics MVP (VASP scalar-field parser, async block loading, VESTA-like field interpretation, dual isosurfaces, profiling, and viewport toolbar refresh)**
+- Next planned task: **T12 - Migrate build scripts to Python**
+- Planned branch: **task/12-scripts-python-migration**

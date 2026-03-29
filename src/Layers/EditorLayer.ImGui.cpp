@@ -6,6 +6,29 @@
 
 namespace ds
 {
+    namespace
+    {
+        void ScaleDockNodeSizeRefs(ImGuiDockNode *node, const ImVec2 &scale)
+        {
+            if (node == nullptr)
+            {
+                return;
+            }
+
+            node->SizeRef.x = ImMax(1.0f, node->SizeRef.x * scale.x);
+            node->SizeRef.y = ImMax(1.0f, node->SizeRef.y * scale.y);
+
+            if (node->ChildNodes[0] != nullptr)
+            {
+                ScaleDockNodeSizeRefs(node->ChildNodes[0], scale);
+            }
+            if (node->ChildNodes[1] != nullptr)
+            {
+                ScaleDockNodeSizeRefs(node->ChildNodes[1], scale);
+            }
+        }
+    }
+
     void EditorLayer::ApplyDefaultDockLayout(unsigned int dockspaceId)
     {
         ImGuiViewport *mainViewport = ImGui::GetMainViewport();
@@ -40,6 +63,7 @@ namespace ds
         ImGui::DockBuilderDockWindow("Viewport Info", bottomDockId);
         ImGui::DockBuilderDockWindow("Shortcuts", bottomDockId);
         ImGui::DockBuilderFinish(dockspaceId);
+        m_LastDockspaceWorkSize = glm::vec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y);
     }
 
     void EditorLayer::OnImGuiRender()
@@ -170,6 +194,28 @@ namespace ds
             ApplyDefaultDockLayout(dockspaceId);
             m_ApplyDefaultDockLayoutOnNextFrame = false;
             m_RequestDockLayoutReset = false;
+        }
+        else if (ImGuiDockNode *dockNode = ImGui::DockBuilderGetNode(dockspaceId))
+        {
+            const glm::vec2 currentDockspaceWorkSize(viewport->WorkSize.x, viewport->WorkSize.y);
+            if (currentDockspaceWorkSize.x > 1.0f && currentDockspaceWorkSize.y > 1.0f)
+            {
+                if (m_LastDockspaceWorkSize.x > 1.0f && m_LastDockspaceWorkSize.y > 1.0f)
+                {
+                    const float deltaX = std::fabs(currentDockspaceWorkSize.x - m_LastDockspaceWorkSize.x);
+                    const float deltaY = std::fabs(currentDockspaceWorkSize.y - m_LastDockspaceWorkSize.y);
+                    if (deltaX > 1.0f || deltaY > 1.0f)
+                    {
+                        const ImVec2 scale(
+                            currentDockspaceWorkSize.x / m_LastDockspaceWorkSize.x,
+                            currentDockspaceWorkSize.y / m_LastDockspaceWorkSize.y);
+                        ScaleDockNodeSizeRefs(dockNode, scale);
+                        dockNode->SizeRef = ImVec2(currentDockspaceWorkSize.x, currentDockspaceWorkSize.y);
+                    }
+                }
+
+                m_LastDockspaceWorkSize = currentDockspaceWorkSize;
+            }
         }
 
         if (ImGui::BeginMenuBar())
@@ -1978,7 +2024,9 @@ namespace ds
                     {
                         const float stepRad = glm::radians(glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f));
                         const ImGuiStyle &style = ImGui::GetStyle();
-                        const float shortInputWidth = 70.0f;
+                        const float shortInputWidth = 112.0f;
+                        const float iconButtonExtent = std::max(18.0f, ImGui::GetFrameHeight() - 2.0f);
+                        const ImVec2 iconButtonSize(iconButtonExtent, iconButtonExtent);
 
                         auto sameLineTight = [&]()
                         {
@@ -1996,6 +2044,38 @@ namespace ds
                             }
                         };
 
+                        auto handleIconButton = [&](const char *id,
+                                                    const char *iconFileName,
+                                                    const char *fallbackLabel,
+                                                    const char *tooltip) -> bool
+                        {
+                            bool pressed = false;
+                            if (const ToolbarIconTexture *icon = GetViewportToolbarIcon(iconFileName))
+                            {
+                                const ImTextureRef texRef(reinterpret_cast<void *>(static_cast<uintptr_t>(icon->rendererId)));
+                                pressed = ImGui::ImageButton(
+                                    id,
+                                    texRef,
+                                    iconButtonSize,
+                                    ImVec2(0.0f, 0.0f),
+                                    ImVec2(1.0f, 1.0f),
+                                    ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+                                    ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+                            }
+                            else
+                            {
+                                pressed = ImGui::Button(fallbackLabel, iconButtonSize);
+                            }
+
+                            if (tooltip != nullptr && tooltip[0] != '\0' &&
+                                ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+                            {
+                                ImGui::SetTooltip("%s", tooltip);
+                            }
+
+                            return pressed;
+                        };
+
                         ImGui::TextUnformatted("View");
                         sameLineTight();
                         handleAxisButton("a", 0, false, false);
@@ -2011,7 +2091,7 @@ namespace ds
                         handleAxisButton("c*", 2, true, false);
 
                         sameLineTight();
-                        if (ImGui::Button("<"))
+                        if (handleIconButton("##ViewportOrbitLeft", "left-arrow.png", "<", "Orbit left relative to camera"))
                         {
                             if (RotateCameraRelative(stepRad, 0.0f))
                             {
@@ -2019,7 +2099,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button(">"))
+                        if (handleIconButton("##ViewportOrbitRight", "right-arrow.png", ">", "Orbit right relative to camera"))
                         {
                             if (RotateCameraRelative(-stepRad, 0.0f))
                             {
@@ -2027,7 +2107,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("^"))
+                        if (handleIconButton("##ViewportOrbitUp", "up-arrow.png", "^", "Orbit up relative to camera"))
                         {
                             if (RotateCameraRelative(0.0f, stepRad))
                             {
@@ -2035,7 +2115,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("v"))
+                        if (handleIconButton("##ViewportOrbitDown", "down-arrow.png", "v", "Orbit down relative to camera"))
                         {
                             if (RotateCameraRelative(0.0f, -stepRad))
                             {
@@ -2043,7 +2123,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("Roll-"))
+                        if (handleIconButton("##ViewportRollLeft", "rotate-left.png", "Rl-", "Roll left relative to camera"))
                         {
                             if (RotateCameraRelative(0.0f, 0.0f, -stepRad))
                             {
@@ -2051,7 +2131,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("Roll+"))
+                        if (handleIconButton("##ViewportRollRight", "rotate-right.png", "Rl+", "Roll right relative to camera"))
                         {
                             if (RotateCameraRelative(0.0f, 0.0f, stepRad))
                             {
@@ -2070,7 +2150,7 @@ namespace ds
                         ImGui::PopItemWidth();
 
                         sameLineTight();
-                        if (ImGui::Button("Pan^"))
+                        if (handleIconButton("##ViewportPanUp", "up-arrow.png", "P^", "Pan up in camera plane"))
                         {
                             if (PanCameraRelativePixels(0.0f, m_ViewportPanStepPixels))
                             {
@@ -2078,7 +2158,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("Panv"))
+                        if (handleIconButton("##ViewportPanDown", "down-arrow.png", "Pv", "Pan down in camera plane"))
                         {
                             if (PanCameraRelativePixels(0.0f, -m_ViewportPanStepPixels))
                             {
@@ -2086,7 +2166,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("Pan<"))
+                        if (handleIconButton("##ViewportPanLeft", "left-arrow.png", "P<", "Pan left in camera plane"))
                         {
                             if (PanCameraRelativePixels(m_ViewportPanStepPixels, 0.0f))
                             {
@@ -2094,7 +2174,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("Pan>"))
+                        if (handleIconButton("##ViewportPanRight", "right-arrow.png", "P>", "Pan right in camera plane"))
                         {
                             if (PanCameraRelativePixels(-m_ViewportPanStepPixels, 0.0f))
                             {
@@ -2113,7 +2193,7 @@ namespace ds
                         ImGui::PopItemWidth();
 
                         sameLineTight();
-                        if (ImGui::Button("-"))
+                        if (handleIconButton("##ViewportZoomOut", "minus.png", "-", "Zoom out"))
                         {
                             if (ZoomCameraRelativePercent(-m_ViewportZoomStepPercent))
                             {
@@ -2129,7 +2209,7 @@ namespace ds
                             }
                         }
                         sameLineTight();
-                        if (ImGui::Button("+"))
+                        if (handleIconButton("##ViewportZoomIn", "plus.png", "+", "Zoom in"))
                         {
                             if (ZoomCameraRelativePercent(m_ViewportZoomStepPercent))
                             {

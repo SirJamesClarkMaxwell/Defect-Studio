@@ -303,6 +303,14 @@ namespace ds
             std::vector<ClipboardEmpty> empties;
         };
 
+        struct ToolbarIconTexture
+        {
+            std::uint32_t rendererId = 0;
+            int width = 0;
+            int height = 0;
+            bool loadAttempted = false;
+        };
+
         static constexpr const char *kDefaultConfigPath = "config/default.yaml";
         static constexpr const char *kUiSettingsPath = "config/ui_settings.yaml";
         static constexpr const char *kLegacyUiSettingsPath = "config/ui_settings.ini";
@@ -436,6 +444,8 @@ namespace ds
         bool ZoomCameraRelativePercent(float zoomPercentDelta);
         bool SetCameraViewToCrystalAxis(int axisIndex, bool reciprocalAxis, bool invertDirection);
         std::string DescribeVolumetricStructureMatch(const Structure &datasetStructure, bool &outMatches) const;
+        const ToolbarIconTexture *GetViewportToolbarIcon(const std::string &iconFileName);
+        void ReleaseViewportToolbarIcons();
         void MarkVolumetricMeshesDirty();
         void SyncVolumetricSurfaceDefaults();
         bool RebuildVolumetricSurfaceMesh(struct VolumetricSurfaceState &surfaceState);
@@ -499,6 +509,7 @@ namespace ds
         bool m_LogAutoScroll = true;
         bool m_ApplyDefaultDockLayoutOnNextFrame = false;
         bool m_RequestDockLayoutReset = false;
+        glm::vec2 m_LastDockspaceWorkSize = glm::vec2(0.0f);
 
         bool m_ViewportHovered = false;
         bool m_ViewportFocused = false;
@@ -612,6 +623,7 @@ namespace ds
         int m_VolumetricPreviewMaxDimension = 96;
         float m_ViewportPanStepPixels = 10.0f;
         float m_ViewportZoomStepPercent = 10.0f;
+        std::unordered_map<std::string, ToolbarIconTexture> m_ViewportToolbarIcons;
         bool m_LastVolumetricOperationFailed = false;
         std::string m_LastVolumetricMessage;
         struct VolumetricSurfaceState
