@@ -1,7 +1,11 @@
 #include "IO/VaspVolumetricParser.h"
+#include "Core/Profiling.h"
 
 #include <algorithm>
+#include <charconv>
+#include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -300,93 +304,495 @@ namespace ds
             return true;
         }
 
+        void SkipAsciiWhitespace(const char *&cursor, const char *end)
+        {
+            while (cursor < end && std::isspace(static_cast<unsigned char>(*cursor)) != 0)
+            {
+                ++cursor;
+            }
+        }
+
+        bool ReadIntToken(const char *&cursor, const char *end, int &outValue)
+        {
+            SkipAsciiWhitespace(cursor, end);
+            if (cursor >= end)
+            {
+                return false;
+            }
+
+            const char *tokenStart = cursor;
+            if (*cursor == '+' || *cursor == '-')
+            {
+                ++cursor;
+            }
+
+            if (cursor >= end || !std::isdigit(static_cast<unsigned char>(*cursor)))
+            {
+                cursor = tokenStart;
+                return false;
+            }
+
+            while (cursor < end && std::isdigit(static_cast<unsigned char>(*cursor)) != 0)
+            {
+                ++cursor;
+            }
+
+            const auto result = std::from_chars(tokenStart, cursor, outValue);
+            if (result.ec != std::errc())
+            {
+                cursor = tokenStart;
+                return false;
+            }
+
+            return true;
+        }
+
+        bool ReadGridDimensions(const char *&cursor, const char *end, glm::ivec3 &outDimensions)
+        {
+            const char *originalCursor = cursor;
+            int nx = 0;
+            int ny = 0;
+            int nz = 0;
+            if (!ReadIntToken(cursor, end, nx) || !ReadIntToken(cursor, end, ny) || !ReadIntToken(cursor, end, nz))
+            {
+                cursor = originalCursor;
+                return false;
+            }
+
+            if (nx <= 0 || ny <= 0 || nz <= 0)
+            {
+                cursor = originalCursor;
+                return false;
+            }
+
+            outDimensions = glm::ivec3(nx, ny, nz);
+            return true;
+        }
+
         std::size_t SampleCountForGrid(glm::ivec3 dimensions)
         {
             return static_cast<std::size_t>(dimensions.x) *
                    static_cast<std::size_t>(dimensions.y) *
                    static_cast<std::size_t>(dimensions.z);
         }
-    } // namespace
 
-    bool VaspVolumetricParser::ParseFromFile(const std::string &path, VolumetricDataset &outDataset, std::string &error) const
-    {
-        std::ifstream in(path);
-        if (!in.is_open())
+        bool ReadRemainingBytes(std::istream &stream, std::string &buffer, std::string &error)
         {
-            error = "Could not open volumetric file: " + path;
-            return false;
-        }
-
-        VolumetricDataset dataset;
-        dataset.sourcePath = path;
-        dataset.sourceLabel = std::filesystem::path(path).filename().string();
-        dataset.kind = InferVolumetricFileKind(path);
-
-        if (!ParseStructureHeader(in, path, dataset.structure, error))
-        {
-            return false;
-        }
-
-        dataset.title = dataset.structure.title;
-
-        std::size_t blockIndex = 0;
-        while (true)
-        {
-            glm::ivec3 dimensions(0);
-            if (!ReadGridDimensions(in, dimensions))
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::ReadRemainingBytes");
+            const std::streamoff startOffset = static_cast<std::streamoff>(stream.tellg());
+            if (startOffset < 0)
             {
-                if (blockIndex == 0)
+                error = "Could not determine volumetric data offset.";
+                return false;
+            }
+
+            stream.seekg(0, std::ios::end);
+            const std::streamoff endOffset = static_cast<std::streamoff>(stream.tellg());
+            if (endOffset < startOffset)
+            {
+                error = "Volumetric file has invalid stream offsets.";
+                return false;
+            }
+
+            const std::size_t byteCount = static_cast<std::size_t>(endOffset - startOffset);
+            buffer.resize(byteCount);
+            stream.seekg(startOffset, std::ios::beg);
+            if (byteCount > 0)
+            {
+                if (!stream.read(buffer.data(), static_cast<std::streamsize>(byteCount)))
                 {
-                    error = "Missing volumetric grid dimensions after structure header";
+                    error = "Could not read volumetric scalar data.";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool SkipSamples(std::istream &stream, std::size_t sampleCount, std::string &error)
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::SkipSamples");
+            for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex)
+            {
+                double rawValue = 0.0;
+                if (!(stream >> rawValue))
+                {
+                    error = "Unexpected end of volumetric data while skipping scalar samples";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool SkipSamples(const char *&cursor, const char *end, std::size_t sampleCount, std::string &error)
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::SkipSamplesFast");
+            for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex)
+            {
+                SkipAsciiWhitespace(cursor, end);
+                if (cursor >= end)
+                {
+                    error = "Unexpected end of volumetric data while skipping scalar samples";
                     return false;
                 }
 
-                in.clear();
-                break;
+                char *tokenEnd = nullptr;
+                std::strtof(cursor, &tokenEnd);
+                if (tokenEnd == cursor)
+                {
+                    error = "Encountered invalid scalar token while skipping volumetric samples";
+                    return false;
+                }
+                cursor = tokenEnd;
             }
+            return true;
+        }
 
-            ScalarFieldBlock block;
-            block.label = "Block " + std::to_string(blockIndex + 1);
-            block.dimensions = dimensions;
-
-            const std::size_t sampleCount = SampleCountForGrid(dimensions);
-            block.samples.resize(sampleCount);
+        bool ReadSamples(std::istream &stream, ScalarFieldBlock &block, std::string &error)
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::ReadSamples");
+            const std::size_t sampleCount = SampleCountForGrid(block.dimensions);
+            {
+                DS_PROFILE_SCOPE_N("VaspVolumetricParser::AllocateSamples");
+                block.samples.resize(sampleCount);
+            }
+            if (!block.samples.empty())
+            {
+                DS_PROFILE_ALLOC_N(block.samples.data(), block.samples.size() * sizeof(float), "VolumetricBlockSamples");
+            }
 
             double sum = 0.0;
             float minValue = std::numeric_limits<float>::max();
             float maxValue = std::numeric_limits<float>::lowest();
             float absMaxValue = 0.0f;
 
-            for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex)
             {
-                double rawValue = 0.0;
-                if (!(in >> rawValue))
+                DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParseScalarSamples");
+                for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex)
                 {
-                    error = "Unexpected end of volumetric data while reading " + block.label;
+                    double rawValue = 0.0;
+                    if (!(stream >> rawValue))
+                    {
+                        if (!block.samples.empty())
+                        {
+                            DS_PROFILE_FREE_N(block.samples.data(), "VolumetricBlockSamples");
+                        }
+                        error = "Unexpected end of volumetric data while reading " + block.label;
+                        return false;
+                    }
+
+                    const float value = static_cast<float>(rawValue);
+                    block.samples[sampleIndex] = value;
+                    sum += static_cast<double>(value);
+                    minValue = std::min(minValue, value);
+                    maxValue = std::max(maxValue, value);
+                    absMaxValue = std::max(absMaxValue, std::abs(value));
+                }
+            }
+
+            {
+                DS_PROFILE_SCOPE_N("VaspVolumetricParser::FinalizeSampleStats");
+                block.statistics.minValue = minValue;
+                block.statistics.maxValue = maxValue;
+                block.statistics.meanValue = sampleCount > 0 ? static_cast<float>(sum / static_cast<double>(sampleCount)) : 0.0f;
+                block.statistics.absMaxValue = absMaxValue;
+                block.statistics.valid = true;
+                block.samplesLoaded = true;
+            }
+            return true;
+        }
+
+        bool ReadSamples(const char *&cursor, const char *end, ScalarFieldBlock &block, std::string &error)
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::ReadSamplesFast");
+            const std::size_t sampleCount = SampleCountForGrid(block.dimensions);
+            {
+                DS_PROFILE_SCOPE_N("VaspVolumetricParser::AllocateSamplesFast");
+                block.samples.resize(sampleCount);
+            }
+            if (!block.samples.empty())
+            {
+                DS_PROFILE_ALLOC_N(block.samples.data(), block.samples.size() * sizeof(float), "VolumetricBlockSamples");
+            }
+
+            double sum = 0.0;
+            float minValue = std::numeric_limits<float>::max();
+            float maxValue = std::numeric_limits<float>::lowest();
+            float absMaxValue = 0.0f;
+
+            {
+                DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParseScalarSamplesFast");
+                for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex)
+                {
+                    SkipAsciiWhitespace(cursor, end);
+                    if (cursor >= end)
+                    {
+                        if (!block.samples.empty())
+                        {
+                            DS_PROFILE_FREE_N(block.samples.data(), "VolumetricBlockSamples");
+                        }
+                        error = "Unexpected end of volumetric data while reading " + block.label;
+                        return false;
+                    }
+
+                    char *tokenEnd = nullptr;
+                    const float value = std::strtof(cursor, &tokenEnd);
+                    if (tokenEnd == cursor)
+                    {
+                        if (!block.samples.empty())
+                        {
+                            DS_PROFILE_FREE_N(block.samples.data(), "VolumetricBlockSamples");
+                        }
+                        error = "Encountered invalid scalar token while reading " + block.label;
+                        return false;
+                    }
+
+                    cursor = tokenEnd;
+                    block.samples[sampleIndex] = value;
+                    sum += static_cast<double>(value);
+                    minValue = std::min(minValue, value);
+                    maxValue = std::max(maxValue, value);
+                    absMaxValue = std::max(absMaxValue, std::abs(value));
+                }
+            }
+
+            {
+                DS_PROFILE_SCOPE_N("VaspVolumetricParser::FinalizeSampleStatsFast");
+                block.statistics.minValue = minValue;
+                block.statistics.maxValue = maxValue;
+                block.statistics.meanValue = sampleCount > 0 ? static_cast<float>(sum / static_cast<double>(sampleCount)) : 0.0f;
+                block.statistics.absMaxValue = absMaxValue;
+                block.statistics.valid = true;
+                block.samplesLoaded = true;
+            }
+            return true;
+        }
+    } // namespace
+
+    bool VaspVolumetricParser::ParseStructureFromFile(const std::string &path, Structure &outStructure, std::string &error) const
+    {
+        DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParseStructureFromFile");
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+        {
+            error = "Could not open volumetric file: " + path;
+            return false;
+        }
+
+        return ParseStructureHeader(in, path, outStructure, error);
+    }
+
+    bool VaspVolumetricParser::ParseMetadataFromFile(const std::string &path, VolumetricDataset &outDataset, std::string &error) const
+    {
+        DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParseMetadataFromFile");
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+        {
+            error = "Could not open volumetric file: " + path;
+            return false;
+        }
+
+        const auto startedAt = std::chrono::steady_clock::now();
+        VolumetricDataset dataset;
+        dataset.sourcePath = path;
+        dataset.sourceLabel = std::filesystem::path(path).filename().string();
+        dataset.kind = InferVolumetricFileKind(path);
+
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParseStructureHeader");
+            if (!ParseStructureHeader(in, path, dataset.structure, error))
+            {
+                return false;
+            }
+        }
+
+        dataset.title = dataset.structure.title;
+
+        const std::streamoff blockDataSectionOffset = static_cast<std::streamoff>(in.tellg());
+        if (blockDataSectionOffset < 0)
+        {
+            error = "Could not determine volumetric data section offset.";
+            return false;
+        }
+
+        std::string blockDataBuffer;
+        if (!ReadRemainingBytes(in, blockDataBuffer, error))
+        {
+            return false;
+        }
+
+        const char *cursor = blockDataBuffer.data();
+        const char *end = cursor + blockDataBuffer.size();
+        std::size_t blockIndex = 0;
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::ScanBlockMetadata");
+            while (true)
+            {
+                glm::ivec3 dimensions(0);
+                if (!ReadGridDimensions(cursor, end, dimensions))
+                {
+                    if (blockIndex == 0)
+                    {
+                        error = "Missing volumetric grid dimensions after structure header";
+                        return false;
+                    }
+                    break;
+                }
+
+                ScalarFieldBlock block;
+                block.label = "Block " + std::to_string(blockIndex + 1);
+                block.dimensions = dimensions;
+                const std::ptrdiff_t localDataOffset = cursor - blockDataBuffer.data();
+                block.dataOffsetBytes = static_cast<std::uint64_t>(blockDataSectionOffset + localDataOffset);
+
+                const std::size_t sampleCount = SampleCountForGrid(dimensions);
+                if (!SkipSamples(cursor, end, sampleCount, error))
+                {
                     return false;
                 }
 
-                const float value = static_cast<float>(rawValue);
-                block.samples[sampleIndex] = value;
-                sum += static_cast<double>(value);
-                minValue = std::min(minValue, value);
-                maxValue = std::max(maxValue, value);
-                absMaxValue = std::max(absMaxValue, std::abs(value));
+                dataset.blocks.push_back(std::move(block));
+                ++blockIndex;
             }
-
-            block.statistics.minValue = minValue;
-            block.statistics.maxValue = maxValue;
-            block.statistics.meanValue = sampleCount > 0 ? static_cast<float>(sum / static_cast<double>(sampleCount)) : 0.0f;
-            block.statistics.absMaxValue = absMaxValue;
-
-            dataset.blocks.push_back(std::move(block));
-            ++blockIndex;
         }
 
         if (dataset.blocks.empty())
         {
             error = "No volumetric blocks were parsed from file";
             return false;
+        }
+
+        const auto finishedAt = std::chrono::steady_clock::now();
+        dataset.metadataParseMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+        outDataset = std::move(dataset);
+        return true;
+    }
+
+    bool VaspVolumetricParser::ParsePreviewDatasetFromFile(const std::string &path, VolumetricDataset &outDataset, std::string &error) const
+    {
+        DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParsePreviewDatasetFromFile");
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+        {
+            error = "Could not open volumetric file: " + path;
+            return false;
+        }
+
+        const auto startedAt = std::chrono::steady_clock::now();
+        VolumetricDataset dataset;
+        dataset.sourcePath = path;
+        dataset.sourceLabel = std::filesystem::path(path).filename().string();
+        dataset.kind = InferVolumetricFileKind(path);
+
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParsePreviewStructureHeader");
+            if (!ParseStructureHeader(in, path, dataset.structure, error))
+            {
+                return false;
+            }
+        }
+
+        dataset.title = dataset.structure.title;
+
+        glm::ivec3 dimensions(0);
+        if (!ReadGridDimensions(in, dimensions))
+        {
+            error = "Missing volumetric grid dimensions after structure header";
+            return false;
+        }
+
+        ScalarFieldBlock block;
+        block.label = "Block 1";
+        block.dimensions = dimensions;
+        const std::streamoff dataOffset = static_cast<std::streamoff>(in.tellg());
+        if (dataOffset <= 0)
+        {
+            error = "Could not determine volumetric block offset.";
+            return false;
+        }
+
+        block.dataOffsetBytes = static_cast<std::uint64_t>(dataOffset);
+        dataset.blocks.push_back(std::move(block));
+
+        const auto finishedAt = std::chrono::steady_clock::now();
+        dataset.metadataParseMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+        outDataset = std::move(dataset);
+        return true;
+    }
+
+    bool VaspVolumetricParser::LoadBlockSamplesFromFile(const std::string &path, const ScalarFieldBlock &blockMetadata, ScalarFieldBlock &outBlock, std::string &error) const
+    {
+        DS_PROFILE_SCOPE_N("VaspVolumetricParser::LoadBlockSamplesFromFile");
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+        {
+            error = "Could not open volumetric file: " + path;
+            return false;
+        }
+
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::SeekToBlockData");
+            if (blockMetadata.dataOffsetBytes > 0)
+            {
+                in.seekg(static_cast<std::streamoff>(blockMetadata.dataOffsetBytes), std::ios::beg);
+                if (!in.good())
+                {
+                    error = "Could not seek to volumetric block data.";
+                    return false;
+                }
+            }
+            else
+            {
+                error = "Volumetric block has no stored file offset.";
+                return false;
+            }
+        }
+
+        std::string blockDataBuffer;
+        if (!ReadRemainingBytes(in, blockDataBuffer, error))
+        {
+            return false;
+        }
+
+        const auto startedAt = std::chrono::steady_clock::now();
+        ScalarFieldBlock loadedBlock = blockMetadata;
+        loadedBlock.samples.clear();
+        loadedBlock.statistics = {};
+        loadedBlock.samplesLoaded = false;
+        loadedBlock.loadFailed = false;
+        loadedBlock.lastLoadError.clear();
+        {
+            DS_PROFILE_SCOPE_N("VaspVolumetricParser::ReadBlockSamples");
+            const char *cursor = blockDataBuffer.data();
+            const char *end = cursor + blockDataBuffer.size();
+            if (!ReadSamples(cursor, end, loadedBlock, error))
+            {
+                return false;
+            }
+        }
+
+        const auto finishedAt = std::chrono::steady_clock::now();
+        loadedBlock.lastLoadMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+        outBlock = std::move(loadedBlock);
+        return true;
+    }
+
+    bool VaspVolumetricParser::ParseFromFile(const std::string &path, VolumetricDataset &outDataset, std::string &error) const
+    {
+        DS_PROFILE_SCOPE_N("VaspVolumetricParser::ParseFromFile");
+        VolumetricDataset dataset;
+        if (!ParseMetadataFromFile(path, dataset, error))
+        {
+            return false;
+        }
+
+        for (ScalarFieldBlock &block : dataset.blocks)
+        {
+            ScalarFieldBlock loadedBlock;
+            if (!LoadBlockSamplesFromFile(path, block, loadedBlock, error))
+            {
+                return false;
+            }
+            block = std::move(loadedBlock);
         }
 
         outDataset = std::move(dataset);

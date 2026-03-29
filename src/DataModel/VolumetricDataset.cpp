@@ -33,6 +33,11 @@ namespace ds
         return samples.size() * sizeof(float);
     }
 
+    std::size_t ScalarFieldBlock::EstimatedMemoryBytes() const
+    {
+        return SampleCount() * sizeof(float);
+    }
+
     int ScalarFieldBlock::SuggestedDecimationStep(int maxAxis) const
     {
         const int clampedMaxAxis = std::max(8, maxAxis);
@@ -80,6 +85,16 @@ namespace ds
         for (const ScalarFieldBlock &block : blocks)
         {
             total += block.MemoryBytes();
+        }
+        return total;
+    }
+
+    std::size_t VolumetricDataset::TotalEstimatedMemoryBytes() const
+    {
+        std::size_t total = 0;
+        for (const ScalarFieldBlock &block : blocks)
+        {
+            total += block.EstimatedMemoryBytes();
         }
         return total;
     }

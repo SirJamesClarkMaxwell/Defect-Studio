@@ -61,6 +61,7 @@ namespace ds
 
     void EditorLayer::OnAttach()
     {
+        constexpr const char *kHardcodedProfilingVolumetricPath = "assets/samples/PARCHG.0782.ALLK";
         LogInfo("EditorLayer::OnAttach begin");
         m_ApplyDefaultDockLayoutOnNextFrame = !std::filesystem::exists(GetAppRootPath() / "config" / "imgui_layout.ini");
 
@@ -125,17 +126,80 @@ namespace ds
         }
         ApplyCameraSensitivity();
 
+        bool hardcodedProfilingSampleAvailable = false;
+        std::error_code hardcodedPathEc;
+        std::filesystem::path hardcodedVolumetricPath = std::filesystem::absolute(GetAppRootPath() / kHardcodedProfilingVolumetricPath, hardcodedPathEc);
+        if (hardcodedPathEc)
+        {
+            hardcodedVolumetricPath = GetAppRootPath() / kHardcodedProfilingVolumetricPath;
+        }
+        hardcodedVolumetricPath = hardcodedVolumetricPath.lexically_normal();
+        if (std::filesystem::exists(hardcodedVolumetricPath))
+        {
+            LogInfo("Hardcoded profiling sample detected: " + hardcodedVolumetricPath.string());
+            Structure profilingStructure;
+            std::string profilingStructureError;
+            if (m_VaspVolumetricParser.ParseStructureFromFile(hardcodedVolumetricPath.string(), profilingStructure, profilingStructureError))
+            {
+                ApplyParsedStructureToScene(profilingStructure, hardcodedVolumetricPath.string(), false);
+                hardcodedProfilingSampleAvailable = true;
+            }
+            else
+            {
+                LogWarn("Hardcoded volumetric profiling sample structure parse failed: " + profilingStructureError);
+            }
+        }
+
         const std::filesystem::path startupImportPath = ResolveProjectStructurePath();
-        if (!startupImportPath.empty() && std::filesystem::exists(startupImportPath))
+        if (!hardcodedProfilingSampleAvailable && !startupImportPath.empty() && std::filesystem::exists(startupImportPath))
         {
             LogInfo("Attempting startup import: " + startupImportPath.string());
             LoadStructureFromPath(startupImportPath.string());
         }
-        else if (!startupImportPath.empty())
+        else if (!hardcodedProfilingSampleAvailable && !startupImportPath.empty())
         {
             m_LastStructureOperationFailed = true;
             m_LastStructureMessage = "Startup import skipped: file not found: " + startupImportPath.string();
             LogWarn(m_LastStructureMessage);
+        }
+
+        LogInfo("Loading project volumetric datasets from manifest");
+        LoadProjectVolumetricDatasets();
+
+        if (hardcodedProfilingSampleAvailable)
+        {
+            VolumetricDataset previewDataset;
+            std::string previewDatasetError;
+            if (m_VaspVolumetricParser.ParsePreviewDatasetFromFile(hardcodedVolumetricPath.string(), previewDataset, previewDatasetError))
+            {
+                bool alreadyPresent = false;
+                for (std::size_t datasetIndex = 0; datasetIndex < m_VolumetricDatasets.size(); ++datasetIndex)
+                {
+                    if (std::filesystem::path(m_VolumetricDatasets[datasetIndex].sourcePath) == hardcodedVolumetricPath)
+                    {
+                        m_VolumetricDatasets[datasetIndex] = std::move(previewDataset);
+                        m_ActiveVolumetricDatasetIndex = static_cast<int>(datasetIndex);
+                        alreadyPresent = true;
+                        break;
+                    }
+                }
+
+                if (!alreadyPresent)
+                {
+                    m_VolumetricDatasets.push_back(std::move(previewDataset));
+                    m_ActiveVolumetricDatasetIndex = static_cast<int>(m_VolumetricDatasets.size()) - 1;
+                }
+
+                m_ActiveVolumetricBlockIndex = 0;
+                m_ShowVolumetricsPanel = true;
+                MarkVolumetricMeshesDirty();
+                QueueVolumetricBlockLoad(m_ActiveVolumetricDatasetIndex, 0, true);
+                LogInfo("Using hardcoded volumetric profiling sample on startup.");
+            }
+            else
+            {
+                LogWarn("Hardcoded volumetric profiling preview metadata parse failed: " + previewDatasetError);
+            }
         }
 
         LogInfo("Loading scene state from " + GetProjectSceneStateFilePath().string());

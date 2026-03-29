@@ -23,3 +23,6 @@
 [submodule "vendor/yaml-cpp"]
 	path = vendor/yaml-cpp
 	url = https://github.com/sjcmdev/yaml-cpp.git
+[submodule "vendor/thread-pool"]
+	path = vendor/thread-pool
+	url = https://github.com/sjcmdev/thread-pool.git

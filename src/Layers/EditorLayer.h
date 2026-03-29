@@ -9,10 +9,13 @@
 #include "Volumetrics/IsosurfaceExtractor.h"
 #include "Renderer/IRenderBackend.h"
 
+#include <BS_thread_pool.hpp>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -361,6 +364,9 @@ namespace ds
         bool OpenProjectAt(const std::filesystem::path &folderPath);
         void ResetProjectSceneState();
         void EnsureElementAppearanceSelection();
+        bool ApplyParsedStructureToScene(const Structure &parsed, const std::string &sourcePath, bool updateProjectStructurePath);
+        std::filesystem::path GetPreferredStructureDialogDirectory() const;
+        std::filesystem::path GetPreferredVolumetricDialogDirectory() const;
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool AppendStructureFromPathAsCollection(const std::string &path);
@@ -368,6 +374,13 @@ namespace ds
         bool BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const;
         bool ExportCollectionToPath(int collectionIndex, const std::string &path, CoordinateMode mode, int precision);
         bool LoadVolumetricDatasetFromPath(const std::string &path);
+        bool QueueVolumetricDatasetLoad(const std::string &path, bool autoApplyStructureIfNeeded = true, bool persistToProject = true);
+        bool QueueVolumetricBlockLoad(int datasetIndex, int blockIndex, bool forceRetry = false);
+        void PumpVolumetricLoadingJobs();
+        void PumpVolumetricSurfaceBuildJobs();
+        bool QueueVolumetricSurfaceBuild(int surfaceSlot);
+        bool HasPendingVolumetricDatasetLoad(const std::string &normalizedPath) const;
+        bool HasPendingVolumetricBlockLoad(const std::string &datasetPath, int blockIndex) const;
         bool RemoveVolumetricDatasetAtIndex(int datasetIndex);
         void ClearVolumetricDatasets();
         void EnsureVolumetricSelection();
@@ -602,14 +615,68 @@ namespace ds
             glm::vec3 color = glm::vec3(1.0f, 0.92f, 0.14f);
             float opacity = 0.42f;
             bool dirty = true;
+            bool buildQueued = false;
             bool hasMesh = false;
             glm::ivec3 sampledDimensions = glm::ivec3(0);
             int decimationStep = 1;
             double lastBuildMilliseconds = 0.0;
             std::string lastStatus;
             SurfaceTriangleMesh mesh;
+            std::uint64_t meshRevision = 1;
+            std::uint64_t pendingBuildRequestId = 0;
+        };
+        struct VolumetricDatasetLoadResult
+        {
+            std::uint64_t generation = 0;
+            std::string path;
+            VolumetricDataset dataset;
+            std::string error;
+            double wallMilliseconds = 0.0;
+            bool success = false;
+        };
+        struct PendingVolumetricDatasetLoad
+        {
+            std::string normalizedPath;
+            std::future<VolumetricDatasetLoadResult> future;
+        };
+        struct VolumetricBlockLoadResult
+        {
+            std::uint64_t generation = 0;
+            std::string datasetPath;
+            int blockIndex = -1;
+            ScalarFieldBlock block;
+            std::string error;
+            double wallMilliseconds = 0.0;
+            bool success = false;
+        };
+        struct PendingVolumetricBlockLoad
+        {
+            std::string datasetPath;
+            int blockIndex = -1;
+            std::future<VolumetricBlockLoadResult> future;
+        };
+        struct VolumetricSurfaceBuildResult
+        {
+            std::uint64_t generation = 0;
+            int surfaceSlot = -1;
+            std::uint64_t requestId = 0;
+            std::string datasetPath;
+            int blockIndex = -1;
+            SurfaceTriangleMesh mesh;
+            glm::ivec3 sampledDimensions = glm::ivec3(0);
+            int decimationStep = 1;
+            std::string error;
+            double wallMilliseconds = 0.0;
+            bool success = false;
+        };
+        struct PendingVolumetricSurfaceBuild
+        {
+            int surfaceSlot = -1;
+            std::uint64_t requestId = 0;
+            std::future<VolumetricSurfaceBuildResult> future;
         };
         IsosurfaceExtractor m_IsosurfaceExtractor;
+        BS::thread_pool<> m_BackgroundThreadPool;
         VolumetricSurfaceState m_PrimaryVolumetricSurface;
         VolumetricSurfaceState m_SecondaryVolumetricSurface = []()
         {
@@ -621,6 +688,11 @@ namespace ds
             return state;
         }();
         std::string m_VolumetricSurfaceDatasetKey;
+        std::vector<PendingVolumetricDatasetLoad> m_PendingVolumetricDatasetLoads;
+        std::vector<PendingVolumetricBlockLoad> m_PendingVolumetricBlockLoads;
+        std::vector<PendingVolumetricSurfaceBuild> m_PendingVolumetricSurfaceBuilds;
+        std::uint64_t m_VolumetricLoadGeneration = 1;
+        std::uint64_t m_VolumetricSurfaceBuildRequestCounter = 1;
         std::size_t m_LastLoggedBondCount = std::numeric_limits<std::size_t>::max();
         bool m_LastStructureOperationFailed = false;
         std::string m_LastStructureMessage;

@@ -1,4 +1,5 @@
 #include "Volumetrics/IsosurfaceExtractor.h"
+#include "Core/Profiling.h"
 
 #include <algorithm>
 #include <array>
@@ -263,7 +264,9 @@ namespace ds
     void SurfaceTriangleMesh::Clear()
     {
         positions.clear();
+        positions.shrink_to_fit();
         normals.clear();
+        normals.shrink_to_fit();
         boundsMin = glm::vec3(0.0f);
         boundsMax = glm::vec3(0.0f);
     }
@@ -275,6 +278,7 @@ namespace ds
         IsosurfaceBuildResult &outResult,
         std::string &error) const
     {
+        DS_PROFILE_SCOPE_N("IsosurfaceExtractor::BuildPreviewMesh");
         outResult = {};
         error.clear();
 
@@ -301,23 +305,26 @@ namespace ds
         std::vector<float> sampledValues(sampledCount, 0.0f);
         std::vector<glm::vec3> sampledPositions(sampledCount, glm::vec3(0.0f));
 
-        for (int z = 0; z < sampledDimensions.z; ++z)
         {
-            const int sourceZ = std::min(z * decimationStep, dimensions.z - 1);
-            const float fz = (dimensions.z > 1) ? static_cast<float>(sourceZ) / static_cast<float>(dimensions.z - 1) : 0.0f;
-            for (int y = 0; y < sampledDimensions.y; ++y)
+            DS_PROFILE_SCOPE_N("IsosurfaceExtractor::DownsampleScalarField");
+            for (int z = 0; z < sampledDimensions.z; ++z)
             {
-                const int sourceY = std::min(y * decimationStep, dimensions.y - 1);
-                const float fy = (dimensions.y > 1) ? static_cast<float>(sourceY) / static_cast<float>(dimensions.y - 1) : 0.0f;
-                for (int x = 0; x < sampledDimensions.x; ++x)
+                const int sourceZ = std::min(z * decimationStep, dimensions.z - 1);
+                const float fz = (dimensions.z > 1) ? static_cast<float>(sourceZ) / static_cast<float>(dimensions.z - 1) : 0.0f;
+                for (int y = 0; y < sampledDimensions.y; ++y)
                 {
-                    const int sourceX = std::min(x * decimationStep, dimensions.x - 1);
-                    const float fx = (dimensions.x > 1) ? static_cast<float>(sourceX) / static_cast<float>(dimensions.x - 1) : 0.0f;
+                    const int sourceY = std::min(y * decimationStep, dimensions.y - 1);
+                    const float fy = (dimensions.y > 1) ? static_cast<float>(sourceY) / static_cast<float>(dimensions.y - 1) : 0.0f;
+                    for (int x = 0; x < sampledDimensions.x; ++x)
+                    {
+                        const int sourceX = std::min(x * decimationStep, dimensions.x - 1);
+                        const float fx = (dimensions.x > 1) ? static_cast<float>(sourceX) / static_cast<float>(dimensions.x - 1) : 0.0f;
 
-                    const std::size_t sourceIndex = SampleIndex(dimensions, sourceX, sourceY, sourceZ);
-                    const std::size_t sampledIndex = SampleIndex(sampledDimensions, x, y, z);
-                    sampledValues[sampledIndex] = block.samples[sourceIndex];
-                    sampledPositions[sampledIndex] = structure.DirectToCartesian(glm::vec3(fx, fy, fz));
+                        const std::size_t sourceIndex = SampleIndex(dimensions, sourceX, sourceY, sourceZ);
+                        const std::size_t sampledIndex = SampleIndex(sampledDimensions, x, y, z);
+                        sampledValues[sampledIndex] = block.samples[sourceIndex];
+                        sampledPositions[sampledIndex] = structure.DirectToCartesian(glm::vec3(fx, fy, fz));
+                    }
                 }
             }
         }
@@ -325,31 +332,34 @@ namespace ds
         SurfaceTriangleMesh mesh;
         const float isoValue = SafeIsoValue(settings.isoValue);
 
-        for (int z = 0; z < sampledDimensions.z - 1; ++z)
         {
-            for (int y = 0; y < sampledDimensions.y - 1; ++y)
+            DS_PROFILE_SCOPE_N("IsosurfaceExtractor::MarchingTetrahedra");
+            for (int z = 0; z < sampledDimensions.z - 1; ++z)
             {
-                for (int x = 0; x < sampledDimensions.x - 1; ++x)
+                for (int y = 0; y < sampledDimensions.y - 1; ++y)
                 {
-                    std::array<GridVertex, 8> cube = {};
-                    for (int corner = 0; corner < 8; ++corner)
+                    for (int x = 0; x < sampledDimensions.x - 1; ++x)
                     {
-                        const int gx = x + kCubeCornerOffsets[corner][0];
-                        const int gy = y + kCubeCornerOffsets[corner][1];
-                        const int gz = z + kCubeCornerOffsets[corner][2];
-                        const std::size_t index = SampleIndex(sampledDimensions, gx, gy, gz);
-                        cube[corner].position = sampledPositions[index];
-                        cube[corner].value = sampledValues[index];
-                    }
+                        std::array<GridVertex, 8> cube = {};
+                        for (int corner = 0; corner < 8; ++corner)
+                        {
+                            const int gx = x + kCubeCornerOffsets[corner][0];
+                            const int gy = y + kCubeCornerOffsets[corner][1];
+                            const int gz = z + kCubeCornerOffsets[corner][2];
+                            const std::size_t index = SampleIndex(sampledDimensions, gx, gy, gz);
+                            cube[corner].position = sampledPositions[index];
+                            cube[corner].value = sampledValues[index];
+                        }
 
-                    for (const auto &tetraIndices : kCubeTetrahedra)
-                    {
-                        std::array<GridVertex, 4> tetra = {
-                            cube[tetraIndices[0]],
-                            cube[tetraIndices[1]],
-                            cube[tetraIndices[2]],
-                            cube[tetraIndices[3]]};
-                        ProcessTetra(tetra, isoValue, mesh);
+                        for (const auto &tetraIndices : kCubeTetrahedra)
+                        {
+                            std::array<GridVertex, 4> tetra = {
+                                cube[tetraIndices[0]],
+                                cube[tetraIndices[1]],
+                                cube[tetraIndices[2]],
+                                cube[tetraIndices[3]]};
+                            ProcessTetra(tetra, isoValue, mesh);
+                        }
                     }
                 }
             }

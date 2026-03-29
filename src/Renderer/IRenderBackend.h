@@ -68,6 +68,8 @@ namespace ds
             const glm::mat4 &viewProjection,
             const std::vector<glm::vec3> &positions,
             const std::vector<glm::vec3> &normals,
+            std::uint64_t meshId,
+            std::uint64_t meshRevision,
             const glm::vec3 &surfaceColor,
             float surfaceOpacity,
             const SceneRenderSettings &settings) = 0;

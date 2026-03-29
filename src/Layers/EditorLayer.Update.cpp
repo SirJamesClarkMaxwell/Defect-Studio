@@ -12,19 +12,46 @@ namespace ds
             const float meanBias = std::max(std::abs(block.statistics.meanValue) * 6.0f, absMax * 0.05f);
             return std::max(meanBias, absMax * factor);
         }
+
+        void TrackSurfaceMeshAllocation(const SurfaceTriangleMesh &mesh)
+        {
+            if (!mesh.positions.empty())
+            {
+                DS_PROFILE_ALLOC_N(mesh.positions.data(), mesh.positions.size() * sizeof(glm::vec3), "VolumetricSurfacePositions");
+            }
+            if (!mesh.normals.empty())
+            {
+                DS_PROFILE_ALLOC_N(mesh.normals.data(), mesh.normals.size() * sizeof(glm::vec3), "VolumetricSurfaceNormals");
+            }
+        }
+
+        void TrackSurfaceMeshRelease(const SurfaceTriangleMesh &mesh)
+        {
+            if (!mesh.positions.empty())
+            {
+                DS_PROFILE_FREE_N(mesh.positions.data(), "VolumetricSurfacePositions");
+            }
+            if (!mesh.normals.empty())
+            {
+                DS_PROFILE_FREE_N(mesh.normals.data(), "VolumetricSurfaceNormals");
+            }
+        }
     } // namespace
 
     void EditorLayer::MarkVolumetricMeshesDirty()
     {
         auto resetSurface = [](VolumetricSurfaceState &surface)
         {
+            TrackSurfaceMeshRelease(surface.mesh);
             surface.dirty = true;
+            surface.buildQueued = false;
             surface.hasMesh = false;
             surface.sampledDimensions = glm::ivec3(0);
             surface.decimationStep = 1;
             surface.lastBuildMilliseconds = 0.0;
             surface.lastStatus.clear();
             surface.mesh.Clear();
+            surface.pendingBuildRequestId = 0;
         };
 
         resetSurface(m_PrimaryVolumetricSurface);
@@ -65,28 +92,178 @@ namespace ds
         m_PrimaryVolumetricSurface.color = glm::vec3(1.0f, 0.92f, 0.14f);
         m_PrimaryVolumetricSurface.opacity = 0.42f;
         m_PrimaryVolumetricSurface.isoValue =
-            dataset.blocks.empty() ? 0.0f : ComputeDefaultIsoValue(dataset.blocks.front(), 0.26f);
+            (dataset.blocks.empty() || !dataset.blocks.front().statistics.valid) ? 0.0f : ComputeDefaultIsoValue(dataset.blocks.front(), 0.26f);
 
         m_SecondaryVolumetricSurface.enabled = dataset.blocks.size() > 1;
         m_SecondaryVolumetricSurface.blockIndex = dataset.blocks.size() > 1 ? 1 : 0;
         m_SecondaryVolumetricSurface.color = glm::vec3(0.10f, 0.22f, 0.96f);
         m_SecondaryVolumetricSurface.opacity = 0.46f;
         m_SecondaryVolumetricSurface.isoValue =
-            dataset.blocks.size() > 1 ? ComputeDefaultIsoValue(dataset.blocks[1], 0.42f) :
-                                         (dataset.blocks.empty() ? 0.0f : ComputeDefaultIsoValue(dataset.blocks.front(), 0.55f));
+            (dataset.blocks.size() > 1 && dataset.blocks[1].statistics.valid) ? ComputeDefaultIsoValue(dataset.blocks[1], 0.42f) :
+            ((dataset.blocks.empty() || !dataset.blocks.front().statistics.valid) ? 0.0f : ComputeDefaultIsoValue(dataset.blocks.front(), 0.55f));
         MarkVolumetricMeshesDirty();
+    }
+
+    void EditorLayer::PumpVolumetricSurfaceBuildJobs()
+    {
+        auto pendingIt = m_PendingVolumetricSurfaceBuilds.begin();
+        while (pendingIt != m_PendingVolumetricSurfaceBuilds.end())
+        {
+            if (pendingIt->future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+            {
+                ++pendingIt;
+                continue;
+            }
+
+            VolumetricSurfaceBuildResult result = pendingIt->future.get();
+            pendingIt = m_PendingVolumetricSurfaceBuilds.erase(pendingIt);
+
+            VolumetricSurfaceState *surfaceState = nullptr;
+            if (result.surfaceSlot == 0)
+            {
+                surfaceState = &m_PrimaryVolumetricSurface;
+            }
+            else if (result.surfaceSlot == 1)
+            {
+                surfaceState = &m_SecondaryVolumetricSurface;
+            }
+
+            if (surfaceState == nullptr)
+            {
+                continue;
+            }
+
+            if (result.generation != m_VolumetricLoadGeneration || result.requestId != surfaceState->pendingBuildRequestId)
+            {
+                continue;
+            }
+
+            surfaceState->buildQueued = false;
+            surfaceState->pendingBuildRequestId = 0;
+            surfaceState->lastBuildMilliseconds = result.wallMilliseconds;
+            surfaceState->sampledDimensions = result.sampledDimensions;
+            surfaceState->decimationStep = result.decimationStep;
+
+            if (!result.success)
+            {
+                surfaceState->hasMesh = false;
+                surfaceState->lastStatus = result.error.empty() ? "Surface build failed." : result.error;
+                continue;
+            }
+
+            TrackSurfaceMeshRelease(surfaceState->mesh);
+            surfaceState->mesh = std::move(result.mesh);
+            TrackSurfaceMeshAllocation(surfaceState->mesh);
+            surfaceState->hasMesh = !surfaceState->mesh.positions.empty();
+            ++surfaceState->meshRevision;
+            surfaceState->lastStatus =
+                surfaceState->hasMesh ?
+                    ("Preview mesh: " + std::to_string(surfaceState->mesh.TriangleCount()) + " triangles") :
+                    "No surface for current iso value.";
+        }
+    }
+
+    bool EditorLayer::QueueVolumetricSurfaceBuild(int surfaceSlot)
+    {
+        VolumetricSurfaceState *surfaceState = nullptr;
+        if (surfaceSlot == 0)
+        {
+            surfaceState = &m_PrimaryVolumetricSurface;
+        }
+        else if (surfaceSlot == 1)
+        {
+            surfaceState = &m_SecondaryVolumetricSurface;
+        }
+
+        if (surfaceState == nullptr || surfaceState->buildQueued)
+        {
+            return false;
+        }
+
+        EnsureVolumetricSelection();
+        if (!surfaceState->enabled ||
+            m_ActiveVolumetricDatasetIndex < 0 ||
+            m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            return false;
+        }
+
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        if (dataset.blocks.empty())
+        {
+            return false;
+        }
+
+        surfaceState->blockIndex = std::clamp(surfaceState->blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+        const ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(surfaceState->blockIndex)];
+        if (!block.samplesLoaded)
+        {
+            return false;
+        }
+
+        const std::uint64_t requestId = m_VolumetricSurfaceBuildRequestCounter++;
+        const std::uint64_t generation = m_VolumetricLoadGeneration;
+        const float isoValue = surfaceState->isoValue;
+        const int previewMaxDimension = m_VolumetricPreviewMaxDimension;
+        const int blockIndex = surfaceState->blockIndex;
+        const std::string datasetPath = dataset.sourcePath;
+
+        surfaceState->dirty = false;
+        surfaceState->buildQueued = true;
+        surfaceState->pendingBuildRequestId = requestId;
+        surfaceState->lastStatus = "Building preview mesh...";
+
+        PendingVolumetricSurfaceBuild pendingBuild;
+        pendingBuild.surfaceSlot = surfaceSlot;
+        pendingBuild.requestId = requestId;
+        pendingBuild.future = m_BackgroundThreadPool.submit_task(
+            [generation,
+             surfaceSlot,
+             requestId,
+             datasetPath,
+             blockIndex,
+             structureCopy = Structure(dataset.structure),
+             blockCopy = ScalarFieldBlock(block),
+             isoValue,
+             previewMaxDimension]() mutable
+            {
+                VolumetricSurfaceBuildResult buildResult;
+                buildResult.generation = generation;
+                buildResult.surfaceSlot = surfaceSlot;
+                buildResult.requestId = requestId;
+                buildResult.datasetPath = datasetPath;
+                buildResult.blockIndex = blockIndex;
+
+                IsosurfaceExtractor extractor;
+                IsosurfaceBuildResult rawResult;
+                std::string error;
+                const auto startedAt = std::chrono::steady_clock::now();
+                buildResult.success = extractor.BuildPreviewMesh(
+                    structureCopy,
+                    blockCopy,
+                    IsosurfaceBuildSettings{isoValue, previewMaxDimension},
+                    rawResult,
+                    error);
+                const auto finishedAt = std::chrono::steady_clock::now();
+                buildResult.wallMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+                buildResult.sampledDimensions = rawResult.sampledDimensions;
+                buildResult.decimationStep = rawResult.decimationStep;
+                if (buildResult.success)
+                {
+                    buildResult.mesh = std::move(rawResult.mesh);
+                }
+                else
+                {
+                    buildResult.error = error.empty() ? "Surface build failed." : error;
+                }
+                return buildResult;
+            });
+        m_PendingVolumetricSurfaceBuilds.push_back(std::move(pendingBuild));
+        return true;
     }
 
     bool EditorLayer::RebuildVolumetricSurfaceMesh(VolumetricSurfaceState &surfaceState)
     {
-        surfaceState.dirty = false;
-        surfaceState.hasMesh = false;
-        surfaceState.mesh.Clear();
-        surfaceState.lastStatus.clear();
-        surfaceState.lastBuildMilliseconds = 0.0;
-        surfaceState.sampledDimensions = glm::ivec3(0);
-        surfaceState.decimationStep = 1;
-
         EnsureVolumetricSelection();
         if (!surfaceState.enabled ||
             m_ActiveVolumetricDatasetIndex < 0 ||
@@ -104,34 +281,26 @@ namespace ds
 
         surfaceState.blockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
         const ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(surfaceState.blockIndex)];
-
-        IsosurfaceBuildResult result;
-        std::string error;
-        const auto startedAt = std::chrono::steady_clock::now();
-        const bool built = m_IsosurfaceExtractor.BuildPreviewMesh(
-            dataset.structure,
-            block,
-            IsosurfaceBuildSettings{surfaceState.isoValue, m_VolumetricPreviewMaxDimension},
-            result,
-            error);
-        const auto finishedAt = std::chrono::steady_clock::now();
-        surfaceState.lastBuildMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
-        surfaceState.sampledDimensions = result.sampledDimensions;
-        surfaceState.decimationStep = result.decimationStep;
-
-        if (!built)
+        if (!block.samplesLoaded)
         {
-            surfaceState.lastStatus = error.empty() ? "Surface build failed." : error;
+            if (block.loadFailed)
+            {
+                surfaceState.lastStatus = block.lastLoadError.empty()
+                                              ? "Block load failed. Use manual retry."
+                                              : ("Block load failed: " + block.lastLoadError);
+            }
+            else
+            {
+                surfaceState.lastStatus = HasPendingVolumetricBlockLoad(dataset.sourcePath, surfaceState.blockIndex)
+                                              ? "Loading volumetric block samples..."
+                                              : "Block samples not resident yet.";
+                QueueVolumetricBlockLoad(m_ActiveVolumetricDatasetIndex, surfaceState.blockIndex);
+            }
             return false;
         }
 
-        surfaceState.mesh = std::move(result.mesh);
-        surfaceState.hasMesh = !surfaceState.mesh.positions.empty();
-        surfaceState.lastStatus =
-            surfaceState.hasMesh ?
-                ("Preview mesh: " + std::to_string(surfaceState.mesh.TriangleCount()) + " triangles") :
-                (error.empty() ? "No surface for current iso value." : error);
-        return surfaceState.hasMesh;
+        const int surfaceSlot = (&surfaceState == &m_PrimaryVolumetricSurface) ? 0 : 1;
+        return QueueVolumetricSurfaceBuild(surfaceSlot);
     }
 
     void EditorLayer::EnsureVolumetricSurfaceMeshes()
@@ -142,12 +311,48 @@ namespace ds
             return;
         }
 
-        if (m_PrimaryVolumetricSurface.dirty)
+        VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        auto ensureSurfaceBlockLoaded = [&](VolumetricSurfaceState &surface)
+        {
+            if (!surface.enabled || dataset.blocks.empty())
+            {
+                return;
+            }
+
+            surface.blockIndex = std::clamp(surface.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+            ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(surface.blockIndex)];
+            if (!block.samplesLoaded)
+            {
+                if (block.loadFailed)
+                {
+                    surface.lastStatus = block.lastLoadError.empty()
+                                             ? "Block load failed. Manual retry required."
+                                             : ("Block load failed: " + block.lastLoadError);
+                }
+                else
+                {
+                    QueueVolumetricBlockLoad(m_ActiveVolumetricDatasetIndex, surface.blockIndex);
+                    surface.lastStatus = HasPendingVolumetricBlockLoad(dataset.sourcePath, surface.blockIndex)
+                                             ? "Queued block load..."
+                                             : "Waiting for block load...";
+                }
+            }
+            else if (block.statistics.valid && std::abs(surface.isoValue) <= 1e-6f)
+            {
+                const float defaultFactor = (&surface == &m_PrimaryVolumetricSurface) ? 0.26f : 0.42f;
+                surface.isoValue = ComputeDefaultIsoValue(block, defaultFactor);
+                surface.dirty = true;
+            }
+        };
+        ensureSurfaceBlockLoaded(m_PrimaryVolumetricSurface);
+        ensureSurfaceBlockLoaded(m_SecondaryVolumetricSurface);
+
+        if (m_PrimaryVolumetricSurface.dirty && !m_PrimaryVolumetricSurface.buildQueued)
         {
             RebuildVolumetricSurfaceMesh(m_PrimaryVolumetricSurface);
         }
 
-        if (m_SecondaryVolumetricSurface.dirty)
+        if (m_SecondaryVolumetricSurface.dirty && !m_SecondaryVolumetricSurface.buildQueued)
         {
             RebuildVolumetricSurfaceMesh(m_SecondaryVolumetricSurface);
         }
@@ -156,7 +361,7 @@ namespace ds
     void EditorLayer::RenderVolumetricSurfaces(IRenderBackend &backend, const OrbitCamera &camera, const SceneRenderSettings &settings)
     {
         const glm::mat4 viewProjection = camera.GetViewProjectionMatrix();
-        auto renderSurface = [&](const VolumetricSurfaceState &surfaceState)
+        auto renderSurfaceWithId = [&](const VolumetricSurfaceState &surfaceState, std::uint64_t surfaceId)
         {
             if (!surfaceState.enabled || !surfaceState.hasMesh || surfaceState.mesh.positions.empty())
             {
@@ -167,13 +372,17 @@ namespace ds
                 viewProjection,
                 surfaceState.mesh.positions,
                 surfaceState.mesh.normals,
+                surfaceId,
+                surfaceState.meshRevision,
                 surfaceState.color,
                 surfaceState.opacity,
                 settings);
         };
 
-        renderSurface(m_PrimaryVolumetricSurface);
-        renderSurface(m_SecondaryVolumetricSurface);
+        renderSurfaceWithId(m_PrimaryVolumetricSurface, 1);
+        renderSurfaceWithId(m_SecondaryVolumetricSurface, 2);
+        DS_PROFILE_PLOT("Volumetrics/PreviewMeshBytes",
+                        static_cast<double>(m_PrimaryVolumetricSurface.mesh.MemoryBytes() + m_SecondaryVolumetricSurface.mesh.MemoryBytes()));
     }
 
     void EditorLayer::OnUpdate(float deltaTime)
@@ -210,6 +419,8 @@ namespace ds
             m_CameraTransitionActive = false;
         }
         UpdateCameraOrbitTransition(deltaTime);
+        PumpVolumetricLoadingJobs();
+        PumpVolumetricSurfaceBuildJobs();
         EnsureVolumetricSurfaceMeshes();
 
         m_SceneOriginPosition = glm::vec3(0.0f);

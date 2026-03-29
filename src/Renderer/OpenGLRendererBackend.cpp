@@ -185,8 +185,6 @@ namespace ds
         glGenBuffers(1, &m_InstanceColorVBO);
         glGenVertexArrays(1, &m_GridVAO);
         glGenBuffers(1, &m_GridVBO);
-        glGenVertexArrays(1, &m_SurfaceVAO);
-        glGenBuffers(1, &m_SurfaceVBO);
 
         std::vector<SphereVertex> sphereVertices;
         std::vector<std::uint32_t> sphereIndices;
@@ -251,16 +249,6 @@ namespace ds
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
-        glBindVertexArray(m_SurfaceVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, m_SurfaceVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(SurfaceVertex), nullptr, GL_DYNAMIC_DRAW);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), reinterpret_cast<void *>(offsetof(SurfaceVertex, position)));
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), reinterpret_cast<void *>(offsetof(SurfaceVertex, normal)));
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
-
         ConfigureInstanceAttributes(m_SphereMesh.vao, m_InstanceVBO, m_InstanceColorVBO);
         ConfigureInstanceAttributes(m_CylinderMesh.vao, m_InstanceVBO, m_InstanceColorVBO);
 
@@ -314,21 +302,57 @@ namespace ds
             m_GridVAO = 0;
         }
 
-        if (m_SurfaceVBO != 0)
-        {
-            glDeleteBuffers(1, &m_SurfaceVBO);
-            m_SurfaceVBO = 0;
-        }
-
-        if (m_SurfaceVAO != 0)
-        {
-            glDeleteVertexArrays(1, &m_SurfaceVAO);
-            m_SurfaceVAO = 0;
-        }
+        DestroySurfaceMeshCache();
 
         m_Shader.Destroy();
         m_GridShader.Destroy();
         m_SurfaceShader.Destroy();
+    }
+
+    OpenGLRendererBackend::SurfaceMeshCacheEntry &OpenGLRendererBackend::GetOrCreateSurfaceMeshCache(std::uint64_t meshId)
+    {
+        auto [it, inserted] = m_SurfaceMeshCache.try_emplace(meshId);
+        SurfaceMeshCacheEntry &entry = it->second;
+        if (!inserted)
+        {
+            return entry;
+        }
+
+        glGenVertexArrays(1, &entry.vao);
+        glGenBuffers(1, &entry.vbo);
+
+        glBindVertexArray(entry.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, entry.vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(SurfaceVertex), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), reinterpret_cast<void *>(offsetof(SurfaceVertex, position)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex), reinterpret_cast<void *>(offsetof(SurfaceVertex, normal)));
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
+        return entry;
+    }
+
+    void OpenGLRendererBackend::DestroySurfaceMeshCache()
+    {
+        for (auto &[meshId, entry] : m_SurfaceMeshCache)
+        {
+            (void)meshId;
+            if (entry.vbo != 0)
+            {
+                glDeleteBuffers(1, &entry.vbo);
+                entry.vbo = 0;
+            }
+
+            if (entry.vao != 0)
+            {
+                glDeleteVertexArrays(1, &entry.vao);
+                entry.vao = 0;
+            }
+        }
+
+        m_SurfaceMeshCache.clear();
     }
 
     void OpenGLRendererBackend::ResizeViewport(std::uint32_t width, std::uint32_t height)
@@ -698,6 +722,8 @@ namespace ds
         const glm::mat4 &viewProjection,
         const std::vector<glm::vec3> &positions,
         const std::vector<glm::vec3> &normals,
+        std::uint64_t meshId,
+        std::uint64_t meshRevision,
         const glm::vec3 &surfaceColor,
         float surfaceOpacity,
         const SceneRenderSettings &settings)
@@ -707,16 +733,55 @@ namespace ds
         TracyGpuZone("RenderSurfaceMesh");
 #endif
         const std::size_t vertexCount = std::min(positions.size(), normals.size());
-        if (vertexCount < 3 || m_SurfaceVAO == 0 || m_SurfaceVBO == 0)
+        if (vertexCount < 3 || meshId == 0)
         {
             return;
         }
 
-        std::vector<SurfaceVertex> vertices;
-        vertices.reserve(vertexCount);
-        for (std::size_t i = 0; i < vertexCount; ++i)
+        SurfaceMeshCacheEntry &cache = GetOrCreateSurfaceMeshCache(meshId);
+        if (cache.vao == 0 || cache.vbo == 0)
         {
-            vertices.push_back({positions[i], normals[i]});
+            return;
+        }
+
+        if (cache.uploadedRevision != meshRevision || cache.vertexCount != vertexCount)
+        {
+            std::vector<SurfaceVertex> vertices;
+            {
+                DS_PROFILE_SCOPE_N("OpenGLRendererBackend::BuildSurfaceVertices");
+                vertices.reserve(vertexCount);
+                for (std::size_t i = 0; i < vertexCount; ++i)
+                {
+                    vertices.push_back({positions[i], normals[i]});
+                }
+            }
+
+            if (!vertices.empty())
+            {
+                DS_PROFILE_ALLOC_N(vertices.data(), vertices.size() * sizeof(SurfaceVertex), "VolumetricSurfaceUploadVertices");
+            }
+
+            {
+                DS_PROFILE_SCOPE_N("OpenGLRendererBackend::UploadSurfaceMesh");
+                glBindVertexArray(cache.vao);
+                glBindBuffer(GL_ARRAY_BUFFER, cache.vbo);
+                glBufferData(
+                    GL_ARRAY_BUFFER,
+                    static_cast<GLsizeiptr>(vertices.size() * sizeof(SurfaceVertex)),
+                    vertices.data(),
+                    GL_STATIC_DRAW);
+                glBindBuffer(GL_ARRAY_BUFFER, 0);
+                glBindVertexArray(0);
+            }
+
+            if (!vertices.empty())
+            {
+                DS_PROFILE_FREE_N(vertices.data(), "VolumetricSurfaceUploadVertices");
+            }
+
+            cache.vertexCount = vertexCount;
+            cache.capacityBytes = vertexCount * sizeof(SurfaceVertex);
+            cache.uploadedRevision = meshRevision;
         }
 
         m_SurfaceShader.Bind();
@@ -736,22 +801,17 @@ namespace ds
             0.12f,
             0.0f);
 
-        glBindVertexArray(m_SurfaceVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, m_SurfaceVBO);
-        glBufferData(
-            GL_ARRAY_BUFFER,
-            static_cast<GLsizeiptr>(vertices.size() * sizeof(SurfaceVertex)),
-            vertices.data(),
-            GL_DYNAMIC_DRAW);
+        {
+            DS_PROFILE_SCOPE_N("OpenGLRendererBackend::DrawSurfaceMesh");
+            glBindVertexArray(cache.vao);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDepthMask(GL_FALSE);
+            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertexCount));
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
+        }
 
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertexCount));
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
     }
 

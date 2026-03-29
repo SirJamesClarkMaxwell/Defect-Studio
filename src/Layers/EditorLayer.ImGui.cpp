@@ -179,7 +179,7 @@ namespace ds
                 if (ImGui::MenuItem("Open POSCAR/CONTCAR", "Ctrl+O"))
                 {
                     std::vector<std::string> selectedPaths;
-                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                    if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                     {
                         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
                         for (const std::string &selectedPath : selectedPaths)
@@ -191,11 +191,8 @@ namespace ds
 
                 if (ImGui::MenuItem("Open CHG/CHGCAR/PARCHG", nullptr))
                 {
-                    const std::filesystem::path initialDirectory = !GetProjectRootPath().empty()
-                                                                      ? (GetProjectRootPath() / "project")
-                                                                      : GetAppRootPath();
                     std::vector<std::string> selectedPaths;
-                    if (OpenNativeVolumetricFilesDialog(selectedPaths, initialDirectory.string()) && !selectedPaths.empty())
+                    if (OpenNativeVolumetricFilesDialog(selectedPaths, GetPreferredVolumetricDialogDirectory().string()) && !selectedPaths.empty())
                     {
                         for (const std::string &selectedPath : selectedPaths)
                         {
@@ -4824,7 +4821,7 @@ namespace ds
                     if (ImGui::Button("Browse##Import"))
                     {
                         std::vector<std::string> selectedPaths;
-                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                        if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                         {
                             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
                             for (const std::string &selectedPath : selectedPaths)
@@ -4837,7 +4834,7 @@ namespace ds
                     if (ImGui::Button("Load multiple files"))
                     {
                         std::vector<std::string> selectedPaths;
-                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                        if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                         {
                             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
                             for (const std::string &selectedPath : selectedPaths)
@@ -7384,15 +7381,16 @@ namespace ds
             return out.str();
         };
 
-        ImGui::TextWrapped("Volumetrics MVP for CHG / CHGCAR / PARCHG. This panel now loads scalar fields, preserves multi-block files, shows dataset statistics, and renders preview isosurfaces on a decimated grid.");
+        ImGui::TextWrapped("Volumetrics MVP for CHG / CHGCAR / PARCHG. Datasets are now queued in the background, keep only metadata resident by default, and load full block samples on demand for the current preview surfaces.");
+        ImGui::TextDisabled("Background jobs: %zu dataset, %zu block, %zu surface",
+                            m_PendingVolumetricDatasetLoads.size(),
+                            m_PendingVolumetricBlockLoads.size(),
+                            m_PendingVolumetricSurfaceBuilds.size());
 
         if (ImGui::Button("Load volumetric files..."))
         {
-            const std::filesystem::path initialDirectory = !GetProjectRootPath().empty()
-                                                              ? (GetProjectRootPath() / "project")
-                                                              : GetAppRootPath();
             std::vector<std::string> selectedPaths;
-            if (OpenNativeVolumetricFilesDialog(selectedPaths, initialDirectory.string()) && !selectedPaths.empty())
+            if (OpenNativeVolumetricFilesDialog(selectedPaths, GetPreferredVolumetricDialogDirectory().string()) && !selectedPaths.empty())
             {
                 bool anyLoaded = false;
                 for (const std::string &selectedPath : selectedPaths)
@@ -7447,15 +7445,19 @@ namespace ds
         }
 
         std::size_t totalMemoryBytes = 0;
+        std::size_t totalEstimatedMemoryBytes = 0;
         for (const VolumetricDataset &dataset : m_VolumetricDatasets)
         {
             totalMemoryBytes += dataset.TotalMemoryBytes();
+            totalEstimatedMemoryBytes += dataset.TotalEstimatedMemoryBytes();
         }
 
         ImGui::SeparatorText("Loaded datasets");
         ImGui::Text("Count: %d", static_cast<int>(m_VolumetricDatasets.size()));
         ImGui::SameLine();
-        ImGui::TextDisabled("| Total memory: %s", formatBytes(totalMemoryBytes).c_str());
+        ImGui::TextDisabled("| Resident: %s / Estimated full: %s",
+                            formatBytes(totalMemoryBytes).c_str(),
+                            formatBytes(totalEstimatedMemoryBytes).c_str());
 
         if (ImGui::BeginChild("VolumetricDatasetList", ImVec2(0.0f, 140.0f), true))
         {
@@ -7463,6 +7465,7 @@ namespace ds
             {
                 const VolumetricDataset &dataset = m_VolumetricDatasets[datasetIndex];
                 const bool isSelected = (static_cast<int>(datasetIndex) == m_ActiveVolumetricDatasetIndex);
+                const bool hasResidentSamples = dataset.TotalMemoryBytes() > 0;
 
                 std::ostringstream label;
                 label << dataset.sourceLabel << "##VolumetricDataset" << datasetIndex;
@@ -7477,7 +7480,10 @@ namespace ds
                     ImGui::BeginTooltip();
                     ImGui::TextUnformatted(dataset.sourcePath.c_str());
                     ImGui::Text("Blocks: %d", static_cast<int>(dataset.blocks.size()));
-                    ImGui::Text("Memory: %s", formatBytes(dataset.TotalMemoryBytes()).c_str());
+                    ImGui::Text("Metadata parse: %.2f ms", dataset.metadataParseMilliseconds);
+                    ImGui::Text("Resident memory: %s", formatBytes(dataset.TotalMemoryBytes()).c_str());
+                    ImGui::Text("Estimated full memory: %s", formatBytes(dataset.TotalEstimatedMemoryBytes()).c_str());
+                    ImGui::Text("Samples resident: %s", hasResidentSamples ? "yes" : "metadata only");
                     ImGui::EndTooltip();
                 }
             }
@@ -7496,6 +7502,17 @@ namespace ds
         ImGui::Text("File kind: %s", VolumetricFileKindName(dataset.kind));
         ImGui::Text("Structure title: %s", dataset.title.empty() ? "(empty)" : dataset.title.c_str());
         ImGui::Text("Atoms in header: %d", dataset.structure.GetAtomCount());
+        ImGui::Text("Metadata parse: %.2f ms", dataset.metadataParseMilliseconds);
+        ImGui::Text("Resident memory: %s", formatBytes(dataset.TotalMemoryBytes()).c_str());
+        ImGui::Text("Estimated full memory: %s", formatBytes(dataset.TotalEstimatedMemoryBytes()).c_str());
+        if (ImGui::Button("Apply dataset header structure to scene"))
+        {
+            ApplyParsedStructureToScene(dataset.structure, dataset.sourcePath, false);
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Applied crystal structure from volumetric dataset header.";
+            LogInfo(m_LastStructureMessage);
+            settingsChanged = true;
+        }
         if (m_HasStructureLoaded)
         {
             const bool matchesCurrentScene = (dataset.structure.GetAtomCount() == m_WorkingStructure.GetAtomCount());
@@ -7520,13 +7537,46 @@ namespace ds
             const ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(m_ActiveVolumetricBlockIndex)];
             ImGui::Text("Grid: %d x %d x %d", block.dimensions.x, block.dimensions.y, block.dimensions.z);
             ImGui::Text("Samples: %zu", block.SampleCount());
-            ImGui::Text("Block memory: %s", formatBytes(block.MemoryBytes()).c_str());
+            ImGui::Text("Resident samples: %s", block.samplesLoaded ? "yes" : "no");
+            ImGui::Text("Block memory: %s / %s", formatBytes(block.MemoryBytes()).c_str(), formatBytes(block.EstimatedMemoryBytes()).c_str());
+            ImGui::Text("Last block load: %.2f ms", block.lastLoadMilliseconds);
+            if (!block.samplesLoaded)
+            {
+                const bool blockQueued = HasPendingVolumetricBlockLoad(dataset.sourcePath, m_ActiveVolumetricBlockIndex);
+                const char *loadButtonLabel =
+                    blockQueued ? "Block load queued" :
+                    (block.loadFailed ? "Retry load active block" : "Load active block now");
+                if (ImGui::Button(loadButtonLabel))
+                {
+                    QueueVolumetricBlockLoad(m_ActiveVolumetricDatasetIndex, m_ActiveVolumetricBlockIndex, true);
+                }
+                if (blockQueued)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("samples are loading in the background");
+                }
+                else if (block.loadFailed)
+                {
+                    ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.40f, 1.0f),
+                                       "Last load failed (%d attempt%s): %s",
+                                       std::max(block.failedLoadAttempts, 1),
+                                       (std::max(block.failedLoadAttempts, 1) == 1 ? "" : "s"),
+                                       block.lastLoadError.empty() ? "Unknown error" : block.lastLoadError.c_str());
+                }
+            }
 
             ImGui::SeparatorText("Statistics");
-            ImGui::BulletText("Min: %.9g", block.statistics.minValue);
-            ImGui::BulletText("Max: %.9g", block.statistics.maxValue);
-            ImGui::BulletText("Mean: %.9g", block.statistics.meanValue);
-            ImGui::BulletText("Abs max: %.9g", block.statistics.absMaxValue);
+            if (block.statistics.valid)
+            {
+                ImGui::BulletText("Min: %.9g", block.statistics.minValue);
+                ImGui::BulletText("Max: %.9g", block.statistics.maxValue);
+                ImGui::BulletText("Mean: %.9g", block.statistics.meanValue);
+                ImGui::BulletText("Abs max: %.9g", block.statistics.absMaxValue);
+            }
+            else
+            {
+                ImGui::TextDisabled("Statistics are available after block samples are loaded.");
+            }
 
             ImGui::SeparatorText("Preview / reduction planning");
             if (ImGui::SliderInt("Preview max axis", &m_VolumetricPreviewMaxDimension, 32, 512))
@@ -7573,9 +7623,9 @@ namespace ds
                 surfaceState.blockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
 
                 const ScalarFieldBlock &surfaceBlock = dataset.blocks[static_cast<std::size_t>(surfaceState.blockIndex)];
-                const float dragSpeed = std::max(surfaceBlock.statistics.absMaxValue * 0.0025f, 1e-6f);
-                const float dragMin = std::min(surfaceBlock.statistics.minValue, surfaceBlock.statistics.maxValue);
-                const float dragMax = std::max(surfaceBlock.statistics.minValue, surfaceBlock.statistics.maxValue);
+                const float dragSpeed = surfaceBlock.statistics.valid ? std::max(surfaceBlock.statistics.absMaxValue * 0.0025f, 1e-6f) : 1e-4f;
+                const float dragMin = surfaceBlock.statistics.valid ? std::min(surfaceBlock.statistics.minValue, surfaceBlock.statistics.maxValue) : -1.0f;
+                const float dragMax = surfaceBlock.statistics.valid ? std::max(surfaceBlock.statistics.minValue, surfaceBlock.statistics.maxValue) : 1.0f;
                 ImGui::DragFloat((std::string("Iso value##") + idSuffix).c_str(), &surfaceState.isoValue, dragSpeed, dragMin, dragMax, "%.6g");
                 if (ImGui::IsItemDeactivatedAfterEdit())
                 {
@@ -7586,14 +7636,12 @@ namespace ds
                 ImGui::ColorEdit3((std::string("Color##") + idSuffix).c_str(), &surfaceState.color.x);
                 if (ImGui::IsItemDeactivatedAfterEdit())
                 {
-                    surfaceState.dirty = true;
                     settingsChanged = true;
                 }
 
                 ImGui::SliderFloat((std::string("Opacity##") + idSuffix).c_str(), &surfaceState.opacity, 0.05f, 0.95f, "%.2f");
                 if (ImGui::IsItemDeactivatedAfterEdit())
                 {
-                    surfaceState.dirty = true;
                     settingsChanged = true;
                 }
 
@@ -7605,9 +7653,12 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button((std::string("Default iso##") + idSuffix).c_str()))
                 {
-                    surfaceState.isoValue =
-                        std::max(std::max(std::abs(surfaceBlock.statistics.meanValue) * 6.0f, surfaceBlock.statistics.absMaxValue * 0.05f),
-                                 surfaceBlock.statistics.absMaxValue * defaultIsoFactor);
+                    if (surfaceBlock.statistics.valid)
+                    {
+                        surfaceState.isoValue =
+                            std::max(std::max(std::abs(surfaceBlock.statistics.meanValue) * 6.0f, surfaceBlock.statistics.absMaxValue * 0.05f),
+                                     surfaceBlock.statistics.absMaxValue * defaultIsoFactor);
+                    }
                     surfaceState.dirty = true;
                     settingsChanged = true;
                 }
@@ -7622,6 +7673,10 @@ namespace ds
                     ImGui::Text("Decimation step: %d", surfaceState.decimationStep);
                     ImGui::Text("Preview mesh memory: %s", formatBytes(surfaceState.mesh.MemoryBytes()).c_str());
                     ImGui::Text("Last build: %.2f ms", surfaceState.lastBuildMilliseconds);
+                    if (surfaceState.buildQueued)
+                    {
+                        ImGui::TextDisabled("Build queued in background");
+                    }
                     if (!surfaceState.lastStatus.empty())
                     {
                         const bool surfaceOkay = surfaceState.hasMesh;
