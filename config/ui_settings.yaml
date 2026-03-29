@@ -1,7 +1,7 @@
 version: 1
 ui:
   theme: Dark
-  fontScale: 1.14
+  fontScale: 1.27
   spacingScale: 1
 panels:
   showDemoWindow: false
@@ -9,28 +9,36 @@ panels:
   showStatsPanel: false
   showViewportInfoPanel: false
   showShortcutReferencePanel: false
+  showElementCatalogPanel: true
+  showVolumetricsPanel: false
+  showPeriodicTablePanel: false
   showActionsPanel: true
   showAppearancePanel: true
-  showSettingsPanel: true
+  showSettingsPanel: false
   showSceneOutlinerPanel: true
   showObjectPropertiesPanel: true
   showRenderPreviewWindow: false
-  viewportSettingsOpen: true
+  viewportSettingsOpen: false
 logs:
-  filter: 0
+  filter: 1
   autoScroll: true
 camera:
   orbitSensitivity: 1
   panSensitivity: 1
   zoomSensitivity: 1
+  cursorFocusDistanceFactor: 1
+  cursorFocusMinDistance: 10
+  cursorFocusSelectionPadding: 6.98
+  clipNearPadding: 2.4
+  clipFarPadding: 1
   target:
-    x: -0.17992042
-    y: 12.081511
-    z: 2.8433387
+    x: 3.2673056
+    y: 8.876377
+    z: 5.332269
   distance: 54.99632
-  yaw: -0.61816037
-  pitch: -0.43279454
-  roll: 2.7124114
+  yaw: 0
+  pitch: 1.5692964
+  roll: 0
   sensitivityMode: relative_v2
 viewport:
   clearColor:
@@ -38,14 +46,14 @@ viewport:
     g: 0.5294118
     b: 0.5294118
   projectionMode: 1
-  renderScale: 0.75
+  renderScale: 1
   touchpadNavigation: true
   cleanViewMode: true
   appendImportCollection: true
   grid:
     enabled: false
     showCellEdges: false
-    halfExtent: 12
+    halfExtent: 17
     spacing: 1
     lineWidth: 1
     origin:
@@ -64,9 +72,9 @@ viewport:
     cellEdgeLineWidth: 1.8
   lighting:
     direction:
-      x: -0.6837635
-      y: 0.45584232
-      z: -0.5698029
+      x: 0
+      y: 0
+      z: -1
     ambientStrength: 0.58
     diffuseStrength: 0.78
     color:
@@ -74,10 +82,15 @@ viewport:
       g: 0.98
       b: 0.92
     position:
-      x: 3
-      y: -2
-      z: 2.5
+      x: 0
+      y: 0
+      z: 0
   atoms:
+    overrideColorEnabled: false
+    overrideColor:
+      r: 0.9
+      g: 0.65
+      b: 0.35
     brightness: 1.15
     glowStrength: 0.08
     selectedCustomColor:
@@ -86,13 +99,14 @@ viewport:
       b: 1
   bonds:
     autoGenerate: true
+    autoRecalculateOnEdit: true
     showLengthLabels: true
     renderStyle: 2
     deleteLabelOnlyMode: false
     thresholdScale: 1.12
     usePairThresholdOverrides: true
     pairThresholdOverrides: ""
-    lineWidth: 7.3
+    lineWidth: 20
     lineWidthMin: 1
     lineWidthMax: 20
     color:
@@ -129,12 +143,13 @@ viewport:
     invertViewportZoom: false
     invertCircleSelectWheel: false
     circleSelectWheelStep: 4
+    duplicateAppliesOffset: false
   cursor:
     show: true
     position:
-      x: -4.7904024
-      y: 26.209599
-      z: 0
+      x: 0.08364812
+      y: -0.093449935
+      z: 0.16081719
     visualScale: 0.07
     snapToGrid: true
   measurements:
@@ -158,22 +173,24 @@ viewport:
       z: 0
   gizmos:
     viewEnabled: true
-    viewDragMode: false
+    viewDragMode: true
     transformSize: 0.24
     viewScale: 0.72
     offsetRight: 16
     offsetTop: 72
-    rotateStepDegrees: 15
+    rotateStepDegrees: 5
+    panStepPixels: 1
+    zoomStepPercent: 10
     fallbackMarkerScale: 2
-    showTransformEmpties: false
+    showTransformEmpties: true
     transformEmptyVisualScale: 0.2
-    showGlobalAxesOverlay: false
+    showGlobalAxesOverlay: true
     showGlobalAxis:
       x: false
       y: false
       z: false
-    useTemporaryLocalAxes: false
-    temporaryAxesSource: 0
+    useTemporaryLocalAxes: true
+    temporaryAxesSource: 1
     temporaryAxisAtomA: -1
     temporaryAxisAtomB: -1
     temporaryAxisAtomC: -1
@@ -229,3 +246,117 @@ hotkeys:
   translateGizmo: 565
   rotateGizmo: 563
   scaleGizmo: 564
+elementCatalog:
+  selectionSource: viewport
+  selectedSymbol: N
+volumetrics:
+  previewMaxDimension: 120
+  surfaceA:
+    enabled: true
+    blockIndex: 0
+    fieldMode: 0
+    isosurfaceMode: 0
+    isoValue: 35.5035
+    color:
+      r: 1
+      g: 0.92
+      b: 0.14
+    negativeColor:
+      r: 0.1
+      g: 0.22
+      b: 0.96
+    opacity: 0.9
+    negativeOpacity: 0.9
+  surfaceB:
+    enabled: false
+    blockIndex: 0
+    fieldMode: 0
+    isosurfaceMode: 0
+    isoValue: 0
+    color:
+      r: 0.1
+      g: 0.22
+      b: 0.96
+    negativeColor:
+      r: 1
+      g: 0.92
+      b: 0.14
+    opacity: 0.9
+    negativeOpacity: 0.9
+  material:
+    specularColor:
+      r: 1
+      g: 0
+      b: 0
+    shininess: 256
+sceneOutliner:
+  treeOpenStates:
+    collection_objects_12215694672210238159: false
+    collection_objects_2265785950532160931: true
+    collection_objects_5758357109111389023: false
+    collection_objects_16297125193442105501: true
+    collection_objects_1142896767235350920: false
+    collection_objects_3347954039277003767: false
+    collection_groups_12215694672210238159: false
+    empty_9818121580160418855: false
+    collection_atoms_2265785950532160931: false
+    collection_objects_295568087831340321: false
+    collection_atoms_12215694672210238159: false
+    collection_atoms_11578982975831901882: false
+    empty_15780245378260290212: false
+    collection_objects_1788093220315726589: false
+    collection_atoms_16297125193442105501: false
+    collection_atoms_1737474619514322449: false
+    collection_objects_1480387716893472315: false
+    collection_objects_13483576780383753284: false
+    collection_objects_8714447610626684171: false
+    collection_objects_13100022068795947873: false
+    collection_objects_13963946767877597536: false
+    collection_objects_17457030727020388981: false
+    collection_objects_11578982975831901882: false
+    collection_objects_3005158435762991011: false
+    collection_objects_18002607108771414006: false
+    collection_objects_2276919191183132208: false
+    collection_objects_17832716872731091470: true
+    collection_atoms_17832716872731091470: false
+    collection_objects_3020311759969755647: false
+    collection_objects_919394852505655928: true
+    collection_objects_5127571843775670048: false
+    collection_objects_17191416433613463343: true
+    collection_atoms_919394852505655928: false
+    collection_objects_17002875112437787634: false
+    collection_objects_12253100465371712184: false
+    collection_objects_10037723350881320244: false
+    collection_objects_12367015964009413110: false
+    collection_objects_630848932154948031: false
+    collection_objects_3038736292657358537: false
+    collection_objects_10462375072237455256: false
+    collection_objects_1296046086992992770: false
+    collection_objects_8630452538359344906: false
+    collection_objects_14300302551086272712: true
+    collection_objects_1179255315598145465: false
+    collection_atoms_17032993147099444523: true
+    collection_atoms_1179255315598145465: true
+    collection_objects_13413548962423964701: false
+    collection_atoms_14300302551086272712: true
+    collection_atoms_17191416433613463343: false
+    collection_objects_1108941080313391630: false
+    collection_objects_17442896411574580146: false
+    collection_atoms_1108941080313391630: false
+    collection_objects_15837636191172736892: false
+    collection_objects_5376146755426512358: false
+    collection_objects_7837837826389649790: true
+    collection_atoms_15837636191172736892: false
+    collection_atoms_7837837826389649790: false
+    collection_objects_17032993147099444523: true
+    collection_objects_15986407383399523975: false
+    collection_objects_580185921945697093: false
+    collection_objects_1791606240773494675: false
+    collection_objects_2400575739879697858: false
+    collection_objects_1737474619514322449: true
+projects:
+  currentRoot: D:\STUDIA\Fizyka\Defects-Studio\DefectsStudio
+  name: DefectsStudio
+  lastDialogPath: D:\STUDIA\Fizyka\Defects-Studio\DefectsStudio
+  recent:
+    []

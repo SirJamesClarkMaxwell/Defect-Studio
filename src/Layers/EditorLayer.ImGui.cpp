@@ -228,10 +228,7 @@ namespace ds
                     if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                     {
                         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
-                        for (const std::string &selectedPath : selectedPaths)
-                        {
-                            AppendStructureFromPathAsCollection(selectedPath);
-                        }
+                        settingsChanged |= QueueStructureImportBatch(selectedPaths);
                     }
                 }
 
@@ -2125,7 +2122,7 @@ namespace ds
                         sameLineTight();
                         if (handleIconButton("##ViewportRollLeft", "rotate-left.png", "Rl-", "Roll left relative to camera"))
                         {
-                            if (RotateCameraRelative(0.0f, 0.0f, -stepRad))
+                            if (RotateCameraRelative(0.0f, 0.0f, stepRad))
                             {
                                 m_LastStructureMessage = "Viewport: roll left relative to camera.";
                             }
@@ -2133,7 +2130,7 @@ namespace ds
                         sameLineTight();
                         if (handleIconButton("##ViewportRollRight", "rotate-right.png", "Rl+", "Roll right relative to camera"))
                         {
-                            if (RotateCameraRelative(0.0f, 0.0f, stepRad))
+                            if (RotateCameraRelative(0.0f, 0.0f, -stepRad))
                             {
                                 m_LastStructureMessage = "Viewport: roll right relative to camera.";
                             }
@@ -2152,7 +2149,7 @@ namespace ds
                         sameLineTight();
                         if (handleIconButton("##ViewportPanUp", "up-arrow.png", "P^", "Pan up in camera plane"))
                         {
-                            if (PanCameraRelativePixels(0.0f, m_ViewportPanStepPixels))
+                            if (PanCameraRelativePixels(0.0f, -m_ViewportPanStepPixels))
                             {
                                 m_LastStructureMessage = "Viewport: pan up in camera plane.";
                             }
@@ -2160,7 +2157,7 @@ namespace ds
                         sameLineTight();
                         if (handleIconButton("##ViewportPanDown", "down-arrow.png", "Pv", "Pan down in camera plane"))
                         {
-                            if (PanCameraRelativePixels(0.0f, -m_ViewportPanStepPixels))
+                            if (PanCameraRelativePixels(0.0f, m_ViewportPanStepPixels))
                             {
                                 m_LastStructureMessage = "Viewport: pan down in camera plane.";
                             }
@@ -2168,7 +2165,7 @@ namespace ds
                         sameLineTight();
                         if (handleIconButton("##ViewportPanLeft", "left-arrow.png", "P<", "Pan left in camera plane"))
                         {
-                            if (PanCameraRelativePixels(m_ViewportPanStepPixels, 0.0f))
+                            if (PanCameraRelativePixels(-m_ViewportPanStepPixels, 0.0f))
                             {
                                 m_LastStructureMessage = "Viewport: pan left in camera plane.";
                             }
@@ -2176,7 +2173,7 @@ namespace ds
                         sameLineTight();
                         if (handleIconButton("##ViewportPanRight", "right-arrow.png", "P>", "Pan right in camera plane"))
                         {
-                            if (PanCameraRelativePixels(-m_ViewportPanStepPixels, 0.0f))
+                            if (PanCameraRelativePixels(m_ViewportPanStepPixels, 0.0f))
                             {
                                 m_LastStructureMessage = "Viewport: pan right in camera plane.";
                             }
@@ -2888,6 +2885,7 @@ namespace ds
                                                        : ((activeOperation == 2) ? "Scale selection"
                                                                                  : "Translate selection"));
                             s_GizmoInteractionActive = true;
+                            m_TransformManipulationActive = true;
                         }
 
                         if (!gizmoOver && !gizmoUsing && pivotInViewport && !m_FallbackGizmoDragging && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -2909,6 +2907,7 @@ namespace ds
                                 m_FallbackDragApplied = 0.0f;
                                 m_FallbackRotateLastAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
                                 m_GizmoConsumedMouseThisFrame = true;
+                                m_TransformManipulationActive = true;
 
                                 std::ostringstream dragStartLog;
                                 dragStartLog << "Fallback gizmo drag started: op=" << m_FallbackGizmoOperation
@@ -3091,6 +3090,7 @@ namespace ds
                                 m_FallbackDragAccumulated = 0.0f;
                                 m_FallbackDragApplied = 0.0f;
                                 m_FallbackRotateLastAngle = 0.0f;
+                                m_TransformManipulationActive = false;
                                 if (m_PendingTransformUndoDirty)
                                 {
                                     commitPendingTransformUndo();
@@ -3158,6 +3158,7 @@ namespace ds
                                 cancelPendingTransformUndo();
                             }
                             s_GizmoInteractionActive = false;
+                            m_TransformManipulationActive = false;
                         }
                     }
                     else if (s_LastValidPivot)
@@ -3168,6 +3169,7 @@ namespace ds
                         {
                             cancelPendingTransformUndo();
                             s_GizmoInteractionActive = false;
+                            m_TransformManipulationActive = false;
                         }
                     }
                 }
@@ -3179,10 +3181,12 @@ namespace ds
                     {
                         cancelPendingTransformUndo();
                         s_GizmoInteractionActive = false;
+                        m_TransformManipulationActive = false;
                     }
                     m_FallbackGizmoDragging = false;
                     m_FallbackGizmoOperation = -1;
                     m_FallbackGizmoAxis = -1;
+                    m_TransformManipulationActive = false;
                 }
 
                 if ((m_GizmoEnabled && (ImGuizmo::IsOver() || ImGuizmo::IsUsing())) ||
@@ -4963,10 +4967,7 @@ namespace ds
                         if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                         {
                             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
-                            for (const std::string &selectedPath : selectedPaths)
-                            {
-                                AppendStructureFromPathAsCollection(selectedPath);
-                            }
+                            settingsChanged |= QueueStructureImportBatch(selectedPaths);
                         }
                     }
 
@@ -4976,23 +4977,20 @@ namespace ds
                         if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                         {
                             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
-                            for (const std::string &selectedPath : selectedPaths)
-                            {
-                                AppendStructureFromPathAsCollection(selectedPath);
-                            }
+                            settingsChanged |= QueueStructureImportBatch(selectedPaths);
                         }
                     }
 
                     if (ImGui::Button("Load POSCAR/CONTCAR"))
                     {
-                        AppendStructureFromPathAsCollection(std::string(m_ImportPathBuffer.data()));
+                        settingsChanged |= QueueStructureImportBatch({std::string(m_ImportPathBuffer.data())});
                     }
                     ImGui::SameLine();
                     if (ImGui::Button("Load sample"))
                     {
                         const char *samplePath = EditorLayer::kFallbackStartupImportPath;
                         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", samplePath);
-                        AppendStructureFromPathAsCollection(samplePath);
+                        settingsChanged |= QueueStructureImportBatch({samplePath});
                     }
 
                     ImGui::InputText("Export path", m_ExportPathBuffer.data(), m_ExportPathBuffer.size());

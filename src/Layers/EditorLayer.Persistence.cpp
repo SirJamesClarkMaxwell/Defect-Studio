@@ -558,7 +558,7 @@ namespace ds
         m_SelectedTransformEmptyIndex = -1;
         m_ActiveTransformEmptyIndex = -1;
         m_SelectedSpecialNode = SpecialNodeSelection::None;
-        m_AutoBondsDirty = true;
+        m_AutoBondsDirty = !m_DeferAutoBondRebuildDuringStructureBatch;
         ClearSceneHistory();
         EnsureSceneDefaults();
     }
@@ -710,6 +710,79 @@ namespace ds
         return true;
     }
 
+    bool EditorLayer::AppendParsedStructureAsCollection(const Structure &parsed, const std::string &sourcePath)
+    {
+        if (!m_HasStructureLoaded)
+        {
+            const bool loaded = ApplyParsedStructureToScene(parsed, sourcePath, true);
+            if (loaded && !m_Collections.empty())
+            {
+                const std::string stem = std::filesystem::path(sourcePath).stem().string();
+                m_Collections[0].name = stem.empty() ? "Collection 1" : stem;
+                m_ActiveCollectionIndex = 0;
+            }
+            return loaded;
+        }
+
+        if (parsed.atoms.empty())
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Append import failed: file has no atoms.";
+            LogWarn(m_LastStructureMessage);
+            return false;
+        }
+
+        SceneCollection collection;
+        collection.id = GenerateSceneUUID();
+        PushUndoSnapshot("Append structure as collection");
+        const std::string stem = std::filesystem::path(sourcePath).stem().string();
+        collection.name = stem.empty() ? ("Collection " + std::to_string(m_CollectionCounter++)) : stem;
+        m_Collections.push_back(collection);
+        const int collectionIndex = static_cast<int>(m_Collections.size()) - 1;
+        m_ActiveCollectionIndex = collectionIndex;
+
+        std::size_t appendedCount = 0;
+        for (const Atom &sourceAtom : parsed.atoms)
+        {
+            Atom atom = sourceAtom;
+            glm::vec3 cart = sourceAtom.position;
+            if (parsed.coordinateMode == CoordinateMode::Direct)
+            {
+                cart = parsed.DirectToCartesian(sourceAtom.position);
+            }
+
+            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+            {
+                atom.position = m_WorkingStructure.CartesianToDirect(cart);
+            }
+            else
+            {
+                atom.position = cart;
+            }
+
+            m_WorkingStructure.atoms.push_back(atom);
+            m_AtomNodeIds.push_back(GenerateSceneUUID());
+            m_AtomCollectionIndices.push_back(collectionIndex);
+            ++appendedCount;
+        }
+
+        m_WorkingStructure.RebuildSpeciesFromAtoms();
+        m_AutoBondsDirty = !m_DeferAutoBondRebuildDuringStructureBatch;
+        m_SelectedAtomIndices.clear();
+        m_OutlinerAtomSelectionAnchor.reset();
+        m_OutlinerCollectionSelectionAnchor.reset();
+        m_SelectedCollectionIndices.clear();
+        m_SelectedBondKeys.clear();
+        m_SelectedBondLabelKey = 0;
+        EnsureAtomCollectionAssignments();
+
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Appended " + std::to_string(appendedCount) + " atom(s) from: " + sourcePath +
+                                 " into collection '" + m_Collections[static_cast<std::size_t>(collectionIndex)].name + "'.";
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
     std::filesystem::path EditorLayer::GetPreferredStructureDialogDirectory() const
     {
         const std::filesystem::path structurePath = ResolveProjectStructurePath();
@@ -784,18 +857,6 @@ namespace ds
 
     bool EditorLayer::AppendStructureFromPathAsCollection(const std::string &path)
     {
-        if (!m_HasStructureLoaded)
-        {
-            const bool loaded = LoadStructureFromPath(path);
-            if (loaded && !m_Collections.empty())
-            {
-                const std::string stem = std::filesystem::path(path).stem().string();
-                m_Collections[0].name = stem.empty() ? "Collection 1" : stem;
-                m_ActiveCollectionIndex = 0;
-            }
-            return loaded;
-        }
-
         Structure parsed;
         std::string error;
         if (!m_PoscarParser.ParseFromFile(path, parsed, error))
@@ -806,63 +867,179 @@ namespace ds
             return false;
         }
 
-        if (parsed.atoms.empty())
+        return AppendParsedStructureAsCollection(parsed, path);
+    }
+
+    bool EditorLayer::HasPendingStructureLoad(const std::string &normalizedPath) const
+    {
+        for (const PendingStructureLoad &pendingLoad : m_PendingStructureLoads)
+        {
+            if (pendingLoad.normalizedPath == normalizedPath)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool EditorLayer::QueueStructureLoad(const std::string &path, bool appendAsCollection, bool updateProjectStructurePath)
+    {
+        std::error_code pathEc;
+        std::filesystem::path normalizedPath = NormalizeFilesystemPath(std::filesystem::absolute(std::filesystem::path(path), pathEc));
+        if (pathEc)
+        {
+            normalizedPath = NormalizeFilesystemPath(std::filesystem::path(path));
+        }
+
+        const std::string normalizedPathString = normalizedPath.string();
+        if (normalizedPathString.empty())
         {
             m_LastStructureOperationFailed = true;
-            m_LastStructureMessage = "Append import failed: file has no atoms.";
+            m_LastStructureMessage = "Import failed: empty path.";
             LogWarn(m_LastStructureMessage);
             return false;
         }
 
-        SceneCollection collection;
-        collection.id = GenerateSceneUUID();
-        PushUndoSnapshot("Append structure as collection");
-        const std::string stem = std::filesystem::path(path).stem().string();
-        collection.name = stem.empty() ? ("Collection " + std::to_string(m_CollectionCounter++)) : stem;
-        m_Collections.push_back(collection);
-        const int collectionIndex = static_cast<int>(m_Collections.size()) - 1;
-        m_ActiveCollectionIndex = collectionIndex;
-
-        std::size_t appendedCount = 0;
-        for (const Atom &sourceAtom : parsed.atoms)
+        if (HasPendingStructureLoad(normalizedPathString))
         {
-            Atom atom = sourceAtom;
-            glm::vec3 cart = sourceAtom.position;
-            if (parsed.coordinateMode == CoordinateMode::Direct)
+            return true;
+        }
+
+        PendingStructureLoad pendingLoad;
+        pendingLoad.normalizedPath = normalizedPathString;
+        const std::uint64_t generation = m_StructureLoadGeneration;
+        pendingLoad.future = m_BackgroundThreadPool.submit_task([normalizedPathString, generation, appendAsCollection, updateProjectStructurePath]()
+        {
+            StructureLoadResult result;
+            result.generation = generation;
+            result.path = normalizedPathString;
+            result.appendAsCollection = appendAsCollection;
+            result.updateProjectStructurePath = updateProjectStructurePath;
+            const auto start = std::chrono::steady_clock::now();
+            PoscarParser parser;
+            result.success = parser.ParseFromFile(normalizedPathString, result.structure, result.error);
+            const auto end = std::chrono::steady_clock::now();
+            result.wallMilliseconds = std::chrono::duration<double, std::milli>(end - start).count();
+            return result;
+        });
+
+        m_PendingStructureLoads.push_back(std::move(pendingLoad));
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Queued structure import: " + normalizedPathString;
+        LogInfo(m_LastStructureMessage);
+        return true;
+    }
+
+    bool EditorLayer::QueueStructureImportBatch(const std::vector<std::string> &paths)
+    {
+        if (paths.empty())
+        {
+            return false;
+        }
+
+        ++m_StructureLoadGeneration;
+        m_PendingStructureLoads.clear();
+        m_DeferAutoBondRebuildDuringStructureBatch = true;
+
+        std::unordered_set<std::string> queuedPaths;
+        bool appendAsCollection = m_HasStructureLoaded;
+        bool queuedAny = false;
+        for (std::size_t index = 0; index < paths.size(); ++index)
+        {
+            const std::filesystem::path normalizedPath = NormalizeFilesystemPath(std::filesystem::path(paths[index]));
+            const std::string normalizedPathString = normalizedPath.string();
+            if (normalizedPathString.empty() || !queuedPaths.insert(normalizedPathString).second)
             {
-                cart = parsed.DirectToCartesian(sourceAtom.position);
+                continue;
             }
 
-            if (m_WorkingStructure.coordinateMode == CoordinateMode::Direct)
+            const bool shouldAppend = appendAsCollection || index > 0;
+            queuedAny |= QueueStructureLoad(normalizedPathString, shouldAppend, !shouldAppend);
+            appendAsCollection = true;
+        }
+
+        if (queuedAny)
+        {
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Queued " + std::to_string(m_PendingStructureLoads.size()) + " structure import(s).";
+            LogInfo(m_LastStructureMessage);
+        }
+        else
+        {
+            m_DeferAutoBondRebuildDuringStructureBatch = false;
+        }
+
+        return queuedAny;
+    }
+
+    void EditorLayer::PumpStructureLoadingJobs()
+    {
+        auto pendingIt = m_PendingStructureLoads.begin();
+        while (pendingIt != m_PendingStructureLoads.end())
+        {
+            if (pendingIt->future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
             {
-                atom.position = m_WorkingStructure.CartesianToDirect(cart);
+                break;
+            }
+
+            StructureLoadResult result = pendingIt->future.get();
+            pendingIt = m_PendingStructureLoads.erase(pendingIt);
+
+            if (result.generation != m_StructureLoadGeneration)
+            {
+                continue;
+            }
+
+            if (!result.success)
+            {
+                m_LastStructureOperationFailed = true;
+                m_LastStructureMessage = "Import failed: " + result.error;
+                LogError(m_LastStructureMessage);
+                LogProfiling(
+                    "StructureImport",
+                    "path=\"" + result.path + "\" success=false wall_ms=" + std::to_string(result.wallMilliseconds) +
+                        " pending=" + std::to_string(m_PendingStructureLoads.size()) +
+                        " error=\"" + result.error + "\"");
+                continue;
+            }
+
+            const bool shouldAppend = result.appendAsCollection || m_HasStructureLoaded;
+            if (shouldAppend)
+            {
+                AppendParsedStructureAsCollection(result.structure, result.path);
             }
             else
             {
-                atom.position = cart;
+                ApplyParsedStructureToScene(result.structure, result.path, result.updateProjectStructurePath);
+                if (!m_Collections.empty())
+                {
+                    const std::string stem = std::filesystem::path(result.path).stem().string();
+                    m_Collections[0].name = stem.empty() ? "Collection 1" : stem;
+                    m_ActiveCollectionIndex = 0;
+                }
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Imported structure from: " + result.path +
+                                         " in " + std::to_string(result.wallMilliseconds) + " ms.";
+                LogInfo(m_LastStructureMessage);
             }
 
-            m_WorkingStructure.atoms.push_back(atom);
-            m_AtomNodeIds.push_back(GenerateSceneUUID());
-            m_AtomCollectionIndices.push_back(collectionIndex);
-            ++appendedCount;
+            LogProfiling(
+                "StructureImport",
+                "path=\"" + result.path + "\" success=true append=" + std::string(shouldAppend ? "true" : "false") +
+                    " atoms=" + std::to_string(result.structure.atoms.size()) +
+                    " wall_ms=" + std::to_string(result.wallMilliseconds) +
+                    " remaining=" + std::to_string(m_PendingStructureLoads.size()));
+
+            if (m_PendingStructureLoads.empty() && m_DeferAutoBondRebuildDuringStructureBatch)
+            {
+                m_DeferAutoBondRebuildDuringStructureBatch = false;
+                m_AutoBondsDirty = m_AutoBondGenerationEnabled;
+                LogInfo("Completed queued structure import batch.");
+            }
+
+            break;
         }
-
-        m_WorkingStructure.RebuildSpeciesFromAtoms();
-        m_AutoBondsDirty = true;
-        m_SelectedAtomIndices.clear();
-        m_OutlinerAtomSelectionAnchor.reset();
-        m_OutlinerCollectionSelectionAnchor.reset();
-        m_SelectedCollectionIndices.clear();
-        m_SelectedBondKeys.clear();
-        m_SelectedBondLabelKey = 0;
-        EnsureAtomCollectionAssignments();
-
-        m_LastStructureOperationFailed = false;
-        m_LastStructureMessage = "Appended " + std::to_string(appendedCount) + " atom(s) from: " + path +
-                                 " into collection '" + m_Collections[static_cast<std::size_t>(collectionIndex)].name + "'.";
-        LogInfo(m_LastStructureMessage);
-        return true;
     }
 
     bool EditorLayer::ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision)
@@ -1467,6 +1644,7 @@ namespace ds
     void EditorLayer::RebuildAutoBonds(const std::vector<glm::vec3> &atomCartesianPositions)
     {
         DS_PROFILE_SCOPE_N("EditorLayer::RebuildAutoBonds");
+        const auto rebuildStart = std::chrono::steady_clock::now();
         m_GeneratedBonds.clear();
         std::unordered_set<std::uint64_t> seenLabelKeys;
 
@@ -1495,54 +1673,160 @@ namespace ds
 
         if (m_AutoBondGenerationEnabled)
         {
-            for (std::size_t i = 0; i < atomCount; ++i)
+            struct SpatialCell
             {
-                const Atom &atomA = m_WorkingStructure.atoms[i];
-                const float radiusA = CovalentRadiusPmByElementSymbol(atomA.element);
+                int x = 0;
+                int y = 0;
+                int z = 0;
 
-                for (std::size_t j = i + 1; j < atomCount; ++j)
+                bool operator==(const SpatialCell &other) const
                 {
-                    const Atom &atomB = m_WorkingStructure.atoms[j];
-                    const float radiusB = CovalentRadiusPmByElementSymbol(atomB.element);
+                    return x == other.x && y == other.y && z == other.z;
+                }
+            };
 
-                    const glm::vec3 delta = atomCartesianPositions[j] - atomCartesianPositions[i];
-                    const float distance = glm::length(delta);
-                    if (distance < kMinBondDistance)
+            struct SpatialCellHash
+            {
+                std::size_t operator()(const SpatialCell &cell) const noexcept
+                {
+                    const std::size_t hx = static_cast<std::size_t>(static_cast<std::uint32_t>(cell.x) * 73856093u);
+                    const std::size_t hy = static_cast<std::size_t>(static_cast<std::uint32_t>(cell.y) * 19349663u);
+                    const std::size_t hz = static_cast<std::size_t>(static_cast<std::uint32_t>(cell.z) * 83492791u);
+                    return hx ^ hy ^ hz;
+                }
+            };
+
+            std::vector<float> atomRadiiPm(atomCount, 0.0f);
+            std::unordered_map<int, std::vector<std::size_t>> atomsByCollection;
+            atomsByCollection.reserve(m_Collections.size() + 1);
+
+            float maxPairScale = thresholdScale;
+            if (m_BondUsePairThresholdOverrides)
+            {
+                for (const auto &[_, overrideScale] : m_BondPairThresholdScaleOverrides)
+                {
+                    maxPairScale = std::max(maxPairScale, glm::clamp(overrideScale, 0.40f, 3.00f));
+                }
+            }
+
+            for (std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex)
+            {
+                atomRadiiPm[atomIndex] = CovalentRadiusPmByElementSymbol(m_WorkingStructure.atoms[atomIndex].element);
+                atomsByCollection[ResolveAtomCollectionIndex(atomIndex)].push_back(atomIndex);
+            }
+
+            for (const auto &[collectionIndex, collectionAtomIndices] : atomsByCollection)
+            {
+                if (collectionAtomIndices.size() < 2)
+                {
+                    continue;
+                }
+
+                float maxRadiusPm = 0.0f;
+                for (std::size_t atomIndex : collectionAtomIndices)
+                {
+                    maxRadiusPm = std::max(maxRadiusPm, atomRadiiPm[atomIndex]);
+                }
+
+                const float broadPhaseCutoff = std::max(kMinBondDistance, 2.0f * maxRadiusPm * kPmToAngstrom * maxPairScale);
+                const float cellSize = std::max(0.10f, broadPhaseCutoff);
+
+                auto computeCell = [cellSize](const glm::vec3 &position) -> SpatialCell
+                {
+                    return SpatialCell{
+                        static_cast<int>(std::floor(position.x / cellSize)),
+                        static_cast<int>(std::floor(position.y / cellSize)),
+                        static_cast<int>(std::floor(position.z / cellSize))};
+                };
+
+                std::unordered_map<SpatialCell, std::vector<std::size_t>, SpatialCellHash> cells;
+                cells.reserve(collectionAtomIndices.size() * 2);
+                for (std::size_t atomIndex : collectionAtomIndices)
+                {
+                    cells[computeCell(atomCartesianPositions[atomIndex])].push_back(atomIndex);
+                }
+
+                for (std::size_t atomAIndex : collectionAtomIndices)
+                {
+                    const Atom &atomA = m_WorkingStructure.atoms[atomAIndex];
+                    const float radiusA = atomRadiiPm[atomAIndex];
+                    const SpatialCell originCell = computeCell(atomCartesianPositions[atomAIndex]);
+
+                    for (int dz = -1; dz <= 1; ++dz)
                     {
-                        continue;
-                    }
-
-                    const float pairScale = ResolveBondThresholdScaleForPair(atomA.element, atomB.element);
-                    const float cutoff = (radiusA + radiusB) * kPmToAngstrom * pairScale;
-                    if (distance > cutoff)
-                    {
-                        continue;
-                    }
-
-                    BondSegment bond;
-                    bond.atomA = i;
-                    bond.atomB = j;
-                    bond.start = atomCartesianPositions[i];
-                    bond.end = atomCartesianPositions[j];
-                    bond.midpoint = (bond.start + bond.end) * 0.5f;
-                    bond.length = distance;
-                    m_GeneratedBonds.push_back(bond);
-
-                    const std::uint64_t labelKey = MakeBondPairKey(i, j);
-                    seenLabelKeys.insert(labelKey);
-                    BondLabelState &labelState = m_BondLabelStates[labelKey];
-                    labelState.atomA = i;
-                    labelState.atomB = j;
-                    labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
-
-                    if (m_GeneratedBonds.size() >= kMaxBondCount)
-                    {
-                        if (m_LastLoggedBondCount != m_GeneratedBonds.size())
+                        for (int dy = -1; dy <= 1; ++dy)
                         {
-                            m_LastLoggedBondCount = m_GeneratedBonds.size();
-                            LogWarn("Auto bond generation reached hard cap of " + std::to_string(kMaxBondCount) + " bonds.");
+                            for (int dx = -1; dx <= 1; ++dx)
+                            {
+                                const SpatialCell neighborCell{originCell.x + dx, originCell.y + dy, originCell.z + dz};
+                                const auto cellIt = cells.find(neighborCell);
+                                if (cellIt == cells.end())
+                                {
+                                    continue;
+                                }
+
+                                for (std::size_t atomBIndex : cellIt->second)
+                                {
+                                    if (atomBIndex <= atomAIndex)
+                                    {
+                                        continue;
+                                    }
+
+                                    const Atom &atomB = m_WorkingStructure.atoms[atomBIndex];
+                                    const float radiusB = atomRadiiPm[atomBIndex];
+
+                                    const glm::vec3 delta = atomCartesianPositions[atomBIndex] - atomCartesianPositions[atomAIndex];
+                                    const float distance = glm::length(delta);
+                                    if (distance < kMinBondDistance)
+                                    {
+                                        continue;
+                                    }
+
+                                    const float pairScale = ResolveBondThresholdScaleForPair(atomA.element, atomB.element);
+                                    const float cutoff = (radiusA + radiusB) * kPmToAngstrom * pairScale;
+                                    if (distance > cutoff)
+                                    {
+                                        continue;
+                                    }
+
+                                    BondSegment bond;
+                                    bond.atomA = atomAIndex;
+                                    bond.atomB = atomBIndex;
+                                    bond.start = atomCartesianPositions[atomAIndex];
+                                    bond.end = atomCartesianPositions[atomBIndex];
+                                    bond.midpoint = (bond.start + bond.end) * 0.5f;
+                                    bond.length = distance;
+                                    m_GeneratedBonds.push_back(bond);
+
+                                    const std::uint64_t labelKey = MakeBondPairKey(atomAIndex, atomBIndex);
+                                    seenLabelKeys.insert(labelKey);
+                                    BondLabelState &labelState = m_BondLabelStates[labelKey];
+                                    labelState.atomA = atomAIndex;
+                                    labelState.atomB = atomBIndex;
+                                    labelState.scale = glm::clamp(labelState.scale, 0.25f, 4.0f);
+
+                                    if (m_GeneratedBonds.size() >= kMaxBondCount)
+                                    {
+                                        const double wallMilliseconds = std::chrono::duration<double, std::milli>(
+                                                                            std::chrono::steady_clock::now() - rebuildStart)
+                                                                            .count();
+                                        LogProfiling(
+                                            "AutoBonds",
+                                            "status=cap_reached atoms=" + std::to_string(atomCount) +
+                                                " collections=" + std::to_string(atomsByCollection.size()) +
+                                                " generated_bonds=" + std::to_string(m_GeneratedBonds.size()) +
+                                                " manual_bonds=" + std::to_string(m_ManualBondKeys.size()) +
+                                                " wall_ms=" + std::to_string(wallMilliseconds));
+                                        if (m_LastLoggedBondCount != m_GeneratedBonds.size())
+                                        {
+                                            m_LastLoggedBondCount = m_GeneratedBonds.size();
+                                            LogWarn("Auto bond generation reached hard cap of " + std::to_string(kMaxBondCount) + " bonds.");
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
                         }
-                        return;
                     }
                 }
             }
@@ -1652,6 +1936,30 @@ namespace ds
             LogTrace("Auto bond generation updated: bonds=" + std::to_string(m_GeneratedBonds.size()) +
                      ", atoms=" + std::to_string(atomCount) +
                      ", threshold_scale=" + std::to_string(thresholdScale));
+        }
+
+        const double wallMilliseconds = std::chrono::duration<double, std::milli>(
+                                            std::chrono::steady_clock::now() - rebuildStart)
+                                            .count();
+        const bool shouldLogProfiling =
+            atomCount >= 256 || wallMilliseconds >= 1.0 || m_GeneratedBonds.size() >= 512 || !m_ManualBondKeys.empty();
+        if (shouldLogProfiling)
+        {
+            std::unordered_set<int> uniqueCollections;
+            uniqueCollections.reserve(atomCount);
+            for (std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex)
+            {
+                uniqueCollections.insert(ResolveAtomCollectionIndex(atomIndex));
+            }
+
+            LogProfiling(
+                "AutoBonds",
+                "atoms=" + std::to_string(atomCount) +
+                    " collections=" + std::to_string(uniqueCollections.size()) +
+                    " generated_bonds=" + std::to_string(m_GeneratedBonds.size()) +
+                    " manual_bonds=" + std::to_string(m_ManualBondKeys.size()) +
+                    " auto_enabled=" + std::string(m_AutoBondGenerationEnabled ? "true" : "false") +
+                    " wall_ms=" + std::to_string(wallMilliseconds));
         }
     }
 

@@ -212,19 +212,15 @@
   - [x] Update VS Code tasks and helper scripts to use the new Windows tooling entrypoint
   - [x] Update `README.md` with the new Windows canonical commands
 
-### [ ] T12a - Cross-platform tooling follow-up
-  - [ ] Verify the Python tooling works end-to-end on WSL/Linux
-  - [ ] Decide whether Linux/WSL should keep the same wrapper surface or use a dedicated shell entrypoint
-  - [ ] Re-check exit-code/output parity once cross-platform behavior is finalized
 
-### [ ] T13 - bug fixes
-  - [ ] multithread loading of poscar
-  - [ ] lazy loading multiple poscars
-  - [ ] do not calculate bonds between atms in different collections
-  - [ ] reverse Roll Left / Roll Right and pan up / down / left / right mappings where they are currently inverted
+### [x] T13 - bug fixes
+  - [x] multithread loading of poscar
+  - [x] lazy loading multiple poscars
+  - [x] do not calculate bonds between atms in different collections
+  - [x] reverse Roll Left / Roll Right and pan up / down / left / right mappings where they are currently inverted
 
 
-### [ ] T13a - General code refactor (`task/13a-general-refactor`)
+### [ ] T14a - General code refactor (`task/13a-general-refactor`)
   - [ ] Define refactor scope and module boundaries (no feature changes)
   - [ ] Stronger Core <-> App separation (dependency direction and responsibilities)
   - [ ] pch.hpp, .h->.hpp
@@ -248,7 +244,7 @@
   - [ ] Job window (tracking progress (progress bars), predicted time, total time, priority)
   - [ ] tracy like window with statistics how aplication is performing
 
-### [ ] T13b - Local code documentation site (mdBook) (`task/13b-local-docs-mdbook`)
+### [ ] T14b - Local code documentation site (mdBook) (`task/13b-local-docs-mdbook`)
   - [ ] Start after T13a completion (minimum fallback: after T11)
   - [ ] Initialize local mdBook project in `docs/`
   - [ ] Define documentation structure (`SUMMARY.md`) for core modules
@@ -259,7 +255,7 @@
   - [ ] Add quick link/instructions in main `README.md`
   - [ ] Verify fully offline local usage (`mdbook serve` / `mdbook build`)
 
-### [ ] T13c - Advanced render architecture follow-up (`task/13c-advanced-render-architecture`)
+### [ ] T15 - Advanced render architecture follow-up (`task/13c-advanced-render-architecture`)
   - [ ] Start only after T11a and T11b are in good shape
   - [ ] Evaluate msdfgen / 3D label strategy and decide implementation path
   - [ ] Investigate a fuller mesh-based atoms/bonds rendering direction (replace remaining line-based paths, scene/ECS implications, `entt?`)
@@ -267,7 +263,7 @@
   - [ ] Multi-viewport support (different defects in different viewports)
 
 
-### [ ] T14 - Python ecosystem integration (`task/14-python-integration`)
+### [ ] T16 - Python ecosystem integration (`task/14-python-integration`)
   - [ ] Python integration layer
   - [ ] Embedded Python interpreter lifecycle management
   - [ ] Script runner with project-context bindings
@@ -277,7 +273,7 @@
   - [ ] Structure manipulation using ASE workflows
   - [ ] Optional ASE calculator bridge (phase 2)
 
-### [ ] T15 - Project concept
+### [ ] T17 - Project concept
   - [ ] Tracking added files
   - [ ] auto-save
   - [ ] conception of the defect
@@ -289,7 +285,7 @@
   - [ ] lazy resource loading
 
 
-### [ ] T16 - Advanced materials science tools (`task/15-materials-tools`)
+### [ ] T18 - Advanced materials science tools (`task/15-materials-tools`)
   - [ ] Crystal generator from Bravais lattices
   - [ ] Define lattice system presets (sc, bcc, fcc, hcp, diamond, custom)
   - [ ] Define and edit basis atoms (element + fractional coordinates)
@@ -309,7 +305,7 @@
   - [ ] CIF validation report (unsupported symmetry/occupancy fallback)
 
 
-### [ ] T17 - VASP ecosystem integration (`task/17-vasp-integration`)
+### [ ] T19 - VASP ecosystem integration (`task/17-vasp-integration`)
   - [ ] Full OUTCAR parser
   - [ ] binary representation of CHG-files and WAVECAR, library to get this done or server side
   - [ ] Parse electronic structure metadata
@@ -322,7 +318,7 @@
   - [ ] Enable orbital projection data pipeline
   - [ ] Prepare wavefunction-derived data for visualization
 
-### [ ] T18 - Volumetric visualization extensions (`task/18-volumetric-extensions`)
+### [ ] T20 - Volumetric visualization extensions (`task/18-volumetric-extensions`)
   - [ ] Validate parser and visualization against `Example-Project/project/PARCHG.0778.ALLK` to `PARCHG.0782.ALLK`
   - [ ] Improve visual parity with VESTA for the sample scenes (surface defaults, shading, and interpretation)
   - [ ] Isosurface rendering module
@@ -335,7 +331,7 @@
   - [ ] Customizable polyhedra colors and edge styles
   - [ ] VESTA-like visualization presets
 
-### [ ] T19 - Defect correction workflows (`task/19-defect-corrections`)
+### [ ] T21 - Defect correction workflows (`task/19-defect-corrections`)
   - [ ] Freysoldt correction workflow automation
   - [ ] Generate folder structure and correction input templates
   - [ ] Prepare correction calculation points automatically
@@ -346,12 +342,17 @@
   - [ ] CUDA/OpenGL compute backend prototype
   - [ ] Enable large-supercell correction workflow
 
-### [ ] T20 - Remote access to list of servers
+### [ ] T22 - Remote access to list of servers
   - [ ] winscp like
   - [ ] autorefresh server
   - [ ] copy-paste files
 
-### [ ] T21 - Local CI equivalents (`task/16-local-ci`)
+### [ ] T23 - Cross-platform tooling follow-up
+  - [ ] Verify the Python tooling works end-to-end on WSL/Linux
+  - [ ] Decide whether Linux/WSL should keep the same wrapper surface or use a dedicated shell entrypoint
+  - [ ] Re-check exit-code/output parity once cross-platform behavior is finalized
+
+### [ ] T24 - Local CI equivalents (`task/16-local-ci`)
   - [ ] Add `scripts/ci_check.py` - master check script that runs full verification sequence locally
   - [ ] ci_check.py step 1: run `verify_build.py` (Debug + Release)
   - [ ] ci_check.py step 2: run build on WSL (g++/clang) via subprocess
@@ -359,13 +360,13 @@
   - [ ] Integrate `ci_check.py` into Copilot workflow: run before every merge to main
   - [ ] Document usage in README.md
 
-### [ ] T22 - Other-builds (`task/20-multiplatform`)
+### [ ] T25 - Other-builds (`task/20-multiplatform`)
   - [ ] Verify Premake5 generates valid Makefiles (premake5 gmake2)
   - [ ] Build with g++ on WSL - fix any Linux-specific compilation errors
   - [ ] Build with clang on WSL - fix any clang-specific warnings/errors
   - [ ] Verify `scripts/ci_check.py` passes on WSL end-to-end
 
-### [ ] T23 - Tests, samples, docs (`task/21-tests-samples-docs`)
+### [ ] T26 - Tests, samples, docs (`task/21-tests-samples-docs`)
   - [ ] Parser unit tests + POSCAR round-trip
   - [ ] `assets/samples` small input files
   - [ ] README (build/run/controls)

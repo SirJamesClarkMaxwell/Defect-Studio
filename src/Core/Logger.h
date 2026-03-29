@@ -38,6 +38,9 @@ namespace ds
         void Log(LogLevel level,
                  std::string_view message,
                  const std::source_location &location = std::source_location::current());
+        void LogProfiling(std::string_view category,
+                          std::string_view message,
+                          const std::source_location &location = std::source_location::current());
         void Clear();
 
         std::vector<LogEntry> GetEntriesSnapshot() const;
@@ -56,5 +59,8 @@ namespace ds
     void LogWarn(std::string_view message, const std::source_location &location = std::source_location::current());
     void LogError(std::string_view message, const std::source_location &location = std::source_location::current());
     void LogFatal(std::string_view message, const std::source_location &location = std::source_location::current());
+    void LogProfiling(std::string_view category,
+                      std::string_view message,
+                      const std::source_location &location = std::source_location::current());
 
 } // namespace ds

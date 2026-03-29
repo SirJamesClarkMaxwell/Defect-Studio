@@ -4,6 +4,7 @@
 #include "Renderer/Shader.h"
 
 #include <cstdint>
+#include <chrono>
 #include <unordered_map>
 #include <vector>
 
@@ -38,6 +39,11 @@ namespace ds
             const glm::mat4 &viewProjection,
             const std::vector<glm::vec3> &lineVertices,
             const glm::vec3 &lineColor,
+            float lineWidth) override;
+        void RenderColoredLineSegments(
+            const glm::mat4 &viewProjection,
+            const std::vector<glm::vec3> &lineVertices,
+            const std::vector<glm::vec3> &lineColors,
             float lineWidth) override;
         void RenderSurfaceMesh(
             const glm::mat4 &viewProjection,
@@ -106,11 +112,21 @@ namespace ds
 
         std::uint32_t m_GridVAO = 0;
         std::uint32_t m_GridVBO = 0;
+        std::uint32_t m_ColoredLineVAO = 0;
+        std::uint32_t m_ColoredLineVBO = 0;
         std::unordered_map<std::uint64_t, SurfaceMeshCacheEntry> m_SurfaceMeshCache;
 
         std::uint32_t m_ViewportWidth = 1;
         std::uint32_t m_ViewportHeight = 1;
         int m_MsaaSamples = 4;
+        std::uint64_t m_FrameIndex = 0;
+        double m_FrameLineSegmentCpuMilliseconds = 0.0;
+        std::size_t m_FrameLineSegmentDrawCalls = 0;
+        std::size_t m_FrameLineSegmentVertexCount = 0;
+        double m_FrameGridCpuMilliseconds = 0.0;
+        std::size_t m_FrameGridDrawCalls = 0;
+        std::size_t m_FrameGridVertexCount = 0;
+        std::chrono::steady_clock::time_point m_LastLineProfilingLogTime{};
     };
 
 } // namespace ds

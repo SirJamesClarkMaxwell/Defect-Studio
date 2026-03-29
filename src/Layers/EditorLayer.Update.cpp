@@ -793,6 +793,7 @@ namespace ds
             m_CameraTransitionActive = false;
         }
         UpdateCameraOrbitTransition(deltaTime);
+        PumpStructureLoadingJobs();
         PumpVolumetricLoadingJobs();
         PumpVolumetricSurfaceBuildJobs();
         EnsureVolumetricSurfaceMeshes();
@@ -976,14 +977,34 @@ namespace ds
             {
                 if (m_AutoBondsDirty && m_AutoRecalculateBondsOnEdit)
                 {
-                    RebuildAutoBonds(atomCartesianPositions);
-                    m_AutoBondsDirty = false;
+                    const bool manipulationActive =
+                        m_TranslateModeActive || m_RotateModeActive || m_FallbackGizmoDragging || m_TransformManipulationActive;
+                    const bool useDebounce = atomCartesianPositions.size() >= 512;
+                    if (manipulationActive)
+                    {
+                        m_AutoBondDirtyElapsed = 0.0f;
+                    }
+                    else
+                    {
+                        m_AutoBondDirtyElapsed += deltaTime;
+                        if (!useDebounce || m_AutoBondDirtyElapsed >= m_AutoBondRebuildDebounceSeconds)
+                        {
+                            RebuildAutoBonds(atomCartesianPositions);
+                            m_AutoBondsDirty = false;
+                            m_AutoBondDirtyElapsed = 0.0f;
+                        }
+                    }
+                }
+                else if (!m_AutoBondsDirty)
+                {
+                    m_AutoBondDirtyElapsed = 0.0f;
                 }
             }
             else
             {
                 // Keep only manually created bonds when auto generation is disabled.
                 RebuildAutoBonds(atomCartesianPositions);
+                m_AutoBondDirtyElapsed = 0.0f;
             }
 
             if (!m_GeneratedBonds.empty())
@@ -997,18 +1018,18 @@ namespace ds
 
                 std::vector<glm::vec3> regularBondVertices;
                 std::vector<glm::vec3> selectedBondVertices;
+                std::vector<glm::vec3> coloredBondVertices;
+                std::vector<glm::vec3> coloredBondColors;
                 regularBondVertices.reserve(m_GeneratedBonds.size() * 2);
-                selectedBondVertices.reserve(m_GeneratedBonds.size());
-                std::vector<glm::vec3> segmentVertices(2, glm::vec3(0.0f));
-                auto renderLineSegment = [&](const glm::vec3 &a, const glm::vec3 &b, const glm::vec3 &color)
+                selectedBondVertices.reserve(m_GeneratedBonds.size() * 2);
+                coloredBondVertices.reserve(m_GeneratedBonds.size() * 8);
+                coloredBondColors.reserve(m_GeneratedBonds.size() * 8);
+                auto appendColoredSegment = [&](const glm::vec3 &a, const glm::vec3 &b, const glm::vec3 &colorA, const glm::vec3 &colorB)
                 {
-                    segmentVertices[0] = a;
-                    segmentVertices[1] = b;
-                    m_RenderBackend->RenderLineSegments(
-                        m_Camera->GetViewProjectionMatrix(),
-                        segmentVertices,
-                        color,
-                        m_BondLineWidth);
+                    coloredBondVertices.push_back(a);
+                    coloredBondVertices.push_back(b);
+                    coloredBondColors.push_back(colorA);
+                    coloredBondColors.push_back(colorB);
                 };
 
                 for (const BondSegment &bond : m_GeneratedBonds)
@@ -1044,8 +1065,8 @@ namespace ds
                             const glm::vec3 colorB = (bond.atomB < atomResolvedColors.size()) ? atomResolvedColors[bond.atomB] : m_BondColor;
                             if (m_BondRenderStyle == BondRenderStyle::BicolorLine)
                             {
-                                renderLineSegment(bond.start, bond.midpoint, colorA);
-                                renderLineSegment(bond.midpoint, bond.end, colorB);
+                                appendColoredSegment(bond.start, bond.midpoint, colorA, colorA);
+                                appendColoredSegment(bond.midpoint, bond.end, colorB, colorB);
                             }
                             else
                             {
@@ -1056,8 +1077,9 @@ namespace ds
                                     const float t1 = static_cast<float>(step + 1) / static_cast<float>(kGradientSteps);
                                     const glm::vec3 p0 = glm::mix(bond.start, bond.end, t0);
                                     const glm::vec3 p1 = glm::mix(bond.start, bond.end, t1);
-                                    const glm::vec3 c = glm::mix(colorA, colorB, (t0 + t1) * 0.5f);
-                                    renderLineSegment(p0, p1, c);
+                                    const glm::vec3 c0 = glm::mix(colorA, colorB, t0);
+                                    const glm::vec3 c1 = glm::mix(colorA, colorB, t1);
+                                    appendColoredSegment(p0, p1, c0, c1);
                                 }
                             }
                         }
@@ -1070,6 +1092,15 @@ namespace ds
                         m_Camera->GetViewProjectionMatrix(),
                         regularBondVertices,
                         m_BondColor,
+                        m_BondLineWidth);
+                }
+
+                if (!coloredBondVertices.empty())
+                {
+                    m_RenderBackend->RenderColoredLineSegments(
+                        m_Camera->GetViewProjectionMatrix(),
+                        coloredBondVertices,
+                        coloredBondColors,
                         m_BondLineWidth);
                 }
 

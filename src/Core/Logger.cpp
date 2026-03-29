@@ -12,6 +12,16 @@ namespace ds
 
     namespace
     {
+        void AppendLogLineToFile(const std::filesystem::path &path, const std::string &line)
+        {
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream out(path, std::ios::app);
+            if (out.is_open())
+            {
+                out << line << '\n';
+            }
+        }
+
         std::string BuildShortFileName(std::string_view filePath)
         {
             if (filePath.empty())
@@ -84,33 +94,30 @@ namespace ds
             ++m_ErrorCount;
         }
 
-        std::filesystem::create_directories("logs");
-        std::ofstream out("logs/runtime.log", std::ios::app);
-        if (out.is_open())
+        const char *levelText = "INFO";
+        if (level == LogLevel::Trace)
         {
-            const char *levelText = "INFO";
-            if (level == LogLevel::Trace)
-            {
-                levelText = "TRACE";
-            }
-            else if (level == LogLevel::Warn)
-            {
-                levelText = "WARN";
-            }
-            else if (level == LogLevel::Error)
-            {
-                levelText = "ERROR";
-            }
-            else if (level == LogLevel::Fatal)
-            {
-                levelText = "FATAL";
-            }
-
-            out << '[' << timestamp << "] [" << levelText << "] "
-                << '[' << file << ':' << location.line() << "] "
-                << '[' << function << "] "
-                << text << '\n';
+            levelText = "TRACE";
         }
+        else if (level == LogLevel::Warn)
+        {
+            levelText = "WARN";
+        }
+        else if (level == LogLevel::Error)
+        {
+            levelText = "ERROR";
+        }
+        else if (level == LogLevel::Fatal)
+        {
+            levelText = "FATAL";
+        }
+
+        std::ostringstream line;
+        line << '[' << timestamp << "] [" << levelText << "] "
+             << '[' << file << ':' << location.line() << "] "
+             << '[' << function << "] "
+             << text;
+        AppendLogLineToFile("logs/runtime.log", line.str());
 
         constexpr std::size_t maxEntries = 2000;
         if (m_Entries.size() > maxEntries)
@@ -118,6 +125,23 @@ namespace ds
             const std::size_t dropCount = m_Entries.size() - maxEntries;
             m_Entries.erase(m_Entries.begin(), m_Entries.begin() + static_cast<std::ptrdiff_t>(dropCount));
         }
+    }
+
+    void Logger::LogProfiling(std::string_view category, std::string_view message, const std::source_location &location)
+    {
+        std::scoped_lock lock(m_Mutex);
+
+        const std::string timestamp = BuildTimestampNow();
+        const std::string file = BuildShortFileName(location.file_name());
+        const std::string function = BuildShortFunctionName(location.function_name());
+
+        std::ostringstream line;
+        line << '[' << timestamp << "] [PROFILE] "
+             << '[' << category << "] "
+             << '[' << file << ':' << location.line() << "] "
+             << '[' << function << "] "
+             << message;
+        AppendLogLineToFile("logs/profiling.log", line.str());
     }
 
     void Logger::Clear()
@@ -162,6 +186,11 @@ namespace ds
     void LogFatal(std::string_view message, const std::source_location &location)
     {
         Logger::Get().Log(LogLevel::Fatal, message, location);
+    }
+
+    void LogProfiling(std::string_view category, std::string_view message, const std::source_location &location)
+    {
+        Logger::Get().LogProfiling(category, message, location);
     }
 
 } // namespace ds

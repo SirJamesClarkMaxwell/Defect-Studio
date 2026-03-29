@@ -212,9 +212,9 @@ elements:
       symbol: C
     visualDefaults:
       defaultColor:
-        r: 0
-        g: 0
-        b: 0
+        r: 9.999971e-05
+        g: 0.0001
+        b: 9.998999e-05
       defaultScale: 1
     chemistry:
       {}

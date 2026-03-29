@@ -378,6 +378,10 @@ namespace ds
         const char *ThemeName(ThemePreset preset) const;
         bool LoadStructureFromPath(const std::string &path);
         bool AppendStructureFromPathAsCollection(const std::string &path);
+        bool QueueStructureLoad(const std::string &path, bool appendAsCollection, bool updateProjectStructurePath = true);
+        bool QueueStructureImportBatch(const std::vector<std::string> &paths);
+        bool HasPendingStructureLoad(const std::string &normalizedPath) const;
+        void PumpStructureLoadingJobs();
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
         bool BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const;
         bool ExportCollectionToPath(int collectionIndex, const std::string &path, CoordinateMode mode, int precision);
@@ -418,6 +422,7 @@ namespace ds
         int ResolveAtomCollectionIndex(std::size_t atomIndex) const;
         void EnsureAtomCollectionAssignments();
         void EnsureSceneDefaults();
+        bool AppendParsedStructureAsCollection(const Structure &parsed, const std::string &sourcePath);
         void DeleteTransformEmptyAtIndex(int emptyIndex);
         bool AlignEmptyZAxisFromSelectedAtoms(int emptyIndex);
         bool AlignEmptyAxesToCameraView(int emptyIndex);
@@ -579,6 +584,9 @@ namespace ds
         bool m_AutoBondGenerationEnabled = true;
         bool m_AutoRecalculateBondsOnEdit = true;
         bool m_AutoBondsDirty = true;
+        float m_AutoBondDirtyElapsed = 0.0f;
+        float m_AutoBondRebuildDebounceSeconds = 0.15f;
+        bool m_DeferAutoBondRebuildDuringStructureBatch = false;
         bool m_ShowBondLengthLabels = true;
         float m_BondThresholdScale = 1.12f;
         float m_BondLineWidth = 2.0f;
@@ -665,6 +673,22 @@ namespace ds
             std::string normalizedPath;
             std::future<VolumetricDatasetLoadResult> future;
         };
+        struct StructureLoadResult
+        {
+            std::uint64_t generation = 0;
+            std::string path;
+            Structure structure;
+            std::string error;
+            double wallMilliseconds = 0.0;
+            bool appendAsCollection = false;
+            bool updateProjectStructurePath = false;
+            bool success = false;
+        };
+        struct PendingStructureLoad
+        {
+            std::string normalizedPath;
+            std::future<StructureLoadResult> future;
+        };
         struct VolumetricBlockLoadResult
         {
             std::uint64_t generation = 0;
@@ -721,9 +745,11 @@ namespace ds
         glm::vec3 m_VolumetricSpecularColor = glm::vec3(0.0f);
         float m_VolumetricShininess = 100.0f;
         std::string m_VolumetricSurfaceDatasetKey;
+        std::vector<PendingStructureLoad> m_PendingStructureLoads;
         std::vector<PendingVolumetricDatasetLoad> m_PendingVolumetricDatasetLoads;
         std::vector<PendingVolumetricBlockLoad> m_PendingVolumetricBlockLoads;
         std::vector<PendingVolumetricSurfaceBuild> m_PendingVolumetricSurfaceBuilds;
+        std::uint64_t m_StructureLoadGeneration = 1;
         std::uint64_t m_VolumetricLoadGeneration = 1;
         std::uint64_t m_VolumetricSurfaceBuildRequestCounter = 1;
         std::size_t m_LastLoggedBondCount = std::numeric_limits<std::size_t>::max();
@@ -796,6 +822,7 @@ namespace ds
         bool m_GizmoConsumedMouseThisFrame = false;
         bool m_FallbackGizmoDragging = false;
         float m_FallbackGizmoVisualScale = 2.0f;
+        bool m_TransformManipulationActive = false;
         bool m_TranslateModeActive = false;
         int m_TranslateConstraintAxis = -1;
         int m_TranslatePlaneLockAxis = -1;

@@ -64,6 +64,11 @@ namespace ds
             const std::vector<glm::vec3> &lineVertices,
             const glm::vec3 &lineColor,
             float lineWidth) = 0;
+        virtual void RenderColoredLineSegments(
+            const glm::mat4 &viewProjection,
+            const std::vector<glm::vec3> &lineVertices,
+            const std::vector<glm::vec3> &lineColors,
+            float lineWidth) = 0;
         virtual void RenderSurfaceMesh(
             const glm::mat4 &viewProjection,
             const std::vector<glm::vec3> &positions,

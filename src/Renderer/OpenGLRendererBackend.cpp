@@ -14,10 +14,12 @@
 #include <glm/vec3.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -36,6 +38,12 @@ namespace ds
         {
             glm::vec3 position;
             glm::vec3 normal;
+        };
+
+        struct ColoredLineVertex
+        {
+            glm::vec3 position;
+            glm::vec3 color;
         };
 
         void ConfigureInstanceAttributes(std::uint32_t vao, std::uint32_t instanceVbo, std::uint32_t colorVbo)
@@ -185,6 +193,8 @@ namespace ds
         glGenBuffers(1, &m_InstanceColorVBO);
         glGenVertexArrays(1, &m_GridVAO);
         glGenBuffers(1, &m_GridVBO);
+        glGenVertexArrays(1, &m_ColoredLineVAO);
+        glGenBuffers(1, &m_ColoredLineVBO);
 
         std::vector<SphereVertex> sphereVertices;
         std::vector<std::uint32_t> sphereIndices;
@@ -260,6 +270,16 @@ namespace ds
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
+        glBindVertexArray(m_ColoredLineVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_ColoredLineVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(ColoredLineVertex), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ColoredLineVertex), reinterpret_cast<void *>(offsetof(ColoredLineVertex, position)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(ColoredLineVertex), reinterpret_cast<void *>(offsetof(ColoredLineVertex, color)));
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
 #if defined(DS_ENABLE_TRACY)
         TracyGpuContext;
         LogInfo("Tracy GPU context initialized.");
@@ -300,6 +320,18 @@ namespace ds
         {
             glDeleteVertexArrays(1, &m_GridVAO);
             m_GridVAO = 0;
+        }
+
+        if (m_ColoredLineVBO != 0)
+        {
+            glDeleteBuffers(1, &m_ColoredLineVBO);
+            m_ColoredLineVBO = 0;
+        }
+
+        if (m_ColoredLineVAO != 0)
+        {
+            glDeleteVertexArrays(1, &m_ColoredLineVAO);
+            m_ColoredLineVAO = 0;
         }
 
         DestroySurfaceMeshCache();
@@ -510,6 +542,13 @@ namespace ds
 #if defined(DS_ENABLE_TRACY)
         TracyGpuZone("BeginFrame");
 #endif
+        ++m_FrameIndex;
+        m_FrameLineSegmentCpuMilliseconds = 0.0;
+        m_FrameLineSegmentDrawCalls = 0;
+        m_FrameLineSegmentVertexCount = 0;
+        m_FrameGridCpuMilliseconds = 0.0;
+        m_FrameGridDrawCalls = 0;
+        m_FrameGridVertexCount = 0;
         glBindFramebuffer(GL_FRAMEBUFFER, m_Framebuffer);
         glViewport(0, 0, static_cast<int>(m_ViewportWidth), static_cast<int>(m_ViewportHeight));
         glEnable(GL_DEPTH_TEST);
@@ -691,6 +730,7 @@ namespace ds
 #if defined(DS_ENABLE_TRACY)
         TracyGpuZone("RenderLineSegments");
 #endif
+        const auto cpuStart = std::chrono::steady_clock::now();
         if (lineVertices.size() < 2)
         {
             return;
@@ -699,6 +739,7 @@ namespace ds
         m_GridShader.Bind();
         m_GridShader.SetMat4("u_ViewProjection", viewProjection);
         m_GridShader.SetFloat3("u_GridColor", lineColor);
+        m_GridShader.SetFloat("u_UseVertexColor", 0.0f);
 
         glBindVertexArray(m_GridVAO);
         glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
@@ -716,6 +757,64 @@ namespace ds
         glLineWidth(1.0f);
 
         glBindVertexArray(0);
+
+        const double wallMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
+        m_FrameLineSegmentCpuMilliseconds += wallMilliseconds;
+        ++m_FrameLineSegmentDrawCalls;
+        m_FrameLineSegmentVertexCount += lineVertices.size();
+    }
+
+    void OpenGLRendererBackend::RenderColoredLineSegments(
+        const glm::mat4 &viewProjection,
+        const std::vector<glm::vec3> &lineVertices,
+        const std::vector<glm::vec3> &lineColors,
+        float lineWidth)
+    {
+        DS_PROFILE_SCOPE_N("OpenGLRendererBackend::RenderColoredLineSegments");
+#if defined(DS_ENABLE_TRACY)
+        TracyGpuZone("RenderColoredLineSegments");
+#endif
+        const auto cpuStart = std::chrono::steady_clock::now();
+        const std::size_t vertexCount = std::min(lineVertices.size(), lineColors.size());
+        if (vertexCount < 2 || (vertexCount % 2) != 0 || m_ColoredLineVAO == 0 || m_ColoredLineVBO == 0)
+        {
+            return;
+        }
+
+        std::vector<ColoredLineVertex> vertices;
+        vertices.reserve(vertexCount);
+        for (std::size_t index = 0; index < vertexCount; ++index)
+        {
+            vertices.push_back({lineVertices[index], lineColors[index]});
+        }
+
+        m_GridShader.Bind();
+        m_GridShader.SetMat4("u_ViewProjection", viewProjection);
+        m_GridShader.SetFloat3("u_GridColor", glm::vec3(1.0f));
+        m_GridShader.SetFloat("u_UseVertexColor", 1.0f);
+
+        glBindVertexArray(m_ColoredLineVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_ColoredLineVBO);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(vertices.size() * sizeof(ColoredLineVertex)),
+            vertices.data(),
+            GL_DYNAMIC_DRAW);
+
+        float widthRange[2] = {1.0f, 1.0f};
+        glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, widthRange);
+        const float requestedLineWidth = std::clamp(lineWidth, widthRange[0], widthRange[1]);
+        glLineWidth(requestedLineWidth);
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
+        glLineWidth(1.0f);
+
+        glBindVertexArray(0);
+        m_GridShader.SetFloat("u_UseVertexColor", 0.0f);
+
+        const double wallMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
+        m_FrameLineSegmentCpuMilliseconds += wallMilliseconds;
+        ++m_FrameLineSegmentDrawCalls;
+        m_FrameLineSegmentVertexCount += vertexCount;
     }
 
     void OpenGLRendererBackend::RenderSurfaceMesh(
@@ -827,6 +926,7 @@ namespace ds
 #if defined(DS_ENABLE_TRACY)
         TracyGpuZone("RenderGrid");
 #endif
+        const auto cpuStart = std::chrono::steady_clock::now();
         if (!settings.drawGrid || settings.gridSpacing <= 0.0f)
         {
             return;
@@ -859,6 +959,7 @@ namespace ds
         m_GridShader.Bind();
         m_GridShader.SetMat4("u_ViewProjection", viewProjection);
         m_GridShader.SetFloat3("u_GridColor", settings.gridColor * std::clamp(settings.gridOpacity, 0.0f, 1.0f));
+        m_GridShader.SetFloat("u_UseVertexColor", 0.0f);
 
         glBindVertexArray(m_GridVAO);
         glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
@@ -875,6 +976,11 @@ namespace ds
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineVertices.size()));
 
         glBindVertexArray(0);
+
+        const double wallMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
+        m_FrameGridCpuMilliseconds += wallMilliseconds;
+        ++m_FrameGridDrawCalls;
+        m_FrameGridVertexCount += lineVertices.size();
     }
 
     void OpenGLRendererBackend::EndFrame()
@@ -900,6 +1006,29 @@ namespace ds
                 GL_LINEAR);
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        const double totalLineMilliseconds = m_FrameLineSegmentCpuMilliseconds + m_FrameGridCpuMilliseconds;
+        const std::size_t totalDrawCalls = m_FrameLineSegmentDrawCalls + m_FrameGridDrawCalls;
+        const auto now = std::chrono::steady_clock::now();
+        const bool exceedsThreshold = totalLineMilliseconds >= 2.5 || totalDrawCalls >= 32;
+        const bool canEmitHeartbeat = m_LastLineProfilingLogTime.time_since_epoch().count() == 0 ||
+                                     now - m_LastLineProfilingLogTime >= std::chrono::seconds(2);
+        if (exceedsThreshold && canEmitHeartbeat)
+        {
+            std::ostringstream message;
+            message.setf(std::ios::fixed, std::ios::floatfield);
+            message.precision(3);
+            message << "frame=" << m_FrameIndex
+                    << " line_ms=" << m_FrameLineSegmentCpuMilliseconds
+                    << " line_draws=" << m_FrameLineSegmentDrawCalls
+                    << " line_vertices=" << m_FrameLineSegmentVertexCount
+                    << " grid_ms=" << m_FrameGridCpuMilliseconds
+                    << " grid_draws=" << m_FrameGridDrawCalls
+                    << " grid_vertices=" << m_FrameGridVertexCount
+                    << " viewport=" << m_ViewportWidth << 'x' << m_ViewportHeight;
+            LogProfiling("RenderLines", message.str());
+            m_LastLineProfilingLogTime = now;
+        }
     }
 
     bool OpenGLRendererBackend::ReadColorAttachmentPixels(
