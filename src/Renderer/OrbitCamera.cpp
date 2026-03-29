@@ -42,6 +42,15 @@ namespace ds
         return m_Projection * m_View;
     }
 
+    glm::vec3 OrbitCamera::GetPosition() const
+    {
+        const glm::vec3 forward = glm::normalize(glm::vec3(
+            std::cos(m_Pitch) * std::sin(m_Yaw),
+            std::cos(m_Pitch) * std::cos(m_Yaw),
+            std::sin(m_Pitch)));
+        return m_Target - forward * m_Distance;
+    }
+
     void OrbitCamera::SetSensitivity(float orbit, float pan, float zoom)
     {
         m_OrbitSensitivity = orbit;

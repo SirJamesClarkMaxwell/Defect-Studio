@@ -137,6 +137,12 @@ namespace ds
         glUniform3f(location, value.x, value.y, value.z);
     }
 
+    void Shader::SetFloat4(const char *name, float x, float y, float z, float w) const
+    {
+        const int location = glGetUniformLocation(m_RendererID, name);
+        glUniform4f(location, x, y, z, w);
+    }
+
     void Shader::SetFloat(const char *name, float value) const
     {
         const int location = glGetUniformLocation(m_RendererID, name);

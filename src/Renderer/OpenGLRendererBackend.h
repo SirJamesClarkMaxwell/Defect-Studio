@@ -4,6 +4,7 @@
 #include "Renderer/Shader.h"
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/vec3.hpp>
@@ -38,6 +39,18 @@ namespace ds
             const std::vector<glm::vec3> &lineVertices,
             const glm::vec3 &lineColor,
             float lineWidth) override;
+        void RenderSurfaceMesh(
+            const glm::mat4 &viewProjection,
+            const std::vector<glm::vec3> &positions,
+            const std::vector<glm::vec3> &normals,
+            std::uint64_t meshId,
+            std::uint64_t meshRevision,
+            const glm::vec3 &cameraPosition,
+            const glm::vec3 &surfaceColor,
+            const glm::vec3 &surfaceSpecularColor,
+            float surfaceShininess,
+            float surfaceOpacity,
+            const SceneRenderSettings &settings) override;
         void EndFrame() override;
 
         std::uint32_t GetColorAttachmentRendererID() const override { return m_ColorTexture; }
@@ -54,6 +67,14 @@ namespace ds
             std::uint32_t ebo = 0;
             std::uint32_t indexCount = 0;
         };
+        struct SurfaceMeshCacheEntry
+        {
+            std::uint32_t vao = 0;
+            std::uint32_t vbo = 0;
+            std::size_t vertexCount = 0;
+            std::size_t capacityBytes = 0;
+            std::uint64_t uploadedRevision = 0;
+        };
 
         void RenderGrid(const glm::mat4 &viewProjection, const SceneRenderSettings &settings);
         void RenderInstancedMesh(
@@ -65,9 +86,12 @@ namespace ds
         void CreateFramebuffer(std::uint32_t width, std::uint32_t height);
         void DestroyFramebuffer();
         void DestroyMesh(MeshBuffers &mesh);
+        SurfaceMeshCacheEntry &GetOrCreateSurfaceMeshCache(std::uint64_t meshId);
+        void DestroySurfaceMeshCache();
 
         Shader m_Shader;
         Shader m_GridShader;
+        Shader m_SurfaceShader;
 
         std::uint32_t m_Framebuffer = 0;
         std::uint32_t m_ColorRenderbuffer = 0;
@@ -82,6 +106,7 @@ namespace ds
 
         std::uint32_t m_GridVAO = 0;
         std::uint32_t m_GridVBO = 0;
+        std::unordered_map<std::uint64_t, SurfaceMeshCacheEntry> m_SurfaceMeshCache;
 
         std::uint32_t m_ViewportWidth = 1;
         std::uint32_t m_ViewportHeight = 1;

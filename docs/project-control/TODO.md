@@ -7,9 +7,9 @@
 - Track only significant tasks/features in this TODO; do not add tiny fixes
 
 ## Current priority queue (ordered)
-- [ ] P1: Start T11 volumetrics MVP (`CHGCAR` / `PARCHG`, iso controls, block handling)
-- [ ] P1: Run a focused manual smoke test for T10 project workflow, collection editing, and drag-drop
-- [ ] P2: Start T12 Python build-script migration after T11 is scoped
+- [ ] P1: Start T12 Python build-script migration
+- [ ] P1: Run a focused manual smoke test for T11 volumetrics look/controls against VESTA reference scenes
+- [ ] P2: Run a focused manual smoke test for T10 project workflow, collection editing, and drag-drop
 - [ ] P3: After T13a/T13b, start deferred advanced render architecture task (MSDF / SVG / multi-viewport / mesh-only follow-up)
 
 ## Milestones
@@ -144,7 +144,6 @@
 - [x] extract per-project element appearance overrides from `scene_state.ini` into a dedicated project config file
 - [x] add import/export/reset workflow for project element appearance overrides
 - [x] add context menu for scene outline (rename, duplicate, delete)
-
 - [x] add extract selected to new collection
 - [x] add toggle for adding auto recalculation of the bonds
 - [x] in circle select scroll should (in/de)crease size of circle (block the world zooming)
@@ -175,10 +174,31 @@
 - [x] `Ctrl+D` and `Delete` for active collection while Scene Outliner is focused
 - [x] keyboard shortcuts for `Create Project`, `Open Project`, and `Open Recent Project`
 
-### [ ] T11 - Volumetrics MVP (`task/11-volumetrics-mvp`)
-- [ ] CHG/CHGCAR/PARCHG parser 
-- [ ] Multi-block support (what does it mean?)
-- [ ] Iso-surface controls incl. dual iso mode (what does it mean)
+### [x] T11 - Volumetrics MVP (`task/11-volumetrics-mvp`)
+  - [x] Add a scalar-field data model decoupled from atom / bond scene data
+  - [x] Parse POSCAR-like header from `CHG` / `CHGCAR` / `PARCHG` into lattice, species, counts, and positions
+  - [x] Parse volumetric grid dimensions and scalar samples in VASP order
+  - [x] Support files with multiple scalar blocks in one file
+  - [x] Preserve block metadata: block index, grid size, sample count, source file, inferred label
+  - [x] Compute block statistics: min, max, mean, abs-max, memory footprint
+  - [x] Add dataset picker for multiple loaded volumetric files
+  - [x] Add block picker for multi-block files
+  - [x] Add debug / inspection panel for currently loaded volumetric data
+  - [x] First target visualization: atoms + bonds + isosurface in one viewport
+  - [x] Add single-iso rendering for one selected block
+  - [x] Add dual-iso mode for two surfaces at once
+  - [x] Add per-surface controls: iso value, color, opacity, visibility
+  - [x] Add sensible defaults matching the current `PARCHG.0778-0782.ALLK` sample set
+  - [x] Decide how to label multi-block data in UI: neutral cache blocks plus interpreted fields for `Total density`, `Magnetization`, `Spin up`, and `Spin down`
+  - [x] Add basic performance guardrails: rebuild only on parameter change and allow reduced preview resolution
+  - [x] Move preview mesh build off the main thread and smooth out UI hitches during iso changes
+  - [x] Reshape the `Volumetrics` panel toward a VESTA-like workflow: less text, side-by-side surfaces, and optional advanced controls only
+  - [x] Add VESTA-like positive / negative surface semantics and map them onto `Surface A / Surface B`
+  - [x] Explain `iso value` clearly in UI/help in physical terms, not only as a raw number
+  - [x] Add Tracy-focused profiling pass plus memory instrumentation for volumetric loading and preview meshing
+  - [x] Add camera-toolbar workflow improvements for VESTA-like view/orbit controls, including icon button support
+  - [ ] Validate parser and visualization against `Example-Project/project/PARCHG.0778.ALLK` to `PARCHG.0782.ALLK`
+  - [ ] Improve visual parity with VESTA for the sample scenes (surface defaults, shading, and interpretation)
 
 ### [ ] T12 - Migrate build scripts to Python (`task/12-scripts-python-migration`)
 - [ ] Add uv as dependency to project
@@ -193,6 +213,7 @@
 ### [ ] T13a - General code refactor (`task/13a-general-refactor`)
 - [ ] Define refactor scope and module boundaries (no feature changes)
 - [ ] Stronger Core <-> App separation (dependency direction and responsibilities)
+- [ ] pch.hpp, .h->.hpp
 - [ ] Modularize large source files into focused modules/components
 - [ ] Extract reusable parts into separate libraries (where it reduces coupling)
 - [ ] Replace complex inline lambdas with named functions/methods where readability improves
@@ -210,6 +231,8 @@
 - [ ] Wrap all file I/O entry points (POSCAR/CIF/CHGCAR load/save) in top-level try/catch with user-facing error message
 - [ ] Do NOT propagate exceptions through OpenGL/render hot path - document this boundary explicitly
 - [ ] Add static_assert or comment at renderer boundary: "exception-free zone below this point"
+- [ ] Job window (tracking progress (progress bars), predicted time, total time, priority)
+- [ ] tracy like window with statistics how aplication is performing
 
 ### [ ] T13b - Local code documentation site (mdBook) (`task/13b-local-docs-mdbook`)
 - [ ] Start after T13a completion (minimum fallback: after T11)
@@ -248,6 +271,8 @@
 - [ ] identifying defect symetry
 - [ ] adding tags
 - [ ] change from collection to poscar amd contcar
+- [ ] selecting the orbitals by clicking on one-KS-energy level
+- [ ] lazy resource loading
 
 
 ### [ ] T16 - Advanced materials science tools (`task/15-materials-tools`)
@@ -269,16 +294,10 @@
 - [ ] Export imported CIF structures to POSCAR/CONTCAR
 - [ ] CIF validation report (unsupported symmetry/occupancy fallback)
 
-### [ ] T16 - Local CI equivalents (`task/16-local-ci`)
-- [ ] Add `scripts/ci_check.py` - master check script that runs full verification sequence locally
-- [ ] ci_check.py step 1: run `verify_build.py` (Debug + Release)
-- [ ] ci_check.py step 2: run build on WSL (g++/clang) via subprocess
-- [ ] ci_check.py step 3: report summary - pass/fail per platform with exit code
-- [ ] Integrate `ci_check.py` into Copilot workflow: run before every merge to main
-- [ ] Document usage in README.md
 
 ### [ ] T17 - VASP ecosystem integration (`task/17-vasp-integration`)
 - [ ] Full OUTCAR parser
+- [ ] binary representation of CHG-files and WAVECAR, library to get this done or server side
 - [ ] Parse electronic structure metadata
 - [ ] Extract energies per ionic step
 - [ ] Extract forces and stress tensor
@@ -310,17 +329,27 @@
 - [ ] GPU implementation of Freysoldt correction
 - [ ] CUDA/OpenGL compute backend prototype
 - [ ] Enable large-supercell correction workflow
+
 ### T20 - remote axes to list of servers
 - [ ] winscp like
 - [ ] autorefresh server
 - [ ] copy-paste files
-### [ ] T20 - Other-builds (`task/20-multiplatform`)
+
+### [ ] T21 - Local CI equivalents (`task/16-local-ci`)
+- [ ] Add `scripts/ci_check.py` - master check script that runs full verification sequence locally
+- [ ] ci_check.py step 1: run `verify_build.py` (Debug + Release)
+- [ ] ci_check.py step 2: run build on WSL (g++/clang) via subprocess
+- [ ] ci_check.py step 3: report summary - pass/fail per platform with exit code
+- [ ] Integrate `ci_check.py` into Copilot workflow: run before every merge to main
+- [ ] Document usage in README.md
+
+### [ ] T22 - Other-builds (`task/20-multiplatform`)
 - [ ] Verify Premake5 generates valid Makefiles (premake5 gmake2)
 - [ ] Build with g++ on WSL - fix any Linux-specific compilation errors
 - [ ] Build with clang on WSL - fix any clang-specific warnings/errors
 - [ ] Verify `scripts/ci_check.py` passes on WSL end-to-end
 
-### [ ] T21 - Tests, samples, docs (`task/21-tests-samples-docs`)
+### [ ] T23 - Tests, samples, docs (`task/21-tests-samples-docs`)
 - [ ] Parser unit tests + POSCAR round-trip
 - [ ] `assets/samples` small input files
 - [ ] README (build/run/controls)
@@ -328,6 +357,6 @@
 - [ ] Document global atom catalog vs per-project appearance override workflow
 
 ## Current focus
-- Recently completed: **T08/T09 config + UI pass (YAML configs, Element Catalog, dockable Periodic Table, panel taxonomy, logging UX, persistence, undo/redo)**
-- Next planned task: **T10 - Editing workflow polish**
-- Planned branch: **task/10-editing-workflow-polish**
+- Recently completed: **T11 volumetrics MVP (VASP scalar-field parser, async block loading, VESTA-like field interpretation, dual isosurfaces, profiling, and viewport toolbar refresh)**
+- Next planned task: **T12 - Migrate build scripts to Python**
+- Planned branch: **task/12-scripts-python-migration**

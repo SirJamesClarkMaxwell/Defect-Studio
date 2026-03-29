@@ -127,6 +127,22 @@ namespace ds
             return absolutePath.lexically_normal();
         }
 
+        void TrackVolumetricBlockSampleAllocation(const ScalarFieldBlock &block)
+        {
+            if (!block.samples.empty())
+            {
+                DS_PROFILE_ALLOC_N(block.samples.data(), block.samples.size() * sizeof(float), "VolumetricBlockSamples");
+            }
+        }
+
+        void TrackVolumetricBlockSampleRelease(const ScalarFieldBlock &block)
+        {
+            if (!block.samples.empty())
+            {
+                DS_PROFILE_FREE_N(block.samples.data(), "VolumetricBlockSamples");
+            }
+        }
+
         std::filesystem::path NormalizeProjectRootCandidate(const std::filesystem::path &path)
         {
             if (path.empty())
@@ -355,6 +371,36 @@ namespace ds
             root["project"]["structurePath"] = SerializeProjectPath(projectRoot, structurePath);
         }
 
+        std::vector<std::string> volumetricPaths = m_ProjectVolumetricPaths;
+        volumetricPaths.reserve(volumetricPaths.size() + m_VolumetricDatasets.size());
+        for (const VolumetricDataset &dataset : m_VolumetricDatasets)
+        {
+            if (dataset.sourcePath.empty())
+            {
+                continue;
+            }
+            volumetricPaths.push_back(SerializeProjectPath(projectRoot, std::filesystem::path(dataset.sourcePath)));
+        }
+
+        std::sort(volumetricPaths.begin(), volumetricPaths.end());
+        volumetricPaths.erase(std::unique(volumetricPaths.begin(), volumetricPaths.end()), volumetricPaths.end());
+
+        if (!volumetricPaths.empty())
+        {
+            YAML::Node sequence(YAML::NodeType::Sequence);
+            for (const std::string &path : volumetricPaths)
+            {
+                if (!path.empty())
+                {
+                    sequence.push_back(path);
+                }
+            }
+            if (sequence.size() > 0)
+            {
+                root["project"]["volumetricPaths"] = sequence;
+            }
+        }
+
         std::ofstream out(GetProjectManifestFilePath(), std::ios::trunc);
         if (!out.is_open())
         {
@@ -405,11 +451,54 @@ namespace ds
                 const std::filesystem::path resolvedStructurePath = ResolveProjectStructurePath();
                 std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", resolvedStructurePath.string().c_str());
             }
+
+            m_ProjectVolumetricPaths.clear();
+            const YAML::Node volumetricPaths = project["volumetricPaths"];
+            if (volumetricPaths && volumetricPaths.IsSequence())
+            {
+                for (const YAML::Node &pathNode : volumetricPaths)
+                {
+                    if (!pathNode.IsScalar())
+                    {
+                        continue;
+                    }
+
+                    const std::string relativePath = pathNode.as<std::string>();
+                    if (!relativePath.empty())
+                    {
+                        m_ProjectVolumetricPaths.push_back(relativePath);
+                    }
+                }
+            }
         }
         catch (const YAML::Exception &exception)
         {
             LogWarn(std::string("LoadProjectManifest failed: ") + exception.what());
         }
+    }
+
+    void EditorLayer::LoadProjectVolumetricDatasets()
+    {
+        ClearVolumetricDatasets();
+
+        if (m_ProjectVolumetricPaths.empty())
+        {
+            return;
+        }
+
+        for (const std::string &storedPath : m_ProjectVolumetricPaths)
+        {
+            const std::filesystem::path resolvedPath = ResolveProjectPath(storedPath);
+            if (resolvedPath.empty() || !std::filesystem::exists(resolvedPath))
+            {
+                LogWarn("Project volumetric dataset missing: " + storedPath);
+                continue;
+            }
+
+            LoadVolumetricDatasetFromPath(resolvedPath.string());
+        }
+
+        EnsureVolumetricSelection();
     }
 
     void EditorLayer::ResetProjectSceneState()
@@ -436,6 +525,32 @@ namespace ds
         m_AngleLabelStates.clear();
         m_BondLabelStates.clear();
         m_ProjectStructurePath.clear();
+        m_ProjectVolumetricPaths.clear();
+        m_VolumetricDatasets.clear();
+        m_PendingVolumetricDatasetLoads.clear();
+        m_PendingVolumetricBlockLoads.clear();
+        ++m_VolumetricLoadGeneration;
+        m_ActiveVolumetricDatasetIndex = -1;
+        m_ActiveVolumetricBlockIndex = 0;
+        m_LastVolumetricOperationFailed = false;
+        m_LastVolumetricMessage.clear();
+        m_VolumetricSurfaceDatasetKey.clear();
+        m_PrimaryVolumetricSurface = {};
+        m_SecondaryVolumetricSurface = []()
+        {
+            VolumetricSurfaceState state;
+            state.enabled = false;
+            state.blockIndex = 1;
+            state.fieldMode = VolumetricFieldMode::SelectedBlock;
+            state.isosurfaceMode = VolumetricIsosurfaceMode::NegativeOnly;
+            state.color = glm::vec3(0.10f, 0.22f, 0.96f);
+            state.negativeColor = glm::vec3(0.10f, 0.22f, 0.96f);
+            state.opacity = 0.90f;
+            state.negativeOpacity = 0.90f;
+            return state;
+        }();
+        m_VolumetricSpecularColor = glm::vec3(0.0f);
+        m_VolumetricShininess = 100.0f;
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", "");
         m_Collections.clear();
         m_ActiveCollectionIndex = 0;
@@ -518,6 +633,8 @@ namespace ds
             LogWarn("Project structure missing: " + structurePath.string());
         }
 
+        LoadProjectVolumetricDatasets();
+
         LoadSceneState();
         MigrateLegacyProjectAppearanceFromSceneStateIfNeeded();
         LoadProjectAppearanceYaml();
@@ -532,23 +649,18 @@ namespace ds
         return true;
     }
 
-    bool EditorLayer::LoadStructureFromPath(const std::string &path)
+    bool EditorLayer::ApplyParsedStructureToScene(const Structure &parsed, const std::string &sourcePath, bool updateProjectStructurePath)
     {
-        Structure parsed;
-        std::string error;
-        if (!m_PoscarParser.ParseFromFile(path, parsed, error))
-        {
-            m_LastStructureOperationFailed = true;
-            m_LastStructureMessage = "Import failed: " + error;
-            LogError(m_LastStructureMessage);
-            return false;
-        }
-
         m_WorkingStructure = parsed;
         m_OriginalStructure = parsed;
         m_HasStructureLoaded = true;
-        m_ProjectStructurePath = SerializeProjectPath(GetProjectRootPath(), std::filesystem::path(path));
-        std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", path.c_str());
+
+        if (updateProjectStructurePath)
+        {
+            m_ProjectStructurePath = SerializeProjectPath(GetProjectRootPath(), std::filesystem::path(sourcePath));
+            std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", sourcePath.c_str());
+        }
+
         EnsureAtomNodeIds();
         m_SelectedAtomIndices.clear();
         m_OutlinerAtomSelectionAnchor.reset();
@@ -567,8 +679,6 @@ namespace ds
         m_ActiveCollectionIndex = 0;
         m_AutoBondsDirty = true;
         ClearSceneHistory();
-        m_LastStructureOperationFailed = false;
-        m_LastStructureMessage = "Imported structure from: " + path;
 
         if (m_Camera && !m_WorkingStructure.atoms.empty())
         {
@@ -596,6 +706,77 @@ namespace ds
 
             m_Camera->FrameBounds(boundsMin, boundsMax);
         }
+
+        return true;
+    }
+
+    std::filesystem::path EditorLayer::GetPreferredStructureDialogDirectory() const
+    {
+        const std::filesystem::path structurePath = ResolveProjectStructurePath();
+        if (!structurePath.empty())
+        {
+            return NormalizeFilesystemPath(structurePath.parent_path());
+        }
+
+        const std::string importPath = std::string(m_ImportPathBuffer.data());
+        if (!importPath.empty())
+        {
+            const std::filesystem::path importCandidate(importPath);
+            const std::filesystem::path resolvedPath = importCandidate.is_absolute()
+                                                           ? NormalizeFilesystemPath(importCandidate)
+                                                           : NormalizeFilesystemPath(GetAppRootPath() / importCandidate);
+            return NormalizeFilesystemPath(resolvedPath.parent_path());
+        }
+
+        if (!m_VolumetricDatasets.empty())
+        {
+            const std::filesystem::path volumetricPath(m_VolumetricDatasets[static_cast<std::size_t>(std::clamp(m_ActiveVolumetricDatasetIndex, 0, static_cast<int>(m_VolumetricDatasets.size()) - 1))].sourcePath);
+            if (!volumetricPath.empty())
+            {
+                return NormalizeFilesystemPath(volumetricPath.parent_path());
+            }
+        }
+
+        const std::filesystem::path projectProjectDir = GetProjectRootPath() / "project";
+        std::error_code existsEc;
+        if (std::filesystem::exists(projectProjectDir, existsEc))
+        {
+            return NormalizeFilesystemPath(projectProjectDir);
+        }
+
+        return GetProjectRootPath();
+    }
+
+    std::filesystem::path EditorLayer::GetPreferredVolumetricDialogDirectory() const
+    {
+        if (!m_VolumetricDatasets.empty())
+        {
+            const int safeDatasetIndex = std::clamp(m_ActiveVolumetricDatasetIndex, 0, static_cast<int>(m_VolumetricDatasets.size()) - 1);
+            const std::filesystem::path datasetPath(m_VolumetricDatasets[static_cast<std::size_t>(safeDatasetIndex)].sourcePath);
+            if (!datasetPath.empty())
+            {
+                return NormalizeFilesystemPath(datasetPath.parent_path());
+            }
+        }
+
+        return GetPreferredStructureDialogDirectory();
+    }
+
+    bool EditorLayer::LoadStructureFromPath(const std::string &path)
+    {
+        Structure parsed;
+        std::string error;
+        if (!m_PoscarParser.ParseFromFile(path, parsed, error))
+        {
+            m_LastStructureOperationFailed = true;
+            m_LastStructureMessage = "Import failed: " + error;
+            LogError(m_LastStructureMessage);
+            return false;
+        }
+
+        ApplyParsedStructureToScene(parsed, path, true);
+        m_LastStructureOperationFailed = false;
+        m_LastStructureMessage = "Imported structure from: " + path;
 
         LogInfo(m_LastStructureMessage + " (atoms=" + std::to_string(m_WorkingStructure.GetAtomCount()) + ")");
         return true;
@@ -711,6 +892,383 @@ namespace ds
         m_LastStructureMessage = "Exported structure to: " + path;
         LogInfo(m_LastStructureMessage);
         return true;
+    }
+
+    bool EditorLayer::HasPendingVolumetricDatasetLoad(const std::string &normalizedPath) const
+    {
+        for (const PendingVolumetricDatasetLoad &pendingLoad : m_PendingVolumetricDatasetLoads)
+        {
+            if (pendingLoad.normalizedPath == normalizedPath)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool EditorLayer::HasPendingVolumetricBlockLoad(const std::string &datasetPath, int blockIndex) const
+    {
+        for (const PendingVolumetricBlockLoad &pendingLoad : m_PendingVolumetricBlockLoads)
+        {
+            if (pendingLoad.datasetPath == datasetPath && pendingLoad.blockIndex == blockIndex)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool EditorLayer::QueueVolumetricDatasetLoad(const std::string &path, bool autoApplyStructureIfNeeded, bool persistToProject)
+    {
+        const std::filesystem::path normalizedPath = NormalizeFilesystemPath(std::filesystem::path(path));
+        const std::string normalizedPathString = normalizedPath.string();
+
+        for (std::size_t i = 0; i < m_VolumetricDatasets.size(); ++i)
+        {
+            const std::filesystem::path loadedPath = NormalizeFilesystemPath(std::filesystem::path(m_VolumetricDatasets[i].sourcePath));
+            if (loadedPath == normalizedPath)
+            {
+                m_ActiveVolumetricDatasetIndex = static_cast<int>(i);
+                m_ActiveVolumetricBlockIndex = 0;
+                MarkVolumetricMeshesDirty();
+                m_LastVolumetricOperationFailed = false;
+                m_LastVolumetricMessage = "Volumetric dataset already loaded: " + normalizedPathString;
+                LogInfo(m_LastVolumetricMessage);
+                return true;
+            }
+        }
+
+        if (HasPendingVolumetricDatasetLoad(normalizedPathString))
+        {
+            m_LastVolumetricOperationFailed = false;
+            m_LastVolumetricMessage = "Volumetric dataset already queued: " + normalizedPathString;
+            LogInfo(m_LastVolumetricMessage);
+            return true;
+        }
+
+        const std::string serializedPath = SerializeProjectPath(GetProjectRootPath(), normalizedPath);
+        if (persistToProject && !serializedPath.empty())
+        {
+            m_ProjectVolumetricPaths.push_back(serializedPath);
+            std::sort(m_ProjectVolumetricPaths.begin(), m_ProjectVolumetricPaths.end());
+            m_ProjectVolumetricPaths.erase(std::unique(m_ProjectVolumetricPaths.begin(), m_ProjectVolumetricPaths.end()), m_ProjectVolumetricPaths.end());
+        }
+
+        if (autoApplyStructureIfNeeded && !m_HasStructureLoaded)
+        {
+            Structure structureFromHeader;
+            std::string structureError;
+            if (m_VaspVolumetricParser.ParseStructureFromFile(normalizedPathString, structureFromHeader, structureError))
+            {
+                ApplyParsedStructureToScene(structureFromHeader, normalizedPathString, false);
+                LogInfo("Applied crystal structure from volumetric header: " + normalizedPathString);
+            }
+            else
+            {
+                LogWarn("Could not apply structure from volumetric header: " + structureError);
+            }
+        }
+
+        const std::uint64_t generation = m_VolumetricLoadGeneration;
+        PendingVolumetricDatasetLoad pendingLoad;
+        pendingLoad.normalizedPath = normalizedPathString;
+        pendingLoad.future = m_BackgroundThreadPool.submit_task([normalizedPathString, generation]()
+        {
+            VolumetricDatasetLoadResult result;
+            result.generation = generation;
+            result.path = normalizedPathString;
+
+            VaspVolumetricParser parser;
+            std::string error;
+            const auto startedAt = std::chrono::steady_clock::now();
+            result.success = parser.ParseMetadataFromFile(normalizedPathString, result.dataset, error);
+            const auto finishedAt = std::chrono::steady_clock::now();
+            result.wallMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+            if (!result.success)
+            {
+                result.error = error;
+            }
+            return result;
+        });
+        m_PendingVolumetricDatasetLoads.push_back(std::move(pendingLoad));
+        m_ShowVolumetricsPanel = true;
+
+        m_LastVolumetricOperationFailed = false;
+        m_LastVolumetricMessage = "Queued volumetric dataset load: " + normalizedPathString;
+        LogInfo(m_LastVolumetricMessage);
+        return true;
+    }
+
+    bool EditorLayer::QueueVolumetricBlockLoad(int datasetIndex, int blockIndex, bool forceRetry)
+    {
+        if (datasetIndex < 0 || datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            return false;
+        }
+
+        VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)];
+        if (blockIndex < 0 || blockIndex >= static_cast<int>(dataset.blocks.size()))
+        {
+            return false;
+        }
+
+        ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(blockIndex)];
+        if (block.samplesLoaded || HasPendingVolumetricBlockLoad(dataset.sourcePath, blockIndex))
+        {
+            return true;
+        }
+
+        if (block.loadFailed && !forceRetry)
+        {
+            return false;
+        }
+        if (forceRetry)
+        {
+            block.loadFailed = false;
+            block.lastLoadError.clear();
+        }
+
+        const std::string datasetPath = dataset.sourcePath;
+        const ScalarFieldBlock blockMetadata = block;
+        const std::uint64_t generation = m_VolumetricLoadGeneration;
+
+        PendingVolumetricBlockLoad pendingLoad;
+        pendingLoad.datasetPath = datasetPath;
+        pendingLoad.blockIndex = blockIndex;
+        pendingLoad.future = m_BackgroundThreadPool.submit_task([datasetPath, blockMetadata, blockIndex, generation]()
+        {
+            VolumetricBlockLoadResult result;
+            result.generation = generation;
+            result.datasetPath = datasetPath;
+            result.blockIndex = blockIndex;
+
+            VaspVolumetricParser parser;
+            std::string error;
+            const auto startedAt = std::chrono::steady_clock::now();
+            result.success = parser.LoadBlockSamplesFromFile(datasetPath, blockMetadata, result.block, error);
+            const auto finishedAt = std::chrono::steady_clock::now();
+            result.wallMilliseconds = std::chrono::duration<double, std::milli>(finishedAt - startedAt).count();
+            if (!result.success)
+            {
+                result.error = error;
+            }
+            return result;
+        });
+        m_PendingVolumetricBlockLoads.push_back(std::move(pendingLoad));
+        return true;
+    }
+
+    void EditorLayer::PumpVolumetricLoadingJobs()
+    {
+        auto metadataIt = m_PendingVolumetricDatasetLoads.begin();
+        while (metadataIt != m_PendingVolumetricDatasetLoads.end())
+        {
+            if (metadataIt->future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+            {
+                ++metadataIt;
+                continue;
+            }
+
+            VolumetricDatasetLoadResult result = metadataIt->future.get();
+            metadataIt = m_PendingVolumetricDatasetLoads.erase(metadataIt);
+
+            if (result.generation != m_VolumetricLoadGeneration)
+            {
+                continue;
+            }
+
+            if (!result.success)
+            {
+                const std::string storedPath = SerializeProjectPath(GetProjectRootPath(), std::filesystem::path(result.path));
+                m_ProjectVolumetricPaths.erase(
+                    std::remove(m_ProjectVolumetricPaths.begin(), m_ProjectVolumetricPaths.end(), storedPath),
+                    m_ProjectVolumetricPaths.end());
+                SaveProjectManifest();
+                m_LastVolumetricOperationFailed = true;
+                m_LastVolumetricMessage = "Volumetric metadata load failed: " + result.error;
+                LogError(m_LastVolumetricMessage);
+                continue;
+            }
+
+            bool alreadyPresent = false;
+            for (std::size_t datasetIndex = 0; datasetIndex < m_VolumetricDatasets.size(); ++datasetIndex)
+            {
+                if (NormalizeFilesystemPath(std::filesystem::path(m_VolumetricDatasets[datasetIndex].sourcePath)) == NormalizeFilesystemPath(std::filesystem::path(result.path)))
+                {
+                    m_VolumetricDatasets[datasetIndex] = std::move(result.dataset);
+                    m_ActiveVolumetricDatasetIndex = static_cast<int>(datasetIndex);
+                    alreadyPresent = true;
+                    break;
+                }
+            }
+
+            if (!alreadyPresent)
+            {
+                m_VolumetricDatasets.push_back(std::move(result.dataset));
+                m_ActiveVolumetricDatasetIndex = static_cast<int>(m_VolumetricDatasets.size()) - 1;
+            }
+
+            m_ActiveVolumetricBlockIndex = 0;
+            EnsureVolumetricSelection();
+            MarkVolumetricMeshesDirty();
+            SaveProjectManifest();
+
+            const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+            if (m_HasStructureLoaded &&
+                dataset.structure.GetAtomCount() != 0)
+            {
+                bool structuresMatch = false;
+                const std::string matchDescription = DescribeVolumetricStructureMatch(dataset.structure, structuresMatch);
+                if (!structuresMatch)
+                {
+                    LogWarn("Loaded volumetric dataset structure differs from current scene: " + matchDescription);
+                }
+            }
+
+            m_LastVolumetricOperationFailed = false;
+            m_LastVolumetricMessage = "Loaded volumetric metadata in " + std::to_string(result.wallMilliseconds) + " ms: " + result.path;
+            LogInfo(m_LastVolumetricMessage);
+        }
+
+        auto blockIt = m_PendingVolumetricBlockLoads.begin();
+        while (blockIt != m_PendingVolumetricBlockLoads.end())
+        {
+            if (blockIt->future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+            {
+                ++blockIt;
+                continue;
+            }
+
+            VolumetricBlockLoadResult result = blockIt->future.get();
+            blockIt = m_PendingVolumetricBlockLoads.erase(blockIt);
+
+            if (result.generation != m_VolumetricLoadGeneration)
+            {
+                continue;
+            }
+
+            const auto datasetIt = std::find_if(
+                m_VolumetricDatasets.begin(),
+                m_VolumetricDatasets.end(),
+                [&](const VolumetricDataset &dataset)
+                {
+                    return dataset.sourcePath == result.datasetPath;
+                });
+            if (datasetIt == m_VolumetricDatasets.end())
+            {
+                continue;
+            }
+
+            if (result.blockIndex < 0 || result.blockIndex >= static_cast<int>(datasetIt->blocks.size()))
+            {
+                continue;
+            }
+
+            ScalarFieldBlock &targetBlock = datasetIt->blocks[static_cast<std::size_t>(result.blockIndex)];
+            if (!result.success)
+            {
+                targetBlock.loadFailed = true;
+                ++targetBlock.failedLoadAttempts;
+                targetBlock.lastLoadError = result.error;
+                targetBlock.lastLoadMilliseconds = result.wallMilliseconds;
+                m_LastVolumetricOperationFailed = true;
+                m_LastVolumetricMessage = "Volumetric block load failed: " + result.error;
+                LogError(m_LastVolumetricMessage);
+                continue;
+            }
+
+            TrackVolumetricBlockSampleRelease(targetBlock);
+            targetBlock = std::move(result.block);
+            targetBlock.loadFailed = false;
+            targetBlock.failedLoadAttempts = 0;
+            targetBlock.lastLoadError.clear();
+            MarkVolumetricMeshesDirty();
+            m_LastVolumetricOperationFailed = false;
+            m_LastVolumetricMessage = "Loaded volumetric block " + std::to_string(result.blockIndex + 1) +
+                                      " in " + std::to_string(result.wallMilliseconds) + " ms.";
+            LogInfo(m_LastVolumetricMessage);
+        }
+
+        std::size_t residentBytes = 0;
+        for (const VolumetricDataset &dataset : m_VolumetricDatasets)
+        {
+            residentBytes += dataset.TotalMemoryBytes();
+        }
+        DS_PROFILE_PLOT("Volumetrics/ResidentSampleBytes", static_cast<double>(residentBytes));
+    }
+
+    bool EditorLayer::LoadVolumetricDatasetFromPath(const std::string &path)
+    {
+        return QueueVolumetricDatasetLoad(path, true, true);
+    }
+
+    bool EditorLayer::RemoveVolumetricDatasetAtIndex(int datasetIndex)
+    {
+        if (datasetIndex < 0 || datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            return false;
+        }
+
+        const std::string label = m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)].sourceLabel;
+        const std::string storedPath = SerializeProjectPath(GetProjectRootPath(), std::filesystem::path(m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)].sourcePath));
+        m_VolumetricDatasets.erase(m_VolumetricDatasets.begin() + datasetIndex);
+        m_ProjectVolumetricPaths.erase(
+            std::remove(m_ProjectVolumetricPaths.begin(), m_ProjectVolumetricPaths.end(), storedPath),
+            m_ProjectVolumetricPaths.end());
+        EnsureVolumetricSelection();
+        if (m_VolumetricDatasets.empty())
+        {
+            m_VolumetricSurfaceDatasetKey.clear();
+        }
+        MarkVolumetricMeshesDirty();
+        SaveProjectManifest();
+        m_LastVolumetricOperationFailed = false;
+        m_LastVolumetricMessage = "Unloaded volumetric dataset: " + label;
+        LogInfo(m_LastVolumetricMessage);
+        return true;
+    }
+
+    void EditorLayer::ClearVolumetricDatasets()
+    {
+        for (const VolumetricDataset &dataset : m_VolumetricDatasets)
+        {
+            for (const ScalarFieldBlock &block : dataset.blocks)
+            {
+                TrackVolumetricBlockSampleRelease(block);
+            }
+        }
+        m_VolumetricDatasets.clear();
+        m_PendingVolumetricDatasetLoads.clear();
+        m_PendingVolumetricBlockLoads.clear();
+        m_PendingVolumetricSurfaceBuilds.clear();
+        ++m_VolumetricLoadGeneration;
+        m_ProjectVolumetricPaths.clear();
+        m_ActiveVolumetricDatasetIndex = -1;
+        m_ActiveVolumetricBlockIndex = 0;
+        m_VolumetricSurfaceDatasetKey.clear();
+        MarkVolumetricMeshesDirty();
+    }
+
+    void EditorLayer::EnsureVolumetricSelection()
+    {
+        if (m_VolumetricDatasets.empty())
+        {
+            m_ActiveVolumetricDatasetIndex = -1;
+            m_ActiveVolumetricBlockIndex = 0;
+            return;
+        }
+
+        m_ActiveVolumetricDatasetIndex = std::clamp(m_ActiveVolumetricDatasetIndex, 0, static_cast<int>(m_VolumetricDatasets.size()) - 1);
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        if (dataset.blocks.empty())
+        {
+            m_ActiveVolumetricBlockIndex = 0;
+            return;
+        }
+
+        m_ActiveVolumetricBlockIndex = std::clamp(m_ActiveVolumetricBlockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
     }
 
     bool EditorLayer::BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const
@@ -3645,6 +4203,29 @@ namespace ds
             m_RenderPreviewLongSideCap = 320.0f;
         if (m_RenderPreviewLongSideCap > 8192.0f)
             m_RenderPreviewLongSideCap = 8192.0f;
+        if (m_VolumetricPreviewMaxDimension < 32)
+            m_VolumetricPreviewMaxDimension = 32;
+        if (m_VolumetricPreviewMaxDimension > 512)
+            m_VolumetricPreviewMaxDimension = 512;
+        m_ViewportPanStepPixels = glm::clamp(m_ViewportPanStepPixels, 1.0f, 512.0f);
+        m_ViewportZoomStepPercent = glm::clamp(m_ViewportZoomStepPercent, 1.0f, 90.0f);
+        m_PrimaryVolumetricSurface.opacity = glm::clamp(m_PrimaryVolumetricSurface.opacity, 0.05f, 1.0f);
+        m_PrimaryVolumetricSurface.negativeOpacity = glm::clamp(m_PrimaryVolumetricSurface.negativeOpacity, 0.05f, 1.0f);
+        m_SecondaryVolumetricSurface.opacity = glm::clamp(m_SecondaryVolumetricSurface.opacity, 0.05f, 1.0f);
+        m_SecondaryVolumetricSurface.negativeOpacity = glm::clamp(m_SecondaryVolumetricSurface.negativeOpacity, 0.05f, 1.0f);
+        m_PrimaryVolumetricSurface.color = glm::clamp(m_PrimaryVolumetricSurface.color, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_PrimaryVolumetricSurface.negativeColor = glm::clamp(m_PrimaryVolumetricSurface.negativeColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_SecondaryVolumetricSurface.color = glm::clamp(m_SecondaryVolumetricSurface.color, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_SecondaryVolumetricSurface.negativeColor = glm::clamp(m_SecondaryVolumetricSurface.negativeColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_VolumetricSpecularColor = glm::clamp(m_VolumetricSpecularColor, glm::vec3(0.0f), glm::vec3(1.0f));
+        m_VolumetricShininess = glm::clamp(m_VolumetricShininess, 1.0f, 256.0f);
+        if (!std::isfinite(m_PrimaryVolumetricSurface.isoValue))
+            m_PrimaryVolumetricSurface.isoValue = 0.0f;
+        if (!std::isfinite(m_SecondaryVolumetricSurface.isoValue))
+            m_SecondaryVolumetricSurface.isoValue = 0.0f;
+        m_PrimaryVolumetricSurface.isoValue = std::abs(m_PrimaryVolumetricSurface.isoValue);
+        m_SecondaryVolumetricSurface.isoValue = std::abs(m_SecondaryVolumetricSurface.isoValue);
+        MarkVolumetricMeshesDirty();
 
         m_SceneSettings.drawCellEdges = m_ShowCellEdges;
         m_SceneSettings.cellEdgeColor = glm::clamp(m_CellEdgeColor, glm::vec3(0.0f), glm::vec3(1.0f));
@@ -3726,6 +4307,7 @@ namespace ds
             const YAML::Node render = root["renderImage"];
             const YAML::Node hotkeys = root["hotkeys"];
             const YAML::Node elementCatalog = root["elementCatalog"];
+            const YAML::Node volumetrics = root["volumetrics"];
             const YAML::Node projects = root["projects"];
 
             if (ui)
@@ -3755,6 +4337,7 @@ namespace ds
                 TryLoadYamlScalar(panels, "showViewportInfoPanel", m_ShowViewportInfoPanel);
                 TryLoadYamlScalar(panels, "showShortcutReferencePanel", m_ShowShortcutReferencePanel);
                 TryLoadYamlScalar(panels, "showElementCatalogPanel", m_ShowElementCatalogPanel);
+                TryLoadYamlScalar(panels, "showVolumetricsPanel", m_ShowVolumetricsPanel);
                 TryLoadYamlScalar(panels, "showPeriodicTablePanel", m_ShowPeriodicTablePanel);
                 TryLoadYamlScalar(panels, "showActionsPanel", m_ShowActionsPanel);
                 TryLoadYamlScalar(panels, "showAppearancePanel", m_ShowAppearancePanel);
@@ -3895,6 +4478,8 @@ namespace ds
                 TryLoadYamlScalar(gizmos, "offsetRight", m_ViewGizmoOffsetRight);
                 TryLoadYamlScalar(gizmos, "offsetTop", m_ViewGizmoOffsetTop);
                 TryLoadYamlScalar(gizmos, "rotateStepDegrees", m_ViewportRotateStepDeg);
+                TryLoadYamlScalar(gizmos, "panStepPixels", m_ViewportPanStepPixels);
+                TryLoadYamlScalar(gizmos, "zoomStepPercent", m_ViewportZoomStepPercent);
                 TryLoadYamlScalar(gizmos, "fallbackMarkerScale", m_FallbackGizmoVisualScale);
                 TryLoadYamlScalar(gizmos, "showTransformEmpties", m_ShowTransformEmpties);
                 TryLoadYamlScalar(gizmos, "transformEmptyVisualScale", m_TransformEmptyVisualScale);
@@ -3969,6 +4554,44 @@ namespace ds
                 {
                     m_ElementCatalogSelectedSymbol = selectedSymbol;
                 }
+            }
+
+            if (volumetrics)
+            {
+                TryLoadYamlScalar(volumetrics, "previewMaxDimension", m_VolumetricPreviewMaxDimension);
+                const YAML::Node primarySurface = volumetrics["surfaceA"];
+                TryLoadYamlScalar(primarySurface, "enabled", m_PrimaryVolumetricSurface.enabled);
+                TryLoadYamlScalar(primarySurface, "blockIndex", m_PrimaryVolumetricSurface.blockIndex);
+                int primaryFieldMode = static_cast<int>(m_PrimaryVolumetricSurface.fieldMode);
+                int primaryIsoMode = static_cast<int>(m_PrimaryVolumetricSurface.isosurfaceMode);
+                TryLoadYamlScalar(primarySurface, "fieldMode", primaryFieldMode);
+                TryLoadYamlScalar(primarySurface, "isosurfaceMode", primaryIsoMode);
+                m_PrimaryVolumetricSurface.fieldMode = static_cast<VolumetricFieldMode>(glm::clamp(primaryFieldMode, 0, 4));
+                m_PrimaryVolumetricSurface.isosurfaceMode = static_cast<VolumetricIsosurfaceMode>(glm::clamp(primaryIsoMode, 0, 2));
+                TryLoadYamlScalar(primarySurface, "isoValue", m_PrimaryVolumetricSurface.isoValue);
+                TryLoadYamlVec3(primarySurface["color"], m_PrimaryVolumetricSurface.color);
+                TryLoadYamlVec3(primarySurface["negativeColor"], m_PrimaryVolumetricSurface.negativeColor);
+                TryLoadYamlScalar(primarySurface, "opacity", m_PrimaryVolumetricSurface.opacity);
+                TryLoadYamlScalar(primarySurface, "negativeOpacity", m_PrimaryVolumetricSurface.negativeOpacity);
+
+                const YAML::Node secondarySurface = volumetrics["surfaceB"];
+                TryLoadYamlScalar(secondarySurface, "enabled", m_SecondaryVolumetricSurface.enabled);
+                TryLoadYamlScalar(secondarySurface, "blockIndex", m_SecondaryVolumetricSurface.blockIndex);
+                int secondaryFieldMode = static_cast<int>(m_SecondaryVolumetricSurface.fieldMode);
+                int secondaryIsoMode = static_cast<int>(m_SecondaryVolumetricSurface.isosurfaceMode);
+                TryLoadYamlScalar(secondarySurface, "fieldMode", secondaryFieldMode);
+                TryLoadYamlScalar(secondarySurface, "isosurfaceMode", secondaryIsoMode);
+                m_SecondaryVolumetricSurface.fieldMode = static_cast<VolumetricFieldMode>(glm::clamp(secondaryFieldMode, 0, 4));
+                m_SecondaryVolumetricSurface.isosurfaceMode = static_cast<VolumetricIsosurfaceMode>(glm::clamp(secondaryIsoMode, 0, 2));
+                TryLoadYamlScalar(secondarySurface, "isoValue", m_SecondaryVolumetricSurface.isoValue);
+                TryLoadYamlVec3(secondarySurface["color"], m_SecondaryVolumetricSurface.color);
+                TryLoadYamlVec3(secondarySurface["negativeColor"], m_SecondaryVolumetricSurface.negativeColor);
+                TryLoadYamlScalar(secondarySurface, "opacity", m_SecondaryVolumetricSurface.opacity);
+                TryLoadYamlScalar(secondarySurface, "negativeOpacity", m_SecondaryVolumetricSurface.negativeOpacity);
+
+                const YAML::Node material = volumetrics["material"];
+                TryLoadYamlVec3(material["specularColor"], m_VolumetricSpecularColor);
+                TryLoadYamlScalar(material, "shininess", m_VolumetricShininess);
             }
 
             const YAML::Node sceneOutliner = root["sceneOutliner"];
@@ -4067,6 +4690,7 @@ namespace ds
         root["panels"]["showViewportInfoPanel"] = m_ShowViewportInfoPanel;
         root["panels"]["showShortcutReferencePanel"] = m_ShowShortcutReferencePanel;
         root["panels"]["showElementCatalogPanel"] = m_ShowElementCatalogPanel;
+        root["panels"]["showVolumetricsPanel"] = m_ShowVolumetricsPanel;
         root["panels"]["showPeriodicTablePanel"] = m_ShowPeriodicTablePanel;
         root["panels"]["showActionsPanel"] = m_ShowActionsPanel;
         root["panels"]["showAppearancePanel"] = m_ShowAppearancePanel;
@@ -4175,6 +4799,8 @@ namespace ds
         root["viewport"]["gizmos"]["offsetRight"] = m_ViewGizmoOffsetRight;
         root["viewport"]["gizmos"]["offsetTop"] = m_ViewGizmoOffsetTop;
         root["viewport"]["gizmos"]["rotateStepDegrees"] = m_ViewportRotateStepDeg;
+        root["viewport"]["gizmos"]["panStepPixels"] = m_ViewportPanStepPixels;
+        root["viewport"]["gizmos"]["zoomStepPercent"] = m_ViewportZoomStepPercent;
         root["viewport"]["gizmos"]["fallbackMarkerScale"] = m_FallbackGizmoVisualScale;
         root["viewport"]["gizmos"]["showTransformEmpties"] = m_ShowTransformEmpties;
         root["viewport"]["gizmos"]["transformEmptyVisualScale"] = m_TransformEmptyVisualScale;
@@ -4219,6 +4845,27 @@ namespace ds
         root["hotkeys"]["scaleGizmo"] = m_HotkeyScaleGizmo;
         root["elementCatalog"]["selectionSource"] = m_ElementCatalogFollowViewportSelection ? "viewport" : "periodicTable";
         root["elementCatalog"]["selectedSymbol"] = m_ElementCatalogSelectedSymbol;
+        root["volumetrics"]["previewMaxDimension"] = m_VolumetricPreviewMaxDimension;
+        root["volumetrics"]["surfaceA"]["enabled"] = m_PrimaryVolumetricSurface.enabled;
+        root["volumetrics"]["surfaceA"]["blockIndex"] = m_PrimaryVolumetricSurface.blockIndex;
+        root["volumetrics"]["surfaceA"]["fieldMode"] = static_cast<int>(m_PrimaryVolumetricSurface.fieldMode);
+        root["volumetrics"]["surfaceA"]["isosurfaceMode"] = static_cast<int>(m_PrimaryVolumetricSurface.isosurfaceMode);
+        root["volumetrics"]["surfaceA"]["isoValue"] = m_PrimaryVolumetricSurface.isoValue;
+        root["volumetrics"]["surfaceA"]["color"] = MakeColorNode(m_PrimaryVolumetricSurface.color);
+        root["volumetrics"]["surfaceA"]["negativeColor"] = MakeColorNode(m_PrimaryVolumetricSurface.negativeColor);
+        root["volumetrics"]["surfaceA"]["opacity"] = m_PrimaryVolumetricSurface.opacity;
+        root["volumetrics"]["surfaceA"]["negativeOpacity"] = m_PrimaryVolumetricSurface.negativeOpacity;
+        root["volumetrics"]["surfaceB"]["enabled"] = m_SecondaryVolumetricSurface.enabled;
+        root["volumetrics"]["surfaceB"]["blockIndex"] = m_SecondaryVolumetricSurface.blockIndex;
+        root["volumetrics"]["surfaceB"]["fieldMode"] = static_cast<int>(m_SecondaryVolumetricSurface.fieldMode);
+        root["volumetrics"]["surfaceB"]["isosurfaceMode"] = static_cast<int>(m_SecondaryVolumetricSurface.isosurfaceMode);
+        root["volumetrics"]["surfaceB"]["isoValue"] = m_SecondaryVolumetricSurface.isoValue;
+        root["volumetrics"]["surfaceB"]["color"] = MakeColorNode(m_SecondaryVolumetricSurface.color);
+        root["volumetrics"]["surfaceB"]["negativeColor"] = MakeColorNode(m_SecondaryVolumetricSurface.negativeColor);
+        root["volumetrics"]["surfaceB"]["opacity"] = m_SecondaryVolumetricSurface.opacity;
+        root["volumetrics"]["surfaceB"]["negativeOpacity"] = m_SecondaryVolumetricSurface.negativeOpacity;
+        root["volumetrics"]["material"]["specularColor"] = MakeColorNode(m_VolumetricSpecularColor);
+        root["volumetrics"]["material"]["shininess"] = m_VolumetricShininess;
         YAML::Node outlinerTreeOpenStates(YAML::NodeType::Map);
         for (const auto &[key, isOpen] : m_OutlinerTreeOpenStates)
         {

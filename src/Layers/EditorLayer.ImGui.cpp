@@ -6,6 +6,29 @@
 
 namespace ds
 {
+    namespace
+    {
+        void ScaleDockNodeSizeRefs(ImGuiDockNode *node, const ImVec2 &scale)
+        {
+            if (node == nullptr)
+            {
+                return;
+            }
+
+            node->SizeRef.x = ImMax(1.0f, node->SizeRef.x * scale.x);
+            node->SizeRef.y = ImMax(1.0f, node->SizeRef.y * scale.y);
+
+            if (node->ChildNodes[0] != nullptr)
+            {
+                ScaleDockNodeSizeRefs(node->ChildNodes[0], scale);
+            }
+            if (node->ChildNodes[1] != nullptr)
+            {
+                ScaleDockNodeSizeRefs(node->ChildNodes[1], scale);
+            }
+        }
+    }
+
     void EditorLayer::ApplyDefaultDockLayout(unsigned int dockspaceId)
     {
         ImGuiViewport *mainViewport = ImGui::GetMainViewport();
@@ -30,6 +53,7 @@ namespace ds
         ImGui::DockBuilderDockWindow("Appearance", rightDockId);
         ImGui::DockBuilderDockWindow("Actions", rightDockId);
         ImGui::DockBuilderDockWindow("Element Catalog", rightDockId);
+        ImGui::DockBuilderDockWindow("Volumetrics", rightDockId);
         ImGui::DockBuilderDockWindow("Periodic Table", rightDockId);
         ImGui::DockBuilderDockWindow("Viewport Settings", rightUtilityDockId);
         ImGui::DockBuilderDockWindow("Render Preview", rightUtilityDockId);
@@ -39,6 +63,7 @@ namespace ds
         ImGui::DockBuilderDockWindow("Viewport Info", bottomDockId);
         ImGui::DockBuilderDockWindow("Shortcuts", bottomDockId);
         ImGui::DockBuilderFinish(dockspaceId);
+        m_LastDockspaceWorkSize = glm::vec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y);
     }
 
     void EditorLayer::OnImGuiRender()
@@ -170,6 +195,28 @@ namespace ds
             m_ApplyDefaultDockLayoutOnNextFrame = false;
             m_RequestDockLayoutReset = false;
         }
+        else if (ImGuiDockNode *dockNode = ImGui::DockBuilderGetNode(dockspaceId))
+        {
+            const glm::vec2 currentDockspaceWorkSize(viewport->WorkSize.x, viewport->WorkSize.y);
+            if (currentDockspaceWorkSize.x > 1.0f && currentDockspaceWorkSize.y > 1.0f)
+            {
+                if (m_LastDockspaceWorkSize.x > 1.0f && m_LastDockspaceWorkSize.y > 1.0f)
+                {
+                    const float deltaX = std::fabs(currentDockspaceWorkSize.x - m_LastDockspaceWorkSize.x);
+                    const float deltaY = std::fabs(currentDockspaceWorkSize.y - m_LastDockspaceWorkSize.y);
+                    if (deltaX > 1.0f || deltaY > 1.0f)
+                    {
+                        const ImVec2 scale(
+                            currentDockspaceWorkSize.x / m_LastDockspaceWorkSize.x,
+                            currentDockspaceWorkSize.y / m_LastDockspaceWorkSize.y);
+                        ScaleDockNodeSizeRefs(dockNode, scale);
+                        dockNode->SizeRef = ImVec2(currentDockspaceWorkSize.x, currentDockspaceWorkSize.y);
+                    }
+                }
+
+                m_LastDockspaceWorkSize = currentDockspaceWorkSize;
+            }
+        }
 
         if (ImGui::BeginMenuBar())
         {
@@ -178,13 +225,29 @@ namespace ds
                 if (ImGui::MenuItem("Open POSCAR/CONTCAR", "Ctrl+O"))
                 {
                     std::vector<std::string> selectedPaths;
-                    if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                    if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                     {
                         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
                         for (const std::string &selectedPath : selectedPaths)
                         {
                             AppendStructureFromPathAsCollection(selectedPath);
                         }
+                    }
+                }
+
+                if (ImGui::MenuItem("Open CHG/CHGCAR/PARCHG", nullptr))
+                {
+                    std::vector<std::string> selectedPaths;
+                    if (OpenNativeVolumetricFilesDialog(selectedPaths, GetPreferredVolumetricDialogDirectory().string()) && !selectedPaths.empty())
+                    {
+                        for (const std::string &selectedPath : selectedPaths)
+                        {
+                            if (LoadVolumetricDatasetFromPath(selectedPath))
+                            {
+                                SaveProjectManifest();
+                            }
+                        }
+                        settingsChanged = true;
                     }
                 }
 
@@ -327,6 +390,10 @@ namespace ds
                 {
                     settingsChanged = true;
                 }
+                if (ImGui::MenuItem("Volumetrics", nullptr, &m_ShowVolumetricsPanel))
+                {
+                    settingsChanged = true;
+                }
                 if (ImGui::MenuItem("Periodic Table", nullptr, &m_ShowPeriodicTablePanel))
                 {
                     if (m_ShowPeriodicTablePanel)
@@ -382,6 +449,7 @@ namespace ds
                     m_ShowObjectPropertiesPanel = true;
                     m_ShowActionsPanel = true;
                     m_ShowAppearancePanel = true;
+                    m_ShowVolumetricsPanel = true;
                     m_ShowPeriodicTablePanel = false;
                     m_PeriodicTableOpen = false;
                     m_ViewportSettingsOpen = true;
@@ -1955,113 +2023,206 @@ namespace ds
                     if (ImGui::Begin("Viewport Controls", nullptr, rotateToolbarFlags))
                     {
                         const float stepRad = glm::radians(glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f));
-                        const float pitchLimit = glm::half_pi<float>() - 0.01f;
                         const ImGuiStyle &style = ImGui::GetStyle();
-                        const float frameHeight = ImGui::GetFrameHeight();
+                        const float shortInputWidth = 112.0f;
+                        const float iconButtonExtent = std::max(18.0f, ImGui::GetFrameHeight() - 2.0f);
+                        const ImVec2 iconButtonSize(iconButtonExtent, iconButtonExtent);
 
-                        auto calcButtonWidth = [&](const char *label)
+                        auto sameLineTight = [&]()
                         {
-                            return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+                            ImGui::SameLine(0.0f, style.ItemSpacing.x * 0.75f);
                         };
 
-                        auto centerRow = [&](float rowWidth)
+                        auto handleAxisButton = [&](const char *label, int axisIndex, bool reciprocalAxis, bool invertDirection)
                         {
-                            const float avail = ImGui::GetContentRegionAvail().x;
-                            if (avail > rowWidth)
+                            if (ImGui::Button(label))
                             {
-                                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - rowWidth) * 0.5f);
+                                if (SetCameraViewToCrystalAxis(axisIndex, reciprocalAxis, invertDirection))
+                                {
+                                    m_LastStructureMessage = std::string("Viewport: view along ") + label + '.';
+                                }
                             }
                         };
 
-                        auto applyView = [&](float yaw, float pitch)
+                        auto handleIconButton = [&](const char *id,
+                                                    const char *iconFileName,
+                                                    const char *fallbackLabel,
+                                                    const char *tooltip) -> bool
                         {
-                            StartCameraOrbitTransition(
-                                m_Camera->GetTarget(),
-                                m_Camera->GetDistance(),
-                                yaw,
-                                glm::clamp(pitch, -pitchLimit, pitchLimit));
-                            m_LastStructureOperationFailed = false;
+                            bool pressed = false;
+                            if (const ToolbarIconTexture *icon = GetViewportToolbarIcon(iconFileName))
+                            {
+                                const ImTextureRef texRef(reinterpret_cast<void *>(static_cast<uintptr_t>(icon->rendererId)));
+                                pressed = ImGui::ImageButton(
+                                    id,
+                                    texRef,
+                                    iconButtonSize,
+                                    ImVec2(0.0f, 0.0f),
+                                    ImVec2(1.0f, 1.0f),
+                                    ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+                                    ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+                            }
+                            else
+                            {
+                                pressed = ImGui::Button(fallbackLabel, iconButtonSize);
+                            }
+
+                            if (tooltip != nullptr && tooltip[0] != '\0' &&
+                                ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+                            {
+                                ImGui::SetTooltip("%s", tooltip);
+                            }
+
+                            return pressed;
                         };
 
-                        const float row1Width =
-                            ImGui::CalcTextSize("View").x + style.ItemSpacing.x +
-                            frameHeight + style.ItemSpacing.x +
-                            frameHeight + style.ItemSpacing.x +
-                            frameHeight + style.ItemSpacing.x +
-                            frameHeight + style.ItemSpacing.x +
-                            calcButtonWidth("Roll-") + style.ItemSpacing.x +
-                            calcButtonWidth("Roll+") + style.ItemSpacing.x +
-                            calcButtonWidth("Front");
-                        centerRow(row1Width);
-
                         ImGui::TextUnformatted("View");
-                        ImGui::SameLine();
-                        if (ImGui::ArrowButton("##ViewLeft", ImGuiDir_Left))
-                        {
-                            applyView(m_Camera->GetYaw() + stepRad, m_Camera->GetPitch());
-                            m_LastStructureMessage = "Viewport: rotate left.";
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::ArrowButton("##ViewRight", ImGuiDir_Right))
-                        {
-                            applyView(m_Camera->GetYaw() - stepRad, m_Camera->GetPitch());
-                            m_LastStructureMessage = "Viewport: rotate right.";
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::ArrowButton("##ViewUp", ImGuiDir_Up))
-                        {
-                            applyView(m_Camera->GetYaw(), m_Camera->GetPitch() + stepRad);
-                            m_LastStructureMessage = "Viewport: tilt up.";
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::ArrowButton("##ViewDown", ImGuiDir_Down))
-                        {
-                            applyView(m_Camera->GetYaw(), m_Camera->GetPitch() - stepRad);
-                            m_LastStructureMessage = "Viewport: tilt down.";
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Roll-"))
-                        {
-                            StartCameraOrbitTransition(
-                                m_Camera->GetTarget(),
-                                m_Camera->GetDistance(),
-                                m_Camera->GetYaw(),
-                                m_Camera->GetPitch(),
-                                m_Camera->GetRoll() - stepRad);
-                            m_LastStructureOperationFailed = false;
-                            m_LastStructureMessage = "Viewport: roll left.";
-                            settingsChanged = true;
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Roll+"))
-                        {
-                            StartCameraOrbitTransition(
-                                m_Camera->GetTarget(),
-                                m_Camera->GetDistance(),
-                                m_Camera->GetYaw(),
-                                m_Camera->GetPitch(),
-                                m_Camera->GetRoll() + stepRad);
-                            m_LastStructureOperationFailed = false;
-                            m_LastStructureMessage = "Viewport: roll right.";
-                            settingsChanged = true;
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Front"))
-                        {
-                            applyView(0.0f, 0.0f);
-                            m_LastStructureMessage = "Viewport: front view.";
-                        }
-                        ImGui::SameLine();
+                        sameLineTight();
+                        handleAxisButton("a", 0, false, false);
+                        sameLineTight();
+                        handleAxisButton("b", 1, false, false);
+                        sameLineTight();
+                        handleAxisButton("c", 2, false, false);
+                        sameLineTight();
+                        handleAxisButton("a*", 0, true, false);
+                        sameLineTight();
+                        handleAxisButton("b*", 1, true, false);
+                        sameLineTight();
+                        handleAxisButton("c*", 2, true, false);
 
-                        const float stepInputWidth = 150.0f;
-                        const float row2Width = ImGui::CalcTextSize("Step (deg):").x + style.ItemSpacing.x + stepInputWidth;
-                        // centerRow(row2Width);
+                        sameLineTight();
+                        if (handleIconButton("##ViewportOrbitLeft", "left-arrow.png", "<", "Orbit left relative to camera"))
+                        {
+                            if (RotateCameraRelative(stepRad, 0.0f))
+                            {
+                                m_LastStructureMessage = "Viewport: orbit left relative to camera.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportOrbitRight", "right-arrow.png", ">", "Orbit right relative to camera"))
+                        {
+                            if (RotateCameraRelative(-stepRad, 0.0f))
+                            {
+                                m_LastStructureMessage = "Viewport: orbit right relative to camera.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportOrbitUp", "up-arrow.png", "^", "Orbit up relative to camera"))
+                        {
+                            if (RotateCameraRelative(0.0f, stepRad))
+                            {
+                                m_LastStructureMessage = "Viewport: orbit up relative to camera.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportOrbitDown", "down-arrow.png", "v", "Orbit down relative to camera"))
+                        {
+                            if (RotateCameraRelative(0.0f, -stepRad))
+                            {
+                                m_LastStructureMessage = "Viewport: orbit down relative to camera.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportRollLeft", "rotate-left.png", "Rl-", "Roll left relative to camera"))
+                        {
+                            if (RotateCameraRelative(0.0f, 0.0f, -stepRad))
+                            {
+                                m_LastStructureMessage = "Viewport: roll left relative to camera.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportRollRight", "rotate-right.png", "Rl+", "Roll right relative to camera"))
+                        {
+                            if (RotateCameraRelative(0.0f, 0.0f, stepRad))
+                            {
+                                m_LastStructureMessage = "Viewport: roll right relative to camera.";
+                            }
+                        }
+                        sameLineTight();
                         ImGui::TextUnformatted("Step (deg):");
-                        ImGui::SameLine();
-                        ImGui::PushItemWidth(stepInputWidth);
+                        sameLineTight();
+                        ImGui::PushItemWidth(shortInputWidth);
                         if (ImGui::InputFloat("##ViewportRotateStep", &m_ViewportRotateStepDeg, 1.0f, 5.0f, "%.1f"))
                         {
                             m_ViewportRotateStepDeg = glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f);
+                            settingsChanged = true;
+                        }
+                        ImGui::PopItemWidth();
+
+                        sameLineTight();
+                        if (handleIconButton("##ViewportPanUp", "up-arrow.png", "P^", "Pan up in camera plane"))
+                        {
+                            if (PanCameraRelativePixels(0.0f, m_ViewportPanStepPixels))
+                            {
+                                m_LastStructureMessage = "Viewport: pan up in camera plane.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportPanDown", "down-arrow.png", "Pv", "Pan down in camera plane"))
+                        {
+                            if (PanCameraRelativePixels(0.0f, -m_ViewportPanStepPixels))
+                            {
+                                m_LastStructureMessage = "Viewport: pan down in camera plane.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportPanLeft", "left-arrow.png", "P<", "Pan left in camera plane"))
+                        {
+                            if (PanCameraRelativePixels(m_ViewportPanStepPixels, 0.0f))
+                            {
+                                m_LastStructureMessage = "Viewport: pan left in camera plane.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportPanRight", "right-arrow.png", "P>", "Pan right in camera plane"))
+                        {
+                            if (PanCameraRelativePixels(-m_ViewportPanStepPixels, 0.0f))
+                            {
+                                m_LastStructureMessage = "Viewport: pan right in camera plane.";
+                            }
+                        }
+                        sameLineTight();
+                        ImGui::TextUnformatted("Step (px):");
+                        sameLineTight();
+                        ImGui::PushItemWidth(shortInputWidth);
+                        if (ImGui::InputFloat("##ViewportPanStepPixels", &m_ViewportPanStepPixels, 1.0f, 5.0f, "%.0f"))
+                        {
+                            m_ViewportPanStepPixels = glm::clamp(m_ViewportPanStepPixels, 1.0f, 512.0f);
+                            settingsChanged = true;
+                        }
+                        ImGui::PopItemWidth();
+
+                        sameLineTight();
+                        if (handleIconButton("##ViewportZoomOut", "minus.png", "-", "Zoom out"))
+                        {
+                            if (ZoomCameraRelativePercent(-m_ViewportZoomStepPercent))
+                            {
+                                m_LastStructureMessage = "Viewport: zoom out.";
+                            }
+                        }
+                        sameLineTight();
+                        if (ImGui::Button("Focus"))
+                        {
+                            if (FocusCameraOnCursor())
+                            {
+                                m_LastStructureMessage = "Viewport: focus selection or cursor.";
+                            }
+                        }
+                        sameLineTight();
+                        if (handleIconButton("##ViewportZoomIn", "plus.png", "+", "Zoom in"))
+                        {
+                            if (ZoomCameraRelativePercent(m_ViewportZoomStepPercent))
+                            {
+                                m_LastStructureMessage = "Viewport: zoom in.";
+                            }
+                        }
+                        sameLineTight();
+                        ImGui::TextUnformatted("Step (%):");
+                        sameLineTight();
+                        ImGui::PushItemWidth(shortInputWidth);
+                        if (ImGui::InputFloat("##ViewportZoomStepPercent", &m_ViewportZoomStepPercent, 1.0f, 5.0f, "%.0f"))
+                        {
+                            m_ViewportZoomStepPercent = glm::clamp(m_ViewportZoomStepPercent, 1.0f, 90.0f);
                             settingsChanged = true;
                         }
                         ImGui::PopItemWidth();
@@ -4799,7 +4960,7 @@ namespace ds
                     if (ImGui::Button("Browse##Import"))
                     {
                         std::vector<std::string> selectedPaths;
-                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                        if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                         {
                             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
                             for (const std::string &selectedPath : selectedPaths)
@@ -4812,7 +4973,7 @@ namespace ds
                     if (ImGui::Button("Load multiple files"))
                     {
                         std::vector<std::string> selectedPaths;
-                        if (OpenNativeFilesDialog(selectedPaths) && !selectedPaths.empty())
+                        if (OpenNativeFilesDialog(selectedPaths, GetPreferredStructureDialogDirectory().string()) && !selectedPaths.empty())
                         {
                             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", selectedPaths.front().c_str());
                             for (const std::string &selectedPath : selectedPaths)
@@ -6884,6 +7045,33 @@ namespace ds
             ImGui::SetNextWindowSize(ImVec2(360.0f, 260.0f), ImGuiCond_FirstUseEver);
             ImGui::Begin("Stats", &m_ShowStatsPanel);
 
+            auto formatBytes = [](std::size_t bytes)
+            {
+                constexpr double kKiB = 1024.0;
+                constexpr double kMiB = 1024.0 * 1024.0;
+                constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+
+                std::ostringstream out;
+                out << std::fixed << std::setprecision(2);
+                if (bytes >= static_cast<std::size_t>(kGiB))
+                {
+                    out << (static_cast<double>(bytes) / kGiB) << " GiB";
+                }
+                else if (bytes >= static_cast<std::size_t>(kMiB))
+                {
+                    out << (static_cast<double>(bytes) / kMiB) << " MiB";
+                }
+                else if (bytes >= static_cast<std::size_t>(kKiB))
+                {
+                    out << (static_cast<double>(bytes) / kKiB) << " KiB";
+                }
+                else
+                {
+                    out << bytes << " B";
+                }
+                return out.str();
+            };
+
             const float frameTimeMs = (io.Framerate > 0.0f) ? (1000.0f / io.Framerate) : 0.0f;
             const std::uint32_t renderWidth = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.x * m_ViewportRenderScale));
             const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::max(1.0f, m_ViewportSize.y * m_ViewportRenderScale));
@@ -6925,6 +7113,52 @@ namespace ds
 #else
             ImGui::TextUnformatted("Profiler: Tracy disabled in this build");
 #endif
+
+            if (!m_VolumetricDatasets.empty())
+            {
+                ImGui::SeparatorText("Volumetrics");
+                ImGui::Text("Datasets: %zu | Jobs D/B/S: %zu / %zu / %zu",
+                            m_VolumetricDatasets.size(),
+                            m_PendingVolumetricDatasetLoads.size(),
+                            m_PendingVolumetricBlockLoads.size(),
+                            m_PendingVolumetricSurfaceBuilds.size());
+
+                const int activeDatasetIndex = std::clamp(m_ActiveVolumetricDatasetIndex, 0, static_cast<int>(m_VolumetricDatasets.size()) - 1);
+                const VolumetricDataset &activeDataset = m_VolumetricDatasets[static_cast<std::size_t>(activeDatasetIndex)];
+                ImGui::Text("Active dataset: %s", activeDataset.sourceLabel.c_str());
+                ImGui::Text("Resident / estimated: %s / %s",
+                            formatBytes(activeDataset.TotalMemoryBytes()).c_str(),
+                            formatBytes(activeDataset.TotalEstimatedMemoryBytes()).c_str());
+
+                if (!activeDataset.blocks.empty())
+                {
+                    const int activeBlockIndex = std::clamp(m_ActiveVolumetricBlockIndex, 0, static_cast<int>(activeDataset.blocks.size()) - 1);
+                    const ScalarFieldBlock &block = activeDataset.blocks[static_cast<std::size_t>(activeBlockIndex)];
+                    ImGui::Text("Block: %s | Grid %d x %d x %d",
+                                block.label.c_str(),
+                                block.dimensions.x,
+                                block.dimensions.y,
+                                block.dimensions.z);
+                    if (block.statistics.valid)
+                    {
+                        ImGui::Text("Range: %.6g .. %.6g | abs max %.6g",
+                                    block.statistics.minValue,
+                                    block.statistics.maxValue,
+                                    block.statistics.absMaxValue);
+                    }
+                }
+
+                ImGui::Text("Preview max axis: %d", m_VolumetricPreviewMaxDimension);
+                ImGui::Text("Surface A: %s | %zu tris | %.2f ms",
+                            m_PrimaryVolumetricSurface.enabled ? "on" : "off",
+                            m_PrimaryVolumetricSurface.mesh.TriangleCount(),
+                            m_PrimaryVolumetricSurface.lastBuildMilliseconds);
+                ImGui::Text("Surface B: %s | %zu tris | %.2f ms",
+                            m_SecondaryVolumetricSurface.enabled ? "on" : "off",
+                            m_SecondaryVolumetricSurface.mesh.TriangleCount(),
+                            m_SecondaryVolumetricSurface.lastBuildMilliseconds);
+            }
+
             ImGui::TextDisabled("Use render scale and input defaults in Settings to tune weaker GPUs.");
             ImGui::End();
         }
@@ -7237,6 +7471,7 @@ namespace ds
         DrawRenderImageDialog(settingsChanged);
         DrawRenderPreviewWindow(settingsChanged);
         DrawElementAppearanceWindow(settingsChanged);
+        DrawVolumetricsWindow(settingsChanged);
 
         if (m_ShowAddAtomDialog)
         {
@@ -7313,6 +7548,485 @@ namespace ds
         {
             SaveSettings();
         }
+    }
+
+    void EditorLayer::DrawVolumetricsWindow(bool &settingsChanged)
+    {
+        if (!m_ShowVolumetricsPanel)
+        {
+            return;
+        }
+
+        EnsureVolumetricSelection();
+
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 560.0f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Volumetrics", &m_ShowVolumetricsPanel))
+        {
+            ImGui::End();
+            return;
+        }
+
+        auto formatBytes = [](std::size_t bytes)
+        {
+            constexpr double kKiB = 1024.0;
+            constexpr double kMiB = 1024.0 * 1024.0;
+            constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+
+            std::ostringstream out;
+            out << std::fixed << std::setprecision(2);
+            if (bytes >= static_cast<std::size_t>(kGiB))
+            {
+                out << (static_cast<double>(bytes) / kGiB) << " GiB";
+            }
+            else if (bytes >= static_cast<std::size_t>(kMiB))
+            {
+                out << (static_cast<double>(bytes) / kMiB) << " MiB";
+            }
+            else if (bytes >= static_cast<std::size_t>(kKiB))
+            {
+                out << (static_cast<double>(bytes) / kKiB) << " KiB";
+            }
+            else
+            {
+                out << bytes << " B";
+            }
+            return out.str();
+        };
+
+        if (ImGui::Button("Load volumetric files..."))
+        {
+            std::vector<std::string> selectedPaths;
+            if (OpenNativeVolumetricFilesDialog(selectedPaths, GetPreferredVolumetricDialogDirectory().string()) && !selectedPaths.empty())
+            {
+                bool anyLoaded = false;
+                for (const std::string &selectedPath : selectedPaths)
+                {
+                    anyLoaded |= LoadVolumetricDatasetFromPath(selectedPath);
+                }
+                if (anyLoaded)
+                {
+                    SaveProjectManifest();
+                }
+            }
+        }
+
+        ImGui::SameLine();
+        const bool hasDataset = !m_VolumetricDatasets.empty();
+        if (!hasDataset)
+        {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Unload selected"))
+        {
+            if (RemoveVolumetricDatasetAtIndex(m_ActiveVolumetricDatasetIndex))
+            {
+                SaveProjectManifest();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear all"))
+        {
+            ClearVolumetricDatasets();
+            SaveProjectManifest();
+        }
+        if (!hasDataset)
+        {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("Jobs D/B/S: %zu / %zu / %zu",
+                            m_PendingVolumetricDatasetLoads.size(),
+                            m_PendingVolumetricBlockLoads.size(),
+                            m_PendingVolumetricSurfaceBuilds.size());
+
+        if (!m_LastVolumetricMessage.empty())
+        {
+            ImVec4 color = m_LastVolumetricOperationFailed ? ImVec4(0.95f, 0.42f, 0.42f, 1.0f) : ImVec4(0.64f, 0.88f, 0.68f, 1.0f);
+            ImGui::TextColored(color, "%s", m_LastVolumetricMessage.c_str());
+        }
+
+        if (m_VolumetricDatasets.empty())
+        {
+            ImGui::SeparatorText("Quick start");
+            ImGui::TextWrapped("Load CHG / CHGCAR / PARCHG files, then choose a block and isosurface level.");
+            ImGui::End();
+            return;
+        }
+
+        std::size_t totalMemoryBytes = 0;
+        std::size_t totalEstimatedMemoryBytes = 0;
+        for (const VolumetricDataset &dataset : m_VolumetricDatasets)
+        {
+            totalMemoryBytes += dataset.TotalMemoryBytes();
+            totalEstimatedMemoryBytes += dataset.TotalEstimatedMemoryBytes();
+        }
+
+        std::vector<const char *> datasetLabels;
+        datasetLabels.reserve(m_VolumetricDatasets.size());
+        for (const VolumetricDataset &loadedDataset : m_VolumetricDatasets)
+        {
+            datasetLabels.push_back(loadedDataset.sourceLabel.c_str());
+        }
+
+        EnsureVolumetricSelection();
+        if (m_ActiveVolumetricDatasetIndex < 0 || m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            ImGui::End();
+            return;
+        }
+
+        ImGui::SeparatorText("Dataset");
+        if (ImGui::Combo("Active dataset", &m_ActiveVolumetricDatasetIndex, datasetLabels.data(), static_cast<int>(datasetLabels.size())))
+        {
+            m_ActiveVolumetricBlockIndex = 0;
+            MarkVolumetricMeshesDirty();
+            settingsChanged = true;
+        }
+
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        ImGui::Text("File kind: %s", VolumetricFileKindName(dataset.kind));
+        ImGui::SameLine();
+        ImGui::TextDisabled("| Resident %s / %s estimated",
+                            formatBytes(dataset.TotalMemoryBytes()).c_str(),
+                            formatBytes(dataset.TotalEstimatedMemoryBytes()).c_str());
+        ImGui::TextDisabled("%s", dataset.sourcePath.c_str());
+        if (VolumetricDatasetHasSpinSemantics(dataset))
+        {
+            ImGui::TextDisabled("PARCHG semantics: Block 1 = total density (up + down), Block 2 = magnetization (up - down).");
+        }
+        if (ImGui::Button("Apply dataset header structure to scene"))
+        {
+            ApplyParsedStructureToScene(dataset.structure, dataset.sourcePath, false);
+            m_LastStructureOperationFailed = false;
+            m_LastStructureMessage = "Applied crystal structure from volumetric dataset header.";
+            LogInfo(m_LastStructureMessage);
+            settingsChanged = true;
+        }
+        ImGui::SameLine();
+        DrawInlineHelpMarker("Each volumetric file carries one crystal-structure header. The editor keeps one active atom scene and adds volumetric datasets as overlays. Use this button when you want the selected dataset header to replace the current scene structure.");
+        if (m_HasStructureLoaded)
+        {
+            bool matchesCurrentScene = false;
+            const std::string matchDescription = DescribeVolumetricStructureMatch(dataset.structure, matchesCurrentScene);
+            ImGui::TextColored(matchesCurrentScene ? ImVec4(0.64f, 0.88f, 0.68f, 1.0f) : ImVec4(0.95f, 0.72f, 0.38f, 1.0f),
+                               "Structure check: %s",
+                               matchDescription.c_str());
+        }
+
+        if (!dataset.blocks.empty())
+        {
+            std::vector<const char *> blockLabels;
+            blockLabels.reserve(dataset.blocks.size());
+            for (const ScalarFieldBlock &block : dataset.blocks)
+            {
+                blockLabels.push_back(block.label.c_str());
+            }
+
+            ImGui::SeparatorText("Block cache");
+            ImGui::Combo("Active block", &m_ActiveVolumetricBlockIndex, blockLabels.data(), static_cast<int>(blockLabels.size()));
+            m_ActiveVolumetricBlockIndex = std::clamp(m_ActiveVolumetricBlockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+
+            const ScalarFieldBlock &block = dataset.blocks[static_cast<std::size_t>(m_ActiveVolumetricBlockIndex)];
+            ImGui::SameLine();
+            ImGui::TextDisabled("Grid %d x %d x %d", block.dimensions.x, block.dimensions.y, block.dimensions.z);
+            if (!block.samplesLoaded)
+            {
+                const bool blockQueued = HasPendingVolumetricBlockLoad(dataset.sourcePath, m_ActiveVolumetricBlockIndex);
+                const char *loadButtonLabel =
+                    blockQueued ? "Block load queued" :
+                    (block.loadFailed ? "Retry load active block" : "Load active block now");
+                if (ImGui::Button(loadButtonLabel))
+                {
+                    QueueVolumetricBlockLoad(m_ActiveVolumetricDatasetIndex, m_ActiveVolumetricBlockIndex, true);
+                }
+                if (blockQueued)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("samples are loading in the background");
+                }
+                else if (block.loadFailed)
+                {
+                    ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.40f, 1.0f),
+                                       "Last load failed (%d attempt%s): %s",
+                                       std::max(block.failedLoadAttempts, 1),
+                                       (std::max(block.failedLoadAttempts, 1) == 1 ? "" : "s"),
+                                       block.lastLoadError.empty() ? "Unknown error" : block.lastLoadError.c_str());
+                }
+            }
+            else
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("Loaded in %.2f ms | %s",
+                                    block.lastLoadMilliseconds,
+                                    formatBytes(block.MemoryBytes()).c_str());
+            }
+
+            ImGui::SeparatorText("Preview quality");
+            if (ImGui::SliderInt("Preview max axis", &m_VolumetricPreviewMaxDimension, 32, 512))
+            {
+                settingsChanged = true;
+                MarkVolumetricMeshesDirty();
+            }
+            ImGui::SameLine();
+            DrawInlineHelpMarker("Reduces the preview grid before marching the isosurface. Lower values are faster and more blocky. Higher values preserve more detail but cost more CPU time and memory.");
+
+            const int decimationStep = block.SuggestedDecimationStep(m_VolumetricPreviewMaxDimension);
+            const glm::ivec3 downsampledDimensions = block.DownsampledDimensions(m_VolumetricPreviewMaxDimension);
+            const std::size_t downsampledSamples = block.DownsampledSampleCount(m_VolumetricPreviewMaxDimension);
+            const std::size_t downsampledBytes = downsampledSamples * sizeof(float);
+            ImGui::TextDisabled("Preview grid %d x %d x %d | Step %d | Approx preview memory %s",
+                                downsampledDimensions.x,
+                                downsampledDimensions.y,
+                                downsampledDimensions.z,
+                                decimationStep,
+                                formatBytes(downsampledBytes).c_str());
+
+            ImGui::SeparatorText("Material");
+            ImGui::ColorEdit3("Specular##VolumetricSpecularColor",
+                              &m_VolumetricSpecularColor.x,
+                              ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueBar);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                settingsChanged = true;
+            }
+            ImGui::SliderFloat("Shininess##VolumetricShininess", &m_VolumetricShininess, 1.0f, 256.0f, "%.0f");
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                settingsChanged = true;
+            }
+
+            auto drawSurfaceControls = [&](const char *label, const char *idSuffix, VolumetricSurfaceState &surfaceState, float defaultIsoFactor)
+            {
+                const bool spinSemanticsAvailable = VolumetricDatasetHasSpinSemantics(dataset);
+                const char *fieldOptions[] = {
+                    VolumetricFieldModeName(VolumetricFieldMode::SelectedBlock),
+                    VolumetricFieldModeName(VolumetricFieldMode::TotalDensity),
+                    VolumetricFieldModeName(VolumetricFieldMode::Magnetization),
+                    VolumetricFieldModeName(VolumetricFieldMode::SpinUp),
+                    VolumetricFieldModeName(VolumetricFieldMode::SpinDown)};
+                const char *modeOptions[] = {
+                    VolumetricIsosurfaceModeName(VolumetricIsosurfaceMode::PositiveOnly),
+                    VolumetricIsosurfaceModeName(VolumetricIsosurfaceMode::NegativeOnly),
+                    VolumetricIsosurfaceModeName(VolumetricIsosurfaceMode::PositiveAndNegative)};
+
+                ImGui::PushID(idSuffix);
+                ImGui::TextUnformatted(label);
+                if (ImGui::Checkbox((std::string("Enabled##") + idSuffix).c_str(), &surfaceState.enabled))
+                {
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                if (!surfaceState.enabled)
+                {
+                    ImGui::BeginDisabled();
+                }
+
+                int fieldModeIndex = static_cast<int>(surfaceState.fieldMode);
+                if (ImGui::Combo((std::string("Field##") + idSuffix).c_str(), &fieldModeIndex, fieldOptions, IM_ARRAYSIZE(fieldOptions)))
+                {
+                    surfaceState.fieldMode = static_cast<VolumetricFieldMode>(fieldModeIndex);
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+                if (!spinSemanticsAvailable &&
+                    (surfaceState.fieldMode == VolumetricFieldMode::Magnetization ||
+                     surfaceState.fieldMode == VolumetricFieldMode::SpinUp ||
+                     surfaceState.fieldMode == VolumetricFieldMode::SpinDown))
+                {
+                    surfaceState.fieldMode = VolumetricFieldMode::SelectedBlock;
+                }
+
+                if (surfaceState.fieldMode == VolumetricFieldMode::SelectedBlock)
+                {
+                    if (ImGui::Combo((std::string("Block##") + idSuffix).c_str(), &surfaceState.blockIndex, blockLabels.data(), static_cast<int>(blockLabels.size())))
+                    {
+                        surfaceState.dirty = true;
+                        settingsChanged = true;
+                    }
+                }
+                else
+                {
+                    const std::optional<int> semanticIndex =
+                        (surfaceState.fieldMode == VolumetricFieldMode::TotalDensity) ? std::optional<int>(0) :
+                        (surfaceState.fieldMode == VolumetricFieldMode::Magnetization && spinSemanticsAvailable) ? std::optional<int>(1) :
+                                                                                                                   std::nullopt;
+                    if (semanticIndex.has_value() && semanticIndex.value() >= 0 && semanticIndex.value() < static_cast<int>(dataset.blocks.size()))
+                    {
+                        ImGui::TextDisabled("Source: %s", dataset.blocks[static_cast<std::size_t>(semanticIndex.value())].label.c_str());
+                    }
+                    else if (surfaceState.fieldMode == VolumetricFieldMode::SpinUp || surfaceState.fieldMode == VolumetricFieldMode::SpinDown)
+                    {
+                        ImGui::TextDisabled("Source: derived from Block 1 + Block 2");
+                    }
+                }
+
+                int isosurfaceModeIndex = static_cast<int>(surfaceState.isosurfaceMode);
+                if (ImGui::Combo((std::string("Mode##") + idSuffix).c_str(), &isosurfaceModeIndex, modeOptions, IM_ARRAYSIZE(modeOptions)))
+                {
+                    surfaceState.isosurfaceMode = static_cast<VolumetricIsosurfaceMode>(isosurfaceModeIndex);
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                const ScalarFieldBlock *statsBlock = nullptr;
+                if (surfaceState.fieldMode == VolumetricFieldMode::SelectedBlock)
+                {
+                    surfaceState.blockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+                    statsBlock = &dataset.blocks[static_cast<std::size_t>(surfaceState.blockIndex)];
+                }
+                else if (surfaceState.fieldMode == VolumetricFieldMode::TotalDensity && !dataset.blocks.empty())
+                {
+                    statsBlock = &dataset.blocks.front();
+                }
+                else if (surfaceState.fieldMode == VolumetricFieldMode::Magnetization && spinSemanticsAvailable)
+                {
+                    statsBlock = &dataset.blocks[1];
+                }
+                else if ((surfaceState.fieldMode == VolumetricFieldMode::SpinUp || surfaceState.fieldMode == VolumetricFieldMode::SpinDown) && !dataset.blocks.empty())
+                {
+                    statsBlock = &dataset.blocks.front();
+                }
+
+                const float dragSpeed = (statsBlock != nullptr && statsBlock->statistics.valid) ? std::max(statsBlock->statistics.absMaxValue * 0.0025f, 1e-6f) : 1e-4f;
+                const float dragMax = (statsBlock != nullptr && statsBlock->statistics.valid) ? std::max(1e-6f, std::max(std::abs(statsBlock->statistics.minValue), std::abs(statsBlock->statistics.maxValue))) : 1.0f;
+                const float resolvedDefaultIsoFactor =
+                    (surfaceState.fieldMode == VolumetricFieldMode::Magnetization)
+                        ? ((surfaceState.isosurfaceMode == VolumetricIsosurfaceMode::PositiveAndNegative) ? 0.0575f : 0.0600f)
+                    : ((surfaceState.fieldMode == VolumetricFieldMode::SpinUp || surfaceState.fieldMode == VolumetricFieldMode::SpinDown) ? 0.0850f
+                                                                                                                                    : defaultIsoFactor);
+                const float defaultIsoMagnitude =
+                    (statsBlock != nullptr && statsBlock->statistics.valid)
+                        ? std::max(std::max(std::abs(statsBlock->statistics.meanValue) * 6.0f, statsBlock->statistics.absMaxValue * 0.05f),
+                                   statsBlock->statistics.absMaxValue * resolvedDefaultIsoFactor)
+                        : std::max(std::abs(surfaceState.isoValue), 0.0f);
+
+                float isoMagnitude = std::max(std::abs(surfaceState.isoValue), 0.0f);
+                ImGui::TextUnformatted("Iso level");
+                ImGui::SameLine();
+                DrawInlineHelpMarker("This is the scalar-field threshold used to extract the isosurface. VESTA calls the same quantity the isosurface level. Lower absolute values produce larger, more diffuse surfaces; higher absolute values keep only the strongest regions.");
+                ImGui::DragFloat((std::string("##IsoValue") + idSuffix).c_str(), &isoMagnitude, dragSpeed, 0.0f, dragMax, "%.6g");
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    surfaceState.isoValue = std::max(isoMagnitude, 0.0f);
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Button((std::string("Default##") + idSuffix).c_str()))
+                {
+                    surfaceState.isoValue = defaultIsoMagnitude;
+                    surfaceState.dirty = true;
+                    settingsChanged = true;
+                }
+
+                if (surfaceState.isosurfaceMode == VolumetricIsosurfaceMode::PositiveOnly)
+                {
+                    ImGui::ColorEdit3((std::string("Color##") + idSuffix).c_str(),
+                                      &surfaceState.color.x,
+                                      ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueBar);
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+
+                    ImGui::SliderFloat((std::string("Opacity##") + idSuffix).c_str(), &surfaceState.opacity, 0.05f, 1.0f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+                }
+                else if (surfaceState.isosurfaceMode == VolumetricIsosurfaceMode::NegativeOnly)
+                {
+                    ImGui::ColorEdit3((std::string("Color##") + idSuffix).c_str(),
+                                      &surfaceState.negativeColor.x,
+                                      ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueBar);
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+
+                    ImGui::SliderFloat((std::string("Opacity##") + idSuffix).c_str(), &surfaceState.negativeOpacity, 0.05f, 1.0f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+                }
+                else
+                {
+                    ImGui::ColorEdit3((std::string("Positive##") + idSuffix).c_str(),
+                                      &surfaceState.color.x,
+                                      ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueBar);
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+
+                    ImGui::SliderFloat((std::string("Opacity +##") + idSuffix).c_str(), &surfaceState.opacity, 0.05f, 1.0f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+
+                    ImGui::ColorEdit3((std::string("Negative##") + idSuffix).c_str(),
+                                      &surfaceState.negativeColor.x,
+                                      ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueBar);
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+
+                    ImGui::SliderFloat((std::string("Opacity -##") + idSuffix).c_str(), &surfaceState.negativeOpacity, 0.05f, 1.0f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        settingsChanged = true;
+                    }
+                }
+
+                if (ImGui::Button((std::string("Rebuild now##") + idSuffix).c_str()))
+                {
+                    surfaceState.dirty = true;
+                }
+
+                if (surfaceState.enabled)
+                {
+                    ImGui::TextDisabled("%zu tris | %d x %d x %d | %.2f ms",
+                                        surfaceState.mesh.TriangleCount() + surfaceState.negativeMesh.TriangleCount(),
+                                        surfaceState.sampledDimensions.x,
+                                        surfaceState.sampledDimensions.y,
+                                        surfaceState.sampledDimensions.z,
+                                        surfaceState.lastBuildMilliseconds);
+                    if (surfaceState.buildQueued)
+                    {
+                        ImGui::TextDisabled("Build queued in background");
+                    }
+                    if (!surfaceState.lastStatus.empty())
+                    {
+                        const bool surfaceOkay = surfaceState.hasMesh;
+                        ImGui::TextColored(surfaceOkay ? ImVec4(0.64f, 0.88f, 0.68f, 1.0f) : ImVec4(0.95f, 0.72f, 0.38f, 1.0f), "%s", surfaceState.lastStatus.c_str());
+                    }
+                }
+
+                if (!surfaceState.enabled)
+                {
+                    ImGui::EndDisabled();
+                }
+                ImGui::PopID();
+            };
+
+            ImGui::SeparatorText("Surface preview");
+            if (ImGui::BeginTable("VolumetricSurfaceTable", 2, ImGuiTableFlags_SizingStretchSame))
+            {
+                ImGui::TableNextColumn();
+                drawSurfaceControls("Surface A", "PrimarySurface", m_PrimaryVolumetricSurface, 0.26f);
+                ImGui::TableNextColumn();
+                drawSurfaceControls("Surface B", "SecondarySurface", m_SecondaryVolumetricSurface, 0.42f);
+                ImGui::EndTable();
+            }
+        }
+
+        ImGui::End();
     }
 
     void EditorLayer::DrawElementAppearanceWindow(bool &settingsChanged)

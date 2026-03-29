@@ -19,6 +19,7 @@ IncludeDir["imguizmo"] = "vendor/imguizmo"
 IncludeDir["imviewguizmo"] = "vendor/imviewguizmo"
 IncludeDir["tracy"] = "vendor/tracy/public"
 IncludeDir["yaml_cpp"] = "vendor/yaml-cpp/include"
+IncludeDir["thread_pool"] = "vendor/thread-pool/include"
 
 filter "action:vs*"
     flags { "MultiProcessorCompile" }
@@ -243,7 +244,8 @@ project "DefectsStudio"
         IncludeDir["glm"],
         IncludeDir["glad"],
         IncludeDir["tracy"],
-        IncludeDir["yaml_cpp"]
+        IncludeDir["yaml_cpp"],
+        IncludeDir["thread_pool"]
     }
 
     links

@@ -627,7 +627,7 @@ namespace ds
             return 1.0f;
         }
 
-        bool OpenNativeFilesDialog(std::vector<std::string> &outPaths)
+        bool OpenNativeFilesDialog(std::vector<std::string> &outPaths, const std::string &initialDirectory = std::string())
         {
 #ifdef _WIN32
             constexpr DWORD kDialogBufferSize = 32u * 1024u;
@@ -642,6 +642,10 @@ namespace ds
             dialog.nFilterIndex = 2;
             dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "vasp";
+            if (!initialDirectory.empty())
+            {
+                dialog.lpstrInitialDir = initialDirectory.c_str();
+            }
 
             if (GetOpenFileNameA(&dialog) != FALSE)
             {
@@ -674,14 +678,71 @@ namespace ds
             return false;
 #else
             (void)outPaths;
+            (void)initialDirectory;
             return false;
 #endif
         }
 
-        bool OpenNativeFileDialog(std::string &outPath)
+        bool OpenNativeVolumetricFilesDialog(std::vector<std::string> &outPaths, const std::string &initialDirectory = std::string())
+        {
+#ifdef _WIN32
+            constexpr DWORD kDialogBufferSize = 32u * 1024u;
+            std::vector<char> pathBuffer(static_cast<std::size_t>(kDialogBufferSize), '\0');
+
+            OPENFILENAMEA dialog = {};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = nullptr;
+            dialog.lpstrFile = pathBuffer.data();
+            dialog.nMaxFile = kDialogBufferSize;
+            dialog.lpstrFilter = "VASP volumetric files (PARCHG*;CHGCAR*;CHG*)\0PARCHG*;CHGCAR*;CHG*\0All files (*.*)\0*.*\0";
+            dialog.nFilterIndex = 1;
+            dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_NOCHANGEDIR;
+            dialog.lpstrDefExt = "";
+            if (!initialDirectory.empty())
+            {
+                dialog.lpstrInitialDir = initialDirectory.c_str();
+            }
+
+            if (GetOpenFileNameA(&dialog) != FALSE)
+            {
+                outPaths.clear();
+
+                const char *firstEntry = pathBuffer.data();
+                if (*firstEntry == '\0')
+                {
+                    return false;
+                }
+
+                const char *secondEntry = firstEntry + std::strlen(firstEntry) + 1;
+                if (*secondEntry == '\0')
+                {
+                    outPaths.emplace_back(firstEntry);
+                    return true;
+                }
+
+                const std::string directory = firstEntry;
+                const char *cursor = secondEntry;
+                while (*cursor != '\0')
+                {
+                    outPaths.push_back(directory + "\\" + cursor);
+                    cursor += std::strlen(cursor) + 1;
+                }
+
+                return !outPaths.empty();
+            }
+
+            return false;
+#else
+            (void)outPaths;
+            (void)initialDirectory;
+            return false;
+#endif
+        }
+
+        bool OpenNativeFileDialog(std::string &outPath, const std::string &initialDirectory = std::string())
         {
             std::vector<std::string> paths;
-            if (!OpenNativeFilesDialog(paths) || paths.empty())
+            if (!OpenNativeFilesDialog(paths, initialDirectory) || paths.empty())
             {
                 return false;
             }
