@@ -251,7 +251,10 @@ namespace ds
                 if (ImGui::MenuItem("Export POSCAR/CONTCAR", "Ctrl+S", false, m_HasStructureLoaded))
                 {
                     std::string selectedPath;
-                    if (SaveNativeFileDialog(selectedPath))
+                    if (SaveNativeFileDialog(
+                            selectedPath,
+                            BuildDefaultStructureExportPath(),
+                            GetPreferredStructureDialogDirectory().string()))
                     {
                         std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
                         const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
@@ -263,7 +266,10 @@ namespace ds
                 if (ImGui::MenuItem("Export Active Collection to POSCAR", nullptr, false, m_HasStructureLoaded && m_ActiveCollectionIndex >= 0))
                 {
                     std::string selectedPath;
-                    if (SaveNativeFileDialog(selectedPath))
+                    if (SaveNativeFileDialog(
+                            selectedPath,
+                            BuildDefaultCollectionExportPath(m_ActiveCollectionIndex),
+                            GetPreferredStructureDialogDirectory().string()))
                     {
                         const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
                                                               ? CoordinateMode::Direct
@@ -4998,7 +5004,10 @@ namespace ds
                     if (ImGui::Button("Browse##Export"))
                     {
                         std::string selectedPath;
-                        if (SaveNativeFileDialog(selectedPath))
+                        if (SaveNativeFileDialog(
+                                selectedPath,
+                                BuildDefaultStructureExportPath(),
+                                GetPreferredStructureDialogDirectory().string()))
                         {
                             std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", selectedPath.c_str());
                         }
@@ -6363,7 +6372,10 @@ namespace ds
                     if (ImGui::MenuItem("Export POSCAR"))
                     {
                         std::string selectedPath;
-                        if (SaveNativeFileDialog(selectedPath))
+                        if (SaveNativeFileDialog(
+                                selectedPath,
+                                BuildDefaultCollectionExportPath(collectionIndexInt),
+                                GetPreferredStructureDialogDirectory().string()))
                         {
                             const CoordinateMode exportMode = (m_ExportCoordinateModeIndex == 0)
                                                                   ? CoordinateMode::Direct

@@ -751,10 +751,16 @@ namespace ds
             return true;
         }
 
-        bool SaveNativeFileDialog(std::string &outPath)
+        bool SaveNativeFileDialog(
+            std::string &outPath,
+            const std::string &defaultPath = "CONTCAR.vasp",
+            const std::string &initialDirectory = std::string())
         {
 #ifdef _WIN32
-            char pathBuffer[MAX_PATH] = "CONTCAR.vasp";
+            char pathBuffer[MAX_PATH] = {};
+            const char *fallbackPath = "CONTCAR.vasp";
+            const std::string resolvedDefaultPath = defaultPath.empty() ? std::string(fallbackPath) : defaultPath;
+            std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", resolvedDefaultPath.c_str());
 
             OPENFILENAMEA dialog = {};
             dialog.lStructSize = sizeof(dialog);
@@ -765,6 +771,10 @@ namespace ds
             dialog.nFilterIndex = 1;
             dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "vasp";
+            if (!initialDirectory.empty())
+            {
+                dialog.lpstrInitialDir = initialDirectory.c_str();
+            }
 
             if (GetSaveFileNameA(&dialog) != FALSE)
             {
@@ -779,10 +789,16 @@ namespace ds
 #endif
         }
 
-        bool SaveNativeImageDialog(std::string &outPath)
+        bool SaveNativeImageDialog(
+            std::string &outPath,
+            const std::string &defaultPath = "exports/render.png",
+            const std::string &initialDirectory = std::string())
         {
 #ifdef _WIN32
-            char pathBuffer[MAX_PATH] = "exports/render.png";
+            char pathBuffer[MAX_PATH] = {};
+            const char *fallbackPath = "exports/render.png";
+            const std::string resolvedDefaultPath = defaultPath.empty() ? std::string(fallbackPath) : defaultPath;
+            std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", resolvedDefaultPath.c_str());
 
             OPENFILENAMEA dialog = {};
             dialog.lStructSize = sizeof(dialog);
@@ -793,6 +809,10 @@ namespace ds
             dialog.nFilterIndex = 1;
             dialog.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_EXPLORER | OFN_NOCHANGEDIR;
             dialog.lpstrDefExt = "png";
+            if (!initialDirectory.empty())
+            {
+                dialog.lpstrInitialDir = initialDirectory.c_str();
+            }
 
             if (GetSaveFileNameA(&dialog) != FALSE)
             {

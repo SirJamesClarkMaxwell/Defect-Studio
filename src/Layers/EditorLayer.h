@@ -385,6 +385,9 @@ namespace ds
         bool ExportStructureToPath(const std::string &path, CoordinateMode mode, int precision);
         bool BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const;
         bool ExportCollectionToPath(int collectionIndex, const std::string &path, CoordinateMode mode, int precision);
+        std::string BuildDefaultStructureExportPath() const;
+        std::string BuildDefaultCollectionExportPath(int collectionIndex) const;
+        std::string BuildDefaultRenderImageExportPath() const;
         bool LoadVolumetricDatasetFromPath(const std::string &path);
         bool QueueVolumetricDatasetLoad(const std::string &path, bool autoApplyStructureIfNeeded = true, bool persistToProject = true);
         bool QueueVolumetricBlockLoad(int datasetIndex, int blockIndex, bool forceRetry = false);

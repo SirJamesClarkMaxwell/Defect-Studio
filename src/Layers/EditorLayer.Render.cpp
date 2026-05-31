@@ -480,8 +480,15 @@ namespace ds
             cropHeight = std::max(1u, std::min(sourceHeight, std::max(y1, cropY + 1u)) - cropY);
         }
 
-        const std::uint32_t targetWidth = std::max(1u, width);
-        const std::uint32_t targetHeight = std::max(1u, height);
+        std::uint32_t targetWidth = std::max(1u, width);
+        std::uint32_t targetHeight = std::max(1u, height);
+        if (useCrop)
+        {
+            const double xScale = static_cast<double>(cropWidth) / static_cast<double>(std::max(1u, sourceWidth));
+            const double yScale = static_cast<double>(cropHeight) / static_cast<double>(std::max(1u, sourceHeight));
+            targetWidth = static_cast<std::uint32_t>(std::max(1.0, std::round(static_cast<double>(targetWidth) * xScale)));
+            targetHeight = static_cast<std::uint32_t>(std::max(1.0, std::round(static_cast<double>(targetHeight) * yScale)));
+        }
 
         std::vector<std::uint8_t> scaledRgba;
         scaledRgba.resize(static_cast<std::size_t>(targetWidth) * static_cast<std::size_t>(targetHeight) * 4u);
@@ -517,17 +524,31 @@ namespace ds
             }
         };
 
-        for (std::uint32_t y = 0; y < targetHeight; ++y)
+        const bool copyCropWithoutResample = (targetWidth == cropWidth && targetHeight == cropHeight);
+        if (copyCropWithoutResample)
         {
-            for (std::uint32_t x = 0; x < targetWidth; ++x)
+            const std::size_t cropRowBytes = static_cast<std::size_t>(cropWidth) * 4u;
+            for (std::uint32_t row = 0; row < cropHeight; ++row)
             {
-                const float srcX = static_cast<float>(cropX) +
-                                   ((static_cast<float>(x) + 0.5f) * static_cast<float>(cropWidth) / static_cast<float>(targetWidth)) - 0.5f;
-                const float srcY = static_cast<float>(cropY) +
-                                   ((static_cast<float>(y) + 0.5f) * static_cast<float>(cropHeight) / static_cast<float>(targetHeight)) - 0.5f;
+                const std::size_t srcOffset = (static_cast<std::size_t>(cropY + row) * static_cast<std::size_t>(sourceWidth) + static_cast<std::size_t>(cropX)) * 4u;
+                const std::size_t dstOffset = static_cast<std::size_t>(row) * cropRowBytes;
+                std::memcpy(scaledRgba.data() + dstOffset, sourceTopDown.data() + srcOffset, cropRowBytes);
+            }
+        }
+        else
+        {
+            for (std::uint32_t y = 0; y < targetHeight; ++y)
+            {
+                for (std::uint32_t x = 0; x < targetWidth; ++x)
+                {
+                    const float srcX = static_cast<float>(cropX) +
+                                       ((static_cast<float>(x) + 0.5f) * static_cast<float>(cropWidth) / static_cast<float>(targetWidth)) - 0.5f;
+                    const float srcY = static_cast<float>(cropY) +
+                                       ((static_cast<float>(y) + 0.5f) * static_cast<float>(cropHeight) / static_cast<float>(targetHeight)) - 0.5f;
 
-                const std::size_t dstIndex = (static_cast<std::size_t>(y) * targetWidth + x) * 4u;
-                sampleSourceBilinear(srcX, srcY, &scaledRgba[dstIndex]);
+                    const std::size_t dstIndex = (static_cast<std::size_t>(y) * targetWidth + x) * 4u;
+                    sampleSourceBilinear(srcX, srcY, &scaledRgba[dstIndex]);
+                }
             }
         }
 
@@ -909,7 +930,10 @@ namespace ds
             if (ImGui::Button("Browse..."))
             {
                 std::string selectedPath;
-                if (SaveNativeImageDialog(selectedPath))
+                if (SaveNativeImageDialog(
+                        selectedPath,
+                        BuildDefaultRenderImageExportPath(),
+                        ResolveProjectPath("exports").string()))
                 {
                     std::snprintf(m_RenderImagePathBuffer.data(), m_RenderImagePathBuffer.size(), "%s", selectedPath.c_str());
                 }

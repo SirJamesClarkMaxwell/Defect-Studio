@@ -250,6 +250,37 @@ namespace ds
             return normalizedPath.string();
         }
 
+        std::string SanitizeFileStem(std::string stem)
+        {
+            if (stem.empty())
+            {
+                return std::string("export");
+            }
+
+            for (char &ch : stem)
+            {
+                const bool replace =
+                    ch == '<' || ch == '>' || ch == ':' || ch == '"' ||
+                    ch == '/' || ch == '\\' || ch == '|' || ch == '?' || ch == '*' ||
+                    std::iscntrl(static_cast<unsigned char>(ch));
+                if (replace)
+                {
+                    ch = '_';
+                }
+            }
+
+            while (!stem.empty() && (stem.back() == ' ' || stem.back() == '.'))
+            {
+                stem.pop_back();
+            }
+            if (stem.empty())
+            {
+                return std::string("export");
+            }
+
+            return stem;
+        }
+
     } // namespace
 
     std::filesystem::path EditorLayer::GetAppRootPath() const
@@ -658,8 +689,16 @@ namespace ds
         if (updateProjectStructurePath)
         {
             m_ProjectStructurePath = SerializeProjectPath(GetProjectRootPath(), std::filesystem::path(sourcePath));
+        }
+
+        if (!sourcePath.empty())
+        {
             std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", sourcePath.c_str());
         }
+        const std::string suggestedExportPath = BuildDefaultStructureExportPath();
+        const std::string suggestedRenderPath = BuildDefaultRenderImageExportPath();
+        std::snprintf(m_ExportPathBuffer.data(), m_ExportPathBuffer.size(), "%s", suggestedExportPath.c_str());
+        std::snprintf(m_RenderImagePathBuffer.data(), m_RenderImagePathBuffer.size(), "%s", suggestedRenderPath.c_str());
 
         EnsureAtomNodeIds();
         m_SelectedAtomIndices.clear();
@@ -1071,6 +1110,54 @@ namespace ds
         m_LastStructureMessage = "Exported structure to: " + path;
         LogInfo(m_LastStructureMessage);
         return true;
+    }
+
+    std::string EditorLayer::BuildDefaultStructureExportPath() const
+    {
+        std::string stem = "CONTCAR";
+        if (!m_WorkingStructure.sourcePath.empty())
+        {
+            const std::string sourceStem = std::filesystem::path(m_WorkingStructure.sourcePath).stem().string();
+            if (!sourceStem.empty())
+            {
+                stem = sourceStem;
+            }
+        }
+
+        const std::filesystem::path baseDir = GetPreferredStructureDialogDirectory();
+        return (baseDir / (SanitizeFileStem(stem) + ".vasp")).string();
+    }
+
+    std::string EditorLayer::BuildDefaultCollectionExportPath(int collectionIndex) const
+    {
+        std::string stem = "collection";
+        if (collectionIndex >= 0 && collectionIndex < static_cast<int>(m_Collections.size()))
+        {
+            stem = m_Collections[static_cast<std::size_t>(collectionIndex)].name;
+        }
+        else if (!m_WorkingStructure.sourcePath.empty())
+        {
+            stem = std::filesystem::path(m_WorkingStructure.sourcePath).stem().string();
+        }
+
+        const std::filesystem::path baseDir = GetPreferredStructureDialogDirectory();
+        return (baseDir / (SanitizeFileStem(stem) + ".vasp")).string();
+    }
+
+    std::string EditorLayer::BuildDefaultRenderImageExportPath() const
+    {
+        std::string stem = "render";
+        if (!m_WorkingStructure.sourcePath.empty())
+        {
+            const std::string sourceStem = std::filesystem::path(m_WorkingStructure.sourcePath).stem().string();
+            if (!sourceStem.empty())
+            {
+                stem = sourceStem;
+            }
+        }
+
+        const std::filesystem::path exportDir = ResolveProjectPath("exports");
+        return (exportDir / (SanitizeFileStem(stem) + ".png")).string();
     }
 
     bool EditorLayer::HasPendingVolumetricDatasetLoad(const std::string &normalizedPath) const
