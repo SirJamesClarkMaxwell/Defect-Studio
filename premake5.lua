@@ -230,7 +230,6 @@ project "DefectsStudio"
     {
         "src/**.h",
         "src/**.cpp",
-        "vendor/tracy/public/TracyClient.cpp",
         "assets/icon.rc"
     }
 
@@ -277,11 +276,7 @@ project "DefectsStudio"
         symbols "on"
         defines
         {
-            "DS_CONFIG_DEBUG",
-            "DS_ENABLE_TRACY",
-            "TRACY_ENABLE",
-            "TRACY_ON_DEMAND",
-            "TRACY_NO_SYSTEM_TRACING"
+            "DS_CONFIG_DEBUG"
         }
 
     filter "configurations:Release"
@@ -289,9 +284,5 @@ project "DefectsStudio"
         optimize "on"
         defines
         {
-            "DS_CONFIG_RELEASE",
-            "DS_ENABLE_TRACY",
-            "TRACY_ENABLE",
-            "TRACY_ON_DEMAND",
-            "TRACY_NO_SYSTEM_TRACING"
+            "DS_CONFIG_RELEASE"
         }
