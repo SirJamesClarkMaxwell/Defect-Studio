@@ -404,7 +404,9 @@ namespace ds
             }
 
             const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f)
+            if (ndc.x < -1.0f || ndc.x > 1.0f ||
+                ndc.y < -1.0f || ndc.y > 1.0f ||
+                ndc.z < -1.0f || ndc.z > 1.0f)
             {
                 continue;
             }
