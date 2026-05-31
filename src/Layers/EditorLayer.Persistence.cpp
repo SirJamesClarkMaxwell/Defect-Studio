@@ -5592,6 +5592,12 @@ namespace ds
         m_ObjectGroups.clear();
         m_CameraPresets.clear();
         m_AngleLabelStates.clear();
+        m_HiddenAtomIndices.clear();
+        m_HiddenBondKeys.clear();
+        m_ManualBondKeys.clear();
+        m_DeletedBondKeys.clear();
+        m_SelectedBondKeys.clear();
+        m_SelectedBondLabelKey = 0;
         m_SelectedCameraPresetIndex = -1;
 
         int atomCount = 0;
@@ -5636,6 +5642,54 @@ namespace ds
         else
         {
             m_AtomCollectionIndices.clear();
+        }
+
+        for (const std::string &token : SplitCsv(getValue("scene_hidden_atom_indices")))
+        {
+            try
+            {
+                const std::size_t atomIndex = static_cast<std::size_t>(std::stoull(token));
+                m_HiddenAtomIndices.insert(atomIndex);
+            }
+            catch (...)
+            {
+            }
+        }
+
+        for (const std::string &token : SplitCsv(getValue("scene_hidden_bond_keys")))
+        {
+            try
+            {
+                const std::uint64_t key = static_cast<std::uint64_t>(std::stoull(token));
+                m_HiddenBondKeys.insert(key);
+            }
+            catch (...)
+            {
+            }
+        }
+
+        for (const std::string &token : SplitCsv(getValue("scene_manual_bond_keys")))
+        {
+            try
+            {
+                const std::uint64_t key = static_cast<std::uint64_t>(std::stoull(token));
+                m_ManualBondKeys.insert(key);
+            }
+            catch (...)
+            {
+            }
+        }
+
+        for (const std::string &token : SplitCsv(getValue("scene_deleted_bond_keys")))
+        {
+            try
+            {
+                const std::uint64_t key = static_cast<std::uint64_t>(std::stoull(token));
+                m_DeletedBondKeys.insert(key);
+            }
+            catch (...)
+            {
+            }
         }
 
         int collectionCount = 0;
@@ -5949,12 +6003,29 @@ namespace ds
         }
 
         out << "scene_version=1\n";
+
+        auto sortedValuesFromSet = [](const auto &values)
+        {
+            std::vector<std::uint64_t> sorted;
+            sorted.reserve(values.size());
+            for (const auto value : values)
+            {
+                sorted.push_back(static_cast<std::uint64_t>(value));
+            }
+            std::sort(sorted.begin(), sorted.end());
+            return sorted;
+        };
+
         out << "scene_atom_count=" << m_AtomNodeIds.size() << '\n';
         for (std::size_t i = 0; i < m_AtomNodeIds.size(); ++i)
         {
             out << "scene_atom_" << i << "_id=" << m_AtomNodeIds[i] << '\n';
         }
         out << "scene_atom_collection_indices=" << JoinCsv(m_AtomCollectionIndices) << '\n';
+        out << "scene_hidden_atom_indices=" << JoinCsv(sortedValuesFromSet(m_HiddenAtomIndices)) << '\n';
+        out << "scene_hidden_bond_keys=" << JoinCsv(sortedValuesFromSet(m_HiddenBondKeys)) << '\n';
+        out << "scene_manual_bond_keys=" << JoinCsv(sortedValuesFromSet(m_ManualBondKeys)) << '\n';
+        out << "scene_deleted_bond_keys=" << JoinCsv(sortedValuesFromSet(m_DeletedBondKeys)) << '\n';
         out << "scene_collection_count=" << m_Collections.size() << '\n';
         for (std::size_t i = 0; i < m_Collections.size(); ++i)
         {
