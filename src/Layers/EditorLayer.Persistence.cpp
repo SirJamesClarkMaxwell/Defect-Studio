@@ -401,6 +401,10 @@ namespace ds
         {
             root["project"]["structurePath"] = SerializeProjectPath(projectRoot, structurePath);
         }
+        if (!m_ProjectDefaultCameraPresetName.empty())
+        {
+            root["project"]["defaultCameraPresetName"] = m_ProjectDefaultCameraPresetName;
+        }
 
         std::vector<std::string> volumetricPaths = m_ProjectVolumetricPaths;
         volumetricPaths.reserve(volumetricPaths.size() + m_VolumetricDatasets.size());
@@ -483,6 +487,10 @@ namespace ds
                 std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", resolvedStructurePath.string().c_str());
             }
 
+            std::string defaultCameraPresetName;
+            TryLoadYamlScalar(project, "defaultCameraPresetName", defaultCameraPresetName);
+            m_ProjectDefaultCameraPresetName = defaultCameraPresetName;
+
             m_ProjectVolumetricPaths.clear();
             const YAML::Node volumetricPaths = project["volumetricPaths"];
             if (volumetricPaths && volumetricPaths.IsSequence())
@@ -556,6 +564,7 @@ namespace ds
         m_AngleLabelStates.clear();
         m_BondLabelStates.clear();
         m_ProjectStructurePath.clear();
+        m_ProjectDefaultCameraPresetName.clear();
         m_ProjectVolumetricPaths.clear();
         m_VolumetricDatasets.clear();
         m_PendingVolumetricDatasetLoads.clear();
@@ -612,6 +621,7 @@ namespace ds
         m_ProjectRootPath = normalizedProjectRoot.string();
         m_LastProjectDialogPath = normalizedProjectRoot.string();
         m_ProjectName = normalizedProjectRoot.filename().string().empty() ? "Default Project" : normalizedProjectRoot.filename().string();
+        m_ProjectDefaultCameraPresetName.clear();
         const std::filesystem::path importPathBuffer(m_ImportPathBuffer.data());
         if (!importPathBuffer.empty())
         {
@@ -745,6 +755,31 @@ namespace ds
             m_SceneSettings.gridHalfExtent = std::max(m_SceneSettings.gridHalfExtent, recommendedHalfExtent);
 
             m_Camera->FrameBounds(boundsMin, boundsMax);
+        }
+
+        if (!m_ProjectDefaultCameraPresetName.empty())
+        {
+            const auto presetIt = std::find_if(
+                m_CameraPresets.begin(),
+                m_CameraPresets.end(),
+                [&](const CameraPreset &preset)
+                {
+                    return preset.name == m_ProjectDefaultCameraPresetName;
+                });
+            if (presetIt != m_CameraPresets.end())
+            {
+                if (m_Camera)
+                {
+                    m_Camera->SetOrbitState(presetIt->target, std::max(0.05f, presetIt->distance), presetIt->yaw, presetIt->pitch);
+                    m_Camera->SetRoll(presetIt->roll);
+                }
+                m_CameraTargetPersisted = presetIt->target;
+                m_CameraDistancePersisted = std::max(0.05f, presetIt->distance);
+                m_CameraYawPersisted = presetIt->yaw;
+                m_CameraPitchPersisted = presetIt->pitch;
+                m_CameraRollPersisted = presetIt->roll;
+                m_HasPersistedCameraState = true;
+            }
         }
 
         return true;
@@ -6044,6 +6079,32 @@ namespace ds
             m_SelectedCameraPresetIndex >= static_cast<int>(m_CameraPresets.size()))
         {
             m_SelectedCameraPresetIndex = m_CameraPresets.empty() ? -1 : 0;
+        }
+
+        if (!m_ProjectDefaultCameraPresetName.empty())
+        {
+            const auto presetIt = std::find_if(
+                m_CameraPresets.begin(),
+                m_CameraPresets.end(),
+                [&](const CameraPreset &preset)
+                {
+                    return preset.name == m_ProjectDefaultCameraPresetName;
+                });
+            if (presetIt != m_CameraPresets.end())
+            {
+                m_SelectedCameraPresetIndex = static_cast<int>(std::distance(m_CameraPresets.begin(), presetIt));
+                if (m_Camera)
+                {
+                    m_Camera->SetOrbitState(presetIt->target, std::max(0.05f, presetIt->distance), presetIt->yaw, presetIt->pitch);
+                    m_Camera->SetRoll(presetIt->roll);
+                }
+                m_CameraTargetPersisted = presetIt->target;
+                m_CameraDistancePersisted = std::max(0.05f, presetIt->distance);
+                m_CameraYawPersisted = presetIt->yaw;
+                m_CameraPitchPersisted = presetIt->pitch;
+                m_CameraRollPersisted = presetIt->roll;
+                m_HasPersistedCameraState = true;
+            }
         }
 
         m_CollectionCounter = std::max(1, static_cast<int>(m_Collections.size()) + 1);

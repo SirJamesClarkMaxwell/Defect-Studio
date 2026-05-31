@@ -545,6 +545,7 @@ namespace ds
         std::string m_ProjectRootPath;
         std::string m_ProjectName = "Default Project";
         std::string m_ProjectStructurePath;
+        std::string m_ProjectDefaultCameraPresetName;
         std::vector<std::string> m_ProjectVolumetricPaths;
         std::vector<std::string> m_RecentProjectPaths;
 

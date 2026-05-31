@@ -4933,6 +4933,30 @@ namespace ds
                     ImGui::EndCombo();
                 }
 
+                std::string defaultPresetLabel = m_ProjectDefaultCameraPresetName.empty() ? "(none)" : m_ProjectDefaultCameraPresetName;
+                ImGui::TextDisabled("Project default preset: %s", defaultPresetLabel.c_str());
+                if (!hasPresetSelection)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Set selected as project default") && hasPresetSelection)
+                {
+                    m_ProjectDefaultCameraPresetName = m_CameraPresets[static_cast<std::size_t>(m_SelectedCameraPresetIndex)].name;
+                    SaveProjectManifest();
+                    settingsChanged = true;
+                }
+                if (!hasPresetSelection)
+                {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear project default"))
+                {
+                    m_ProjectDefaultCameraPresetName.clear();
+                    SaveProjectManifest();
+                    settingsChanged = true;
+                }
+
                 ImGui::InputText("Preset name", m_CameraPresetNameBuffer.data(), m_CameraPresetNameBuffer.size());
 
                 if (ImGui::Button("Save current as new"))
@@ -4975,7 +4999,13 @@ namespace ds
                     const std::string typedName = trimPresetName(std::string(m_CameraPresetNameBuffer.data()));
                     if (!typedName.empty())
                     {
+                        const std::string previousName = preset.name;
                         preset.name = typedName;
+                        if (!m_ProjectDefaultCameraPresetName.empty() && m_ProjectDefaultCameraPresetName == previousName)
+                        {
+                            m_ProjectDefaultCameraPresetName = preset.name;
+                            SaveProjectManifest();
+                        }
                     }
                     captureCurrentCamera(preset);
                     settingsChanged = true;
@@ -4983,7 +5013,13 @@ namespace ds
                 ImGui::SameLine();
                 if (ImGui::Button("Delete selected") && hasPresetSelection)
                 {
+                    const std::string removedPresetName = m_CameraPresets[static_cast<std::size_t>(m_SelectedCameraPresetIndex)].name;
                     m_CameraPresets.erase(m_CameraPresets.begin() + m_SelectedCameraPresetIndex);
+                    if (!m_ProjectDefaultCameraPresetName.empty() && m_ProjectDefaultCameraPresetName == removedPresetName)
+                    {
+                        m_ProjectDefaultCameraPresetName.clear();
+                        SaveProjectManifest();
+                    }
                     if (m_CameraPresets.empty())
                     {
                         m_SelectedCameraPresetIndex = -1;
