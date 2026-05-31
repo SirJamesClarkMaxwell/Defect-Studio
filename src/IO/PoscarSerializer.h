@@ -13,6 +13,7 @@ namespace ds
         int precision = 8;
         bool forceSelectiveDynamics = false;
         bool canonicalizeDirectTranslation = true;
+        bool wrapDirectCoordinates = true;
     };
 
     class PoscarSerializer

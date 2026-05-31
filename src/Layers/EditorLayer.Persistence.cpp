@@ -1055,6 +1055,8 @@ namespace ds
         PoscarWriteOptions options;
         options.coordinateMode = mode;
         options.precision = precision;
+        options.canonicalizeDirectTranslation = false;
+        options.wrapDirectCoordinates = false;
 
         std::string error;
         if (!m_PoscarSerializer.WriteToFile(m_WorkingStructure, path, options, error))
@@ -1497,6 +1499,8 @@ namespace ds
         PoscarWriteOptions options;
         options.coordinateMode = mode;
         options.precision = precision;
+        options.canonicalizeDirectTranslation = false;
+        options.wrapDirectCoordinates = false;
 
         std::string error;
         if (!m_PoscarSerializer.WriteToFile(collectionStructure, path, options, error))

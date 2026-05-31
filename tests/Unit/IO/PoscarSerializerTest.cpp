@@ -41,11 +41,12 @@ TEST(PoscarSerializerTest, UsesRequestedCoordinatePrecision)
     ASSERT_TRUE(serializer.WriteToString(structure, options, output, error)) << error;
 
     const std::vector<std::string> lines = SplitLines(output);
-    ASSERT_GE(lines.size(), 8u);
+    ASSERT_GE(lines.size(), 9u);
+    const std::string &coordinateLine = lines.back();
 
     // Coordinates should obey requested precision instead of always printing 16 decimals.
-    EXPECT_NE(lines[7].find("0.123"), std::string::npos);
-    EXPECT_EQ(lines[7].find("0.123456"), std::string::npos);
+    EXPECT_NE(coordinateLine.find("0.123"), std::string::npos) << coordinateLine;
+    EXPECT_EQ(coordinateLine.find("0.123456"), std::string::npos) << coordinateLine;
 }
 
 TEST(PoscarSerializerTest, SortsSpeciesByCountDescendingWhenDerivedFromAtoms)
@@ -76,4 +77,30 @@ TEST(PoscarSerializerTest, SortsSpeciesByCountDescendingWhenDerivedFromAtoms)
     // Species/count rows should be sorted by descending count: C (3) then H (1).
     EXPECT_NE(lines[5].find("C H"), std::string::npos) << lines[5];
     EXPECT_NE(lines[6].find("3 1"), std::string::npos) << lines[6];
+}
+
+TEST(PoscarSerializerTest, PreservesOutOfCellDirectCoordinatesWhenWrappingDisabled)
+{
+    ds::Structure structure;
+    structure.title = "Direct preserve test";
+    structure.coordinateMode = ds::CoordinateMode::Direct;
+    structure.atoms.push_back(ds::Atom{"Si", glm::vec3(1.2500f, -0.1000f, 0.5000f)});
+    structure.RebuildSpeciesFromAtoms();
+
+    ds::PoscarWriteOptions options;
+    options.coordinateMode = ds::CoordinateMode::Direct;
+    options.precision = 4;
+    options.canonicalizeDirectTranslation = false;
+    options.wrapDirectCoordinates = false;
+
+    ds::PoscarSerializer serializer;
+    std::string output;
+    std::string error;
+    ASSERT_TRUE(serializer.WriteToString(structure, options, output, error)) << error;
+
+    const std::vector<std::string> lines = SplitLines(output);
+    ASSERT_GE(lines.size(), 9u);
+    const std::string &coordinateLine = lines.back();
+    EXPECT_NE(coordinateLine.find("1.2500"), std::string::npos) << coordinateLine;
+    EXPECT_NE(coordinateLine.find("-0.1000"), std::string::npos) << coordinateLine;
 }

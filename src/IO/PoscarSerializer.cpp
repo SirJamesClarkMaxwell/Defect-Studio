@@ -49,14 +49,36 @@ namespace ds
             {
                 outSpecies = structure.species;
                 outCounts = structure.counts;
-                return true;
+            }
+            else
+            {
+                Structure rebuilt = structure;
+                rebuilt.RebuildSpeciesFromAtoms();
+                outSpecies = rebuilt.species;
+                outCounts = rebuilt.counts;
             }
 
-            Structure rebuilt = structure;
-            rebuilt.RebuildSpeciesFromAtoms();
-            outSpecies = rebuilt.species;
-            outCounts = rebuilt.counts;
-            return !outSpecies.empty() || rebuilt.atoms.empty();
+            std::vector<std::pair<std::string, int>> sortedPairs;
+            sortedPairs.reserve(outSpecies.size());
+            for (std::size_t i = 0; i < outSpecies.size() && i < outCounts.size(); ++i)
+            {
+                sortedPairs.emplace_back(outSpecies[i], outCounts[i]);
+            }
+
+            std::stable_sort(sortedPairs.begin(), sortedPairs.end(), [](const auto &lhs, const auto &rhs)
+                             { return lhs.second > rhs.second; });
+
+            outSpecies.clear();
+            outCounts.clear();
+            outSpecies.reserve(sortedPairs.size());
+            outCounts.reserve(sortedPairs.size());
+            for (const auto &[species, count] : sortedPairs)
+            {
+                outSpecies.push_back(species);
+                outCounts.push_back(count);
+            }
+
+            return !outSpecies.empty() || structure.atoms.empty();
         }
 
         float WrapUnitCoordinate(float value)
@@ -159,11 +181,14 @@ namespace ds
                 CanonicalizeDirectStructureTranslation(writable);
             }
 
-            for (Atom &atom : writable.atoms)
+            if (options.wrapDirectCoordinates)
             {
-                atom.position.x = WrapUnitCoordinate(atom.position.x);
-                atom.position.y = WrapUnitCoordinate(atom.position.y);
-                atom.position.z = WrapUnitCoordinate(atom.position.z);
+                for (Atom &atom : writable.atoms)
+                {
+                    atom.position.x = WrapUnitCoordinate(atom.position.x);
+                    atom.position.y = WrapUnitCoordinate(atom.position.y);
+                    atom.position.z = WrapUnitCoordinate(atom.position.z);
+                }
             }
         }
 
@@ -176,7 +201,7 @@ namespace ds
         }
 
         const bool hasSelectiveDynamics = options.forceSelectiveDynamics || writable.HasSelectiveDynamics();
-        const int coordinatePrecision = std::max(16, ClampPrecision(options.precision));
+        const int coordinatePrecision = ClampPrecision(options.precision);
         constexpr int kScalePrecision = 14;
         constexpr int kLatticeWidth = 23;
         constexpr int kCoordinateWidth = 20;
