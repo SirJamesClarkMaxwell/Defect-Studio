@@ -812,6 +812,7 @@ namespace ds
         float m_ViewportRotateStepDeg = 15.0f;
         bool m_SelectionDebugToFile = true;
         bool m_BoxSelectArmed = false;
+        bool m_BoxSelectPersistentMode = false;
         bool m_BoxSelecting = false;
         bool m_CircleSelectArmed = false;
         bool m_CircleSelecting = false;

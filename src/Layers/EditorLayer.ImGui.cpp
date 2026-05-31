@@ -1920,14 +1920,78 @@ namespace ds
             bool viewKeyUsed = false;
             float yaw = m_Camera->GetYaw();
             float pitch = m_Camera->GetPitch();
+            const float stepRadians = glm::radians(glm::clamp(m_ViewportRotateStepDeg, 0.1f, 180.0f));
 
-            if (ImGui::IsKeyPressed(ImGuiKey_T, false))
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false))
+            {
+                if (RotateCameraRelative(stepRadians, 0.0f))
+                {
+                    m_LastStructureMessage = "ViewSet: orbit left.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false))
+            {
+                if (RotateCameraRelative(-stepRadians, 0.0f))
+                {
+                    m_LastStructureMessage = "ViewSet: orbit right.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false))
+            {
+                if (RotateCameraRelative(0.0f, stepRadians))
+                {
+                    m_LastStructureMessage = "ViewSet: orbit up.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false))
+            {
+                if (RotateCameraRelative(0.0f, -stepRadians))
+                {
+                    m_LastStructureMessage = "ViewSet: orbit down.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
+            {
+                if (RotateCameraRelative(0.0f, 0.0f, stepRadians))
+                {
+                    m_LastStructureMessage = "ViewSet: roll left.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+            {
+                if (RotateCameraRelative(0.0f, 0.0f, -stepRadians))
+                {
+                    m_LastStructureMessage = "ViewSet: roll right.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_A, false))
+            {
+                if (SetCameraViewToCrystalAxis(0, false, false))
+                {
+                    m_LastStructureMessage = "ViewSet: aligned to lattice axis a.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_B, false))
+            {
+                if (SetCameraViewToCrystalAxis(1, false, false))
+                {
+                    m_LastStructureMessage = "ViewSet: aligned to lattice axis b.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_C, false))
+            {
+                if (SetCameraViewToCrystalAxis(2, false, false))
+                {
+                    m_LastStructureMessage = "ViewSet: aligned to lattice axis c.";
+                }
+            }
+            else if (ImGui::IsKeyPressed(ImGuiKey_T, false))
             {
                 pitch = glm::half_pi<float>() - 0.01f;
                 yaw = 0.0f;
                 viewKeyUsed = true;
             }
-            else if (ImGui::IsKeyPressed(ImGuiKey_B, false))
+            else if (ImGui::IsKeyPressed(ImGuiKey_G, false))
             {
                 pitch = -glm::half_pi<float>() + 0.01f;
                 yaw = 0.0f;
@@ -1968,11 +2032,19 @@ namespace ds
 
         if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyBoxSelect))
         {
-            m_BoxSelectArmed = true;
+            m_BoxSelectPersistentMode = !m_BoxSelectPersistentMode;
+            m_BoxSelectArmed = m_BoxSelectPersistentMode;
             m_BoxSelecting = false;
-            m_CircleSelectArmed = false;
-            m_CircleSelecting = false;
-            AppendSelectionDebugLog("Box select armed (press LMB and drag)");
+            if (m_BoxSelectPersistentMode)
+            {
+                m_CircleSelectArmed = false;
+                m_CircleSelecting = false;
+                AppendSelectionDebugLog("Box select persistent mode enabled");
+            }
+            else
+            {
+                AppendSelectionDebugLog("Box select persistent mode disabled");
+            }
         }
 
         if (m_ViewportFocused && m_InteractionMode == InteractionMode::Select && !io.WantTextInput && isConfiguredKeyPressed(m_HotkeyCircleSelect))
@@ -1980,6 +2052,7 @@ namespace ds
             m_CircleSelectArmed = true;
             m_CircleSelecting = false;
             m_BoxSelectArmed = false;
+            m_BoxSelectPersistentMode = false;
             m_BoxSelecting = false;
             AppendSelectionDebugLog("Circle select armed (LMB to apply, wheel changes radius)");
         }
@@ -1987,6 +2060,7 @@ namespace ds
         if ((m_BoxSelectArmed || m_CircleSelectArmed) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             m_BoxSelectArmed = false;
+            m_BoxSelectPersistentMode = false;
             m_BoxSelecting = false;
             m_CircleSelectArmed = false;
             m_CircleSelecting = false;
@@ -4272,7 +4346,7 @@ namespace ds
                                 m_SelectedBondLabelKey = 0;
                             }
                             m_BoxSelecting = false;
-                            m_BoxSelectArmed = false;
+                            m_BoxSelectArmed = m_BoxSelectPersistentMode;
                             AppendSelectionDebugLog("Box select drag finished");
                         }
                     }
@@ -4346,6 +4420,7 @@ namespace ds
                     {
                         m_BoxSelecting = false;
                         m_BoxSelectArmed = false;
+                        m_BoxSelectPersistentMode = false;
                         m_CircleSelecting = false;
                         m_CircleSelectArmed = false;
                         AppendSelectionDebugLog("Box/circle select canceled with RMB");
@@ -5472,7 +5547,7 @@ namespace ds
                     ToggleInteractionMode();
                 }
                 ImGui::SameLine();
-                DrawInlineHelpMarker("Selection: LMB select, Ctrl+LMB add/remove, B then drag for box select.\nHold Tab to open radial PieMenu for mode switching.\nViewSet: T/B/L/R/P/K to snap camera.");
+                DrawInlineHelpMarker("Selection: LMB select, Ctrl+LMB add/remove, B toggles persistent box select mode.\nHold Tab to open radial PieMenu for mode switching.\nViewSet: arrows/Q/E orbit-roll, A/B/C align to lattice axes, T/G/L/R/P/K snap views.");
 
                 if (ImGui::Button("Clear selection"))
                 {
@@ -7020,7 +7095,7 @@ namespace ds
                                                        {"Ctrl+LMB", "Add or remove from selection"},
                                                        {"Ctrl+A", "Select all visible items for the current selection filter"},
                                                        {"Shift + C-drag", "Subtract from circle selection"},
-                                                       {boxShortcut.c_str(), "Arm box selection"},
+                                                       {boxShortcut.c_str(), "Toggle persistent box selection"},
                                                        {circleShortcut.c_str(), "Arm circle selection"},
                                                        {"Tab", "Hold radial mode pie menu"},
                                                        {"T / B / L / R / P / K", "Snap camera in ViewSet mode"},
