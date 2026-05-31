@@ -288,6 +288,10 @@ namespace ds
         {
             return layout;
         }
+        if (!m_HasStructureLoaded || m_WorkingStructure.atoms.empty())
+        {
+            return layout;
+        }
 
         ImFont *font = ImGuiLayer::GetBondLabelFont();
         if (font == nullptr)
@@ -358,11 +362,34 @@ namespace ds
         char formatSpec[16] = {};
         std::snprintf(formatSpec, sizeof(formatSpec), "%%.%df A", precision);
         layout.reserve(labelOrder.size());
+        std::unordered_set<std::uint64_t> emittedKeys;
+        emittedKeys.reserve(labelOrder.size());
+
+        // Keep bond labels readable on dense structures:
+        // - deduplicate by bond key
+        // - apply a screen-space label budget
+        // - cull overlapping labels (selected labels always pass)
+        const float targetArea = targetWidth * targetHeight;
+        const std::size_t labelBudget = static_cast<std::size_t>(std::clamp(targetArea / 10000.0f, 40.0f, 220.0f));
+        const float overlapPadding = std::max(2.0f, 2.5f * scaleFactor);
+
+        auto boxesOverlap = [&](const BondLabelLayoutItem &a, const BondLabelLayoutItem &b)
+        {
+            return !(a.boxMax.x + overlapPadding < b.boxMin.x ||
+                     b.boxMax.x + overlapPadding < a.boxMin.x ||
+                     a.boxMax.y + overlapPadding < b.boxMin.y ||
+                     b.boxMax.y + overlapPadding < a.boxMin.y);
+        };
 
         for (const auto &[depth, bondIndex] : labelOrder)
         {
             const BondSegment &bond = m_GeneratedBonds[bondIndex];
             const std::uint64_t key = MakeBondPairKey(bond.atomA, bond.atomB);
+            if (!emittedKeys.insert(key).second)
+            {
+                continue;
+            }
+
             const auto labelStateIt = m_BondLabelStates.find(key);
             if (labelStateIt != m_BondLabelStates.end() && (labelStateIt->second.hidden || labelStateIt->second.deleted))
             {
@@ -412,6 +439,29 @@ namespace ds
             item.boxMax = item.textPos + item.textSize + glm::vec2(padding, padding * 0.75f);
             item.depthToCamera = depth;
             item.selected = (m_SelectedBondLabelKey == key) || (m_SelectedBondKeys.find(key) != m_SelectedBondKeys.end());
+
+            if (!item.selected)
+            {
+                if (layout.size() >= labelBudget)
+                {
+                    continue;
+                }
+
+                bool overlapsExisting = false;
+                for (const BondLabelLayoutItem &placed : layout)
+                {
+                    if (boxesOverlap(item, placed))
+                    {
+                        overlapsExisting = true;
+                        break;
+                    }
+                }
+                if (overlapsExisting)
+                {
+                    continue;
+                }
+            }
+
             layout.push_back(std::move(item));
         }
 
