@@ -40,4 +40,21 @@ namespace ds
         return value;
     }
 
+    void ApplicationContext::AddDroppedPaths(const std::vector<std::string> &paths)
+    {
+        if (paths.empty())
+        {
+            return;
+        }
+
+        m_DroppedPaths.insert(m_DroppedPaths.end(), paths.begin(), paths.end());
+    }
+
+    std::vector<std::string> ApplicationContext::ConsumeDroppedPaths()
+    {
+        std::vector<std::string> paths = std::move(m_DroppedPaths);
+        m_DroppedPaths.clear();
+        return paths;
+    }
+
 } // namespace ds

@@ -798,6 +798,68 @@ namespace ds
         PumpVolumetricSurfaceBuildJobs();
         EnsureVolumetricSurfaceMeshes();
 
+        const std::vector<std::string> droppedPaths = ApplicationContext::Get().ConsumeDroppedPaths();
+        if (!droppedPaths.empty())
+        {
+            auto toLowerAscii = [](std::string value)
+            {
+                std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch)
+                               { return static_cast<char>(std::tolower(ch)); });
+                return value;
+            };
+
+            std::size_t handledDropCount = 0;
+            for (const std::string &rawPath : droppedPaths)
+            {
+                if (rawPath.empty())
+                {
+                    continue;
+                }
+
+                const std::filesystem::path dropPath(rawPath);
+                const std::string extension = toLowerAscii(dropPath.extension().string());
+                const std::string fileName = toLowerAscii(dropPath.filename().string());
+
+                if (extension == ".dsproj")
+                {
+                    if (OpenProjectAt(dropPath.parent_path()))
+                    {
+                        ++handledDropCount;
+                    }
+                    continue;
+                }
+
+                const bool looksLikeVolumetric =
+                    extension == ".chg" || extension == ".chgcar" || extension == ".parchg" ||
+                    fileName.rfind("chg", 0) == 0 || fileName.rfind("parchg", 0) == 0;
+                if (looksLikeVolumetric)
+                {
+                    if (QueueVolumetricDatasetLoad(rawPath, true, true))
+                    {
+                        ++handledDropCount;
+                    }
+                    continue;
+                }
+
+                const bool looksLikeStructure =
+                    extension == ".vasp" || extension == ".poscar" || extension == ".contcar" || extension.empty();
+                if (looksLikeStructure)
+                {
+                    if (QueueStructureLoad(rawPath, m_AppendImportToNewCollection, !m_AppendImportToNewCollection))
+                    {
+                        ++handledDropCount;
+                    }
+                }
+            }
+
+            if (handledDropCount > 0)
+            {
+                m_LastStructureOperationFailed = false;
+                m_LastStructureMessage = "Processed dropped files: " + std::to_string(handledDropCount);
+                LogInfo(m_LastStructureMessage);
+            }
+        }
+
         m_SceneOriginPosition = glm::vec3(0.0f);
         const glm::vec3 lightToOrigin = m_SceneOriginPosition - m_LightPosition;
         if (glm::length2(lightToOrigin) > 1e-8f)

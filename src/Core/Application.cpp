@@ -26,6 +26,7 @@
 #include <fstream>
 #include <string>
 #include <stdexcept>
+#include <vector>
 
 namespace ds
 {
@@ -183,6 +184,26 @@ namespace ds
             ApplicationContext::Get().AddScrollDelta(static_cast<float>(yOffset));
         }
 
+        void GLFWDropCallback(GLFWwindow * /*window*/, int count, const char **paths)
+        {
+            if (count <= 0 || paths == nullptr)
+            {
+                return;
+            }
+
+            std::vector<std::string> droppedPaths;
+            droppedPaths.reserve(static_cast<std::size_t>(count));
+            for (int index = 0; index < count; ++index)
+            {
+                if (paths[index] != nullptr && paths[index][0] != '\0')
+                {
+                    droppedPaths.emplace_back(paths[index]);
+                }
+            }
+
+            ApplicationContext::Get().AddDroppedPaths(droppedPaths);
+        }
+
         void ApplyWindowIcon(GLFWwindow *window)
         {
 #if defined(_WIN32)
@@ -331,6 +352,7 @@ namespace ds
 
         ApplicationContext::Initialize(m_Window);
         glfwSetScrollCallback(m_Window, GLFWScrollCallback);
+        glfwSetDropCallback(m_Window, GLFWDropCallback);
 
         m_ImGuiLayer = new ImGuiLayer();
         PushLayer(m_ImGuiLayer);
