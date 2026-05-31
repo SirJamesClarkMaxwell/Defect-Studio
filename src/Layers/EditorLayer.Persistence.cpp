@@ -565,7 +565,6 @@ namespace ds
         m_ActiveVolumetricBlockIndex = 0;
         m_LastVolumetricOperationFailed = false;
         m_LastVolumetricMessage.clear();
-        m_VolumetricSurfaceDatasetKey.clear();
         m_PrimaryVolumetricSurface = {};
         m_SecondaryVolumetricSurface = []()
         {
@@ -582,6 +581,8 @@ namespace ds
         }();
         m_VolumetricSpecularColor = glm::vec3(0.0f);
         m_VolumetricShininess = 100.0f;
+        m_VolumetricSyncIsoAcrossSurfaces = false;
+        m_VolumetricGlobalIsoValueNormalized = 0.05f;
         std::snprintf(m_ImportPathBuffer.data(), m_ImportPathBuffer.size(), "%s", "");
         m_Collections.clear();
         m_ActiveCollectionIndex = 0;
@@ -1483,11 +1484,21 @@ namespace ds
         m_ProjectVolumetricPaths.erase(
             std::remove(m_ProjectVolumetricPaths.begin(), m_ProjectVolumetricPaths.end(), storedPath),
             m_ProjectVolumetricPaths.end());
-        EnsureVolumetricSelection();
-        if (m_VolumetricDatasets.empty())
+        auto adjustSurfaceDatasetIndex = [datasetIndex](VolumetricSurfaceState &surface)
         {
-            m_VolumetricSurfaceDatasetKey.clear();
-        }
+            if (surface.datasetIndex == datasetIndex)
+            {
+                surface.datasetIndex = -1;
+                surface.defaultsKey.clear();
+            }
+            else if (surface.datasetIndex > datasetIndex)
+            {
+                --surface.datasetIndex;
+            }
+        };
+        adjustSurfaceDatasetIndex(m_PrimaryVolumetricSurface);
+        adjustSurfaceDatasetIndex(m_SecondaryVolumetricSurface);
+        EnsureVolumetricSelection();
         MarkVolumetricMeshesDirty();
         SaveProjectManifest();
         m_LastVolumetricOperationFailed = false;
@@ -1513,16 +1524,49 @@ namespace ds
         m_ProjectVolumetricPaths.clear();
         m_ActiveVolumetricDatasetIndex = -1;
         m_ActiveVolumetricBlockIndex = 0;
-        m_VolumetricSurfaceDatasetKey.clear();
+        m_PrimaryVolumetricSurface.defaultsKey.clear();
+        m_SecondaryVolumetricSurface.defaultsKey.clear();
         MarkVolumetricMeshesDirty();
     }
 
     void EditorLayer::EnsureVolumetricSelection()
     {
+        auto clampSurfaceSelection = [this](VolumetricSurfaceState &surface)
+        {
+            if (m_VolumetricDatasets.empty())
+            {
+                surface.datasetIndex = -1;
+                surface.blockIndex = 0;
+                surface.defaultsKey.clear();
+                return;
+            }
+
+            const int previousDatasetIndex = surface.datasetIndex;
+            if (surface.datasetIndex < 0 || surface.datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+            {
+                surface.datasetIndex = std::clamp(m_ActiveVolumetricDatasetIndex, 0, static_cast<int>(m_VolumetricDatasets.size()) - 1);
+            }
+            if (surface.datasetIndex != previousDatasetIndex)
+            {
+                surface.defaultsKey.clear();
+            }
+
+            const VolumetricDataset &surfaceDataset = m_VolumetricDatasets[static_cast<std::size_t>(surface.datasetIndex)];
+            if (surfaceDataset.blocks.empty())
+            {
+                surface.blockIndex = 0;
+                return;
+            }
+
+            surface.blockIndex = std::clamp(surface.blockIndex, 0, static_cast<int>(surfaceDataset.blocks.size()) - 1);
+        };
+
         if (m_VolumetricDatasets.empty())
         {
             m_ActiveVolumetricDatasetIndex = -1;
             m_ActiveVolumetricBlockIndex = 0;
+            clampSurfaceSelection(m_PrimaryVolumetricSurface);
+            clampSurfaceSelection(m_SecondaryVolumetricSurface);
             return;
         }
 
@@ -1535,6 +1579,8 @@ namespace ds
         }
 
         m_ActiveVolumetricBlockIndex = std::clamp(m_ActiveVolumetricBlockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+        clampSurfaceSelection(m_PrimaryVolumetricSurface);
+        clampSurfaceSelection(m_SecondaryVolumetricSurface);
     }
 
     bool EditorLayer::BuildCollectionExportStructure(int collectionIndex, Structure &outStructure) const
@@ -4622,8 +4668,18 @@ namespace ds
             m_PrimaryVolumetricSurface.isoValue = 0.0f;
         if (!std::isfinite(m_SecondaryVolumetricSurface.isoValue))
             m_SecondaryVolumetricSurface.isoValue = 0.0f;
+        if (!std::isfinite(m_VolumetricGlobalIsoValueNormalized))
+            m_VolumetricGlobalIsoValueNormalized = 0.05f;
+        m_PrimaryVolumetricSurface.datasetIndex = std::max(-1, m_PrimaryVolumetricSurface.datasetIndex);
+        m_SecondaryVolumetricSurface.datasetIndex = std::max(-1, m_SecondaryVolumetricSurface.datasetIndex);
+        m_VolumetricGlobalIsoValueNormalized = glm::clamp(m_VolumetricGlobalIsoValueNormalized, 0.0f, 1.0f);
         m_PrimaryVolumetricSurface.isoValue = std::abs(m_PrimaryVolumetricSurface.isoValue);
         m_SecondaryVolumetricSurface.isoValue = std::abs(m_SecondaryVolumetricSurface.isoValue);
+        EnsureVolumetricSelection();
+        if (m_VolumetricSyncIsoAcrossSurfaces)
+        {
+            ApplyGlobalVolumetricIsoValueToSurfaces();
+        }
         MarkVolumetricMeshesDirty();
 
         m_SceneSettings.drawCellEdges = m_ShowCellEdges;
@@ -4958,8 +5014,11 @@ namespace ds
             if (volumetrics)
             {
                 TryLoadYamlScalar(volumetrics, "previewMaxDimension", m_VolumetricPreviewMaxDimension);
+                TryLoadYamlScalar(volumetrics, "syncIsoValueAcrossSurfaces", m_VolumetricSyncIsoAcrossSurfaces);
+                TryLoadYamlScalar(volumetrics, "globalIsoValueNormalized", m_VolumetricGlobalIsoValueNormalized);
                 const YAML::Node primarySurface = volumetrics["surfaceA"];
                 TryLoadYamlScalar(primarySurface, "enabled", m_PrimaryVolumetricSurface.enabled);
+                TryLoadYamlScalar(primarySurface, "datasetIndex", m_PrimaryVolumetricSurface.datasetIndex);
                 TryLoadYamlScalar(primarySurface, "blockIndex", m_PrimaryVolumetricSurface.blockIndex);
                 int primaryFieldMode = static_cast<int>(m_PrimaryVolumetricSurface.fieldMode);
                 int primaryIsoMode = static_cast<int>(m_PrimaryVolumetricSurface.isosurfaceMode);
@@ -4975,6 +5034,7 @@ namespace ds
 
                 const YAML::Node secondarySurface = volumetrics["surfaceB"];
                 TryLoadYamlScalar(secondarySurface, "enabled", m_SecondaryVolumetricSurface.enabled);
+                TryLoadYamlScalar(secondarySurface, "datasetIndex", m_SecondaryVolumetricSurface.datasetIndex);
                 TryLoadYamlScalar(secondarySurface, "blockIndex", m_SecondaryVolumetricSurface.blockIndex);
                 int secondaryFieldMode = static_cast<int>(m_SecondaryVolumetricSurface.fieldMode);
                 int secondaryIsoMode = static_cast<int>(m_SecondaryVolumetricSurface.isosurfaceMode);
@@ -5245,7 +5305,10 @@ namespace ds
         root["elementCatalog"]["selectionSource"] = m_ElementCatalogFollowViewportSelection ? "viewport" : "periodicTable";
         root["elementCatalog"]["selectedSymbol"] = m_ElementCatalogSelectedSymbol;
         root["volumetrics"]["previewMaxDimension"] = m_VolumetricPreviewMaxDimension;
+        root["volumetrics"]["syncIsoValueAcrossSurfaces"] = m_VolumetricSyncIsoAcrossSurfaces;
+        root["volumetrics"]["globalIsoValueNormalized"] = m_VolumetricGlobalIsoValueNormalized;
         root["volumetrics"]["surfaceA"]["enabled"] = m_PrimaryVolumetricSurface.enabled;
+        root["volumetrics"]["surfaceA"]["datasetIndex"] = m_PrimaryVolumetricSurface.datasetIndex;
         root["volumetrics"]["surfaceA"]["blockIndex"] = m_PrimaryVolumetricSurface.blockIndex;
         root["volumetrics"]["surfaceA"]["fieldMode"] = static_cast<int>(m_PrimaryVolumetricSurface.fieldMode);
         root["volumetrics"]["surfaceA"]["isosurfaceMode"] = static_cast<int>(m_PrimaryVolumetricSurface.isosurfaceMode);
@@ -5255,6 +5318,7 @@ namespace ds
         root["volumetrics"]["surfaceA"]["opacity"] = m_PrimaryVolumetricSurface.opacity;
         root["volumetrics"]["surfaceA"]["negativeOpacity"] = m_PrimaryVolumetricSurface.negativeOpacity;
         root["volumetrics"]["surfaceB"]["enabled"] = m_SecondaryVolumetricSurface.enabled;
+        root["volumetrics"]["surfaceB"]["datasetIndex"] = m_SecondaryVolumetricSurface.datasetIndex;
         root["volumetrics"]["surfaceB"]["blockIndex"] = m_SecondaryVolumetricSurface.blockIndex;
         root["volumetrics"]["surfaceB"]["fieldMode"] = static_cast<int>(m_SecondaryVolumetricSurface.fieldMode);
         root["volumetrics"]["surfaceB"]["isosurfaceMode"] = static_cast<int>(m_SecondaryVolumetricSurface.isosurfaceMode);

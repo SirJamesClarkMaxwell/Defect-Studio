@@ -166,19 +166,123 @@ namespace ds
         resetSurface(m_SecondaryVolumetricSurface);
     }
 
+    int EditorLayer::ResolveVolumetricSurfaceDatasetIndex(const VolumetricSurfaceState &surfaceState) const
+    {
+        if (m_VolumetricDatasets.empty())
+        {
+            return -1;
+        }
+
+        if (surfaceState.datasetIndex >= 0 &&
+            surfaceState.datasetIndex < static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            return surfaceState.datasetIndex;
+        }
+
+        if (m_ActiveVolumetricDatasetIndex >= 0 &&
+            m_ActiveVolumetricDatasetIndex < static_cast<int>(m_VolumetricDatasets.size()))
+        {
+            return m_ActiveVolumetricDatasetIndex;
+        }
+
+        return 0;
+    }
+
+    const ScalarFieldBlock *EditorLayer::ResolveVolumetricSurfaceStatsBlock(
+        const VolumetricSurfaceState &surfaceState,
+        const VolumetricDataset &dataset) const
+    {
+        if (dataset.blocks.empty())
+        {
+            return nullptr;
+        }
+
+        if (surfaceState.fieldMode == VolumetricFieldMode::SelectedBlock)
+        {
+            const int clampedBlockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+            return &dataset.blocks[static_cast<std::size_t>(clampedBlockIndex)];
+        }
+
+        const std::optional<int> semanticIndex = ResolveSemanticBlockIndex(dataset, surfaceState.fieldMode);
+        if (semanticIndex.has_value())
+        {
+            return &dataset.blocks[static_cast<std::size_t>(semanticIndex.value())];
+        }
+
+        if (FieldModeRequiresTwoBlocks(surfaceState.fieldMode))
+        {
+            return &dataset.blocks.front();
+        }
+
+        return nullptr;
+    }
+
+    void EditorLayer::ApplyGlobalVolumetricIsoValueToSurfaces()
+    {
+        const float normalizedIsoValue = glm::clamp(m_VolumetricGlobalIsoValueNormalized, 0.0f, 1.0f);
+        auto applyGlobalIso = [&](VolumetricSurfaceState &surfaceState)
+        {
+            if (!surfaceState.enabled)
+            {
+                return;
+            }
+
+            const int datasetIndex = ResolveVolumetricSurfaceDatasetIndex(surfaceState);
+            if (datasetIndex < 0 || datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+            {
+                return;
+            }
+
+            const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)];
+            const ScalarFieldBlock *statsBlock = ResolveVolumetricSurfaceStatsBlock(surfaceState, dataset);
+            if (statsBlock == nullptr || !statsBlock->statistics.valid)
+            {
+                return;
+            }
+
+            const float isoMagnitude = normalizedIsoValue * std::max(statsBlock->statistics.absMaxValue, 1e-6f);
+            if (!std::isfinite(isoMagnitude))
+            {
+                return;
+            }
+
+            const float clampedIsoMagnitude = std::max(isoMagnitude, 0.0f);
+            if (std::abs(surfaceState.isoValue - clampedIsoMagnitude) <= 1e-7f)
+            {
+                return;
+            }
+
+            surfaceState.isoValue = clampedIsoMagnitude;
+            surfaceState.dirty = true;
+        };
+
+        applyGlobalIso(m_PrimaryVolumetricSurface);
+        applyGlobalIso(m_SecondaryVolumetricSurface);
+    }
+
     void EditorLayer::SyncVolumetricSurfaceDefaults()
     {
         EnsureVolumetricSelection();
-        if (m_ActiveVolumetricDatasetIndex < 0 || m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        if (m_VolumetricDatasets.empty())
         {
-            m_VolumetricSurfaceDatasetKey.clear();
+            m_PrimaryVolumetricSurface.defaultsKey.clear();
+            m_SecondaryVolumetricSurface.defaultsKey.clear();
             return;
         }
 
-        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
-        const std::string datasetKey = dataset.sourcePath + "#" + std::to_string(dataset.blocks.size());
-        const auto clampSurfaceBlockIndex = [&](VolumetricSurfaceState &surface)
+        bool defaultsChanged = false;
+        auto syncSurfaceDefaults = [&](VolumetricSurfaceState &surface, bool secondarySurface)
         {
+            const int datasetIndex = ResolveVolumetricSurfaceDatasetIndex(surface);
+            if (datasetIndex < 0 || datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+            {
+                surface.defaultsKey.clear();
+                return;
+            }
+
+            surface.datasetIndex = datasetIndex;
+            const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)];
+            const std::string datasetKey = dataset.sourcePath + "#" + std::to_string(dataset.blocks.size());
             if (dataset.blocks.empty())
             {
                 surface.blockIndex = 0;
@@ -186,58 +290,62 @@ namespace ds
             }
 
             surface.blockIndex = std::clamp(surface.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
+
+            if (datasetKey == surface.defaultsKey)
+            {
+                return;
+            }
+
+            surface.defaultsKey = datasetKey;
+            surface.color = secondarySurface ? glm::vec3(0.10f, 0.22f, 0.96f) : glm::vec3(1.0f, 0.92f, 0.14f);
+            surface.negativeColor = secondarySurface ? glm::vec3(1.0f, 0.92f, 0.14f) : glm::vec3(0.10f, 0.22f, 0.96f);
+            surface.opacity = 0.90f;
+            surface.negativeOpacity = 0.90f;
+
+            if (VolumetricDatasetHasSpinSemantics(dataset))
+            {
+                surface.enabled = true;
+                surface.blockIndex = 1;
+                surface.fieldMode = VolumetricFieldMode::Magnetization;
+                surface.isosurfaceMode = secondarySurface ? VolumetricIsosurfaceMode::NegativeOnly : VolumetricIsosurfaceMode::PositiveOnly;
+                surface.isoValue =
+                    dataset.blocks[1].statistics.valid
+                        ? ComputeDefaultIsoValue(
+                              dataset.blocks[1],
+                              ResolveDefaultIsoFactor(surface.fieldMode, surface.isosurfaceMode, secondarySurface))
+                        : 0.0f;
+            }
+            else
+            {
+                surface.enabled = secondarySurface ? (dataset.blocks.size() > 1) : true;
+                surface.blockIndex = secondarySurface && dataset.blocks.size() > 1 ? 1 : 0;
+                surface.fieldMode = VolumetricFieldMode::SelectedBlock;
+                surface.isosurfaceMode = VolumetricIsosurfaceMode::PositiveOnly;
+                const ScalarFieldBlock &surfaceBlock = dataset.blocks[static_cast<std::size_t>(surface.blockIndex)];
+                surface.isoValue =
+                    surfaceBlock.statistics.valid
+                        ? ComputeDefaultIsoValue(
+                              surfaceBlock,
+                              ResolveDefaultIsoFactor(surface.fieldMode, surface.isosurfaceMode, secondarySurface))
+                        : 0.0f;
+            }
+
+            surface.dirty = true;
+            defaultsChanged = true;
         };
-        if (datasetKey == m_VolumetricSurfaceDatasetKey)
+
+        syncSurfaceDefaults(m_PrimaryVolumetricSurface, false);
+        syncSurfaceDefaults(m_SecondaryVolumetricSurface, true);
+
+        if (m_VolumetricSyncIsoAcrossSurfaces)
         {
-            clampSurfaceBlockIndex(m_PrimaryVolumetricSurface);
-            clampSurfaceBlockIndex(m_SecondaryVolumetricSurface);
-            return;
+            ApplyGlobalVolumetricIsoValueToSurfaces();
         }
 
-        m_VolumetricSurfaceDatasetKey = datasetKey;
-        m_PrimaryVolumetricSurface.enabled = true;
-        m_PrimaryVolumetricSurface.color = glm::vec3(1.0f, 0.92f, 0.14f);
-        m_PrimaryVolumetricSurface.negativeColor = glm::vec3(0.10f, 0.22f, 0.96f);
-        m_PrimaryVolumetricSurface.opacity = 0.90f;
-        m_PrimaryVolumetricSurface.negativeOpacity = 0.90f;
-        m_SecondaryVolumetricSurface.color = glm::vec3(0.10f, 0.22f, 0.96f);
-        m_SecondaryVolumetricSurface.negativeColor = glm::vec3(1.0f, 0.92f, 0.14f);
-        m_SecondaryVolumetricSurface.opacity = 0.90f;
-        m_SecondaryVolumetricSurface.negativeOpacity = 0.90f;
-
-        if (VolumetricDatasetHasSpinSemantics(dataset))
+        if (defaultsChanged)
         {
-            m_PrimaryVolumetricSurface.blockIndex = 1;
-            m_PrimaryVolumetricSurface.fieldMode = VolumetricFieldMode::Magnetization;
-            m_PrimaryVolumetricSurface.isosurfaceMode = VolumetricIsosurfaceMode::PositiveOnly;
-            m_PrimaryVolumetricSurface.isoValue =
-                (dataset.blocks[1].statistics.valid) ? ComputeDefaultIsoValue(dataset.blocks[1], ResolveDefaultIsoFactor(m_PrimaryVolumetricSurface.fieldMode, m_PrimaryVolumetricSurface.isosurfaceMode, false)) : 0.0f;
-
-            m_SecondaryVolumetricSurface.enabled = true;
-            m_SecondaryVolumetricSurface.blockIndex = 1;
-            m_SecondaryVolumetricSurface.fieldMode = VolumetricFieldMode::Magnetization;
-            m_SecondaryVolumetricSurface.isosurfaceMode = VolumetricIsosurfaceMode::NegativeOnly;
-            m_SecondaryVolumetricSurface.isoValue =
-                (dataset.blocks[1].statistics.valid) ? ComputeDefaultIsoValue(dataset.blocks[1], ResolveDefaultIsoFactor(m_SecondaryVolumetricSurface.fieldMode, m_SecondaryVolumetricSurface.isosurfaceMode, true)) : 0.0f;
+            MarkVolumetricMeshesDirty();
         }
-        else
-        {
-            m_PrimaryVolumetricSurface.blockIndex = 0;
-            m_PrimaryVolumetricSurface.fieldMode = VolumetricFieldMode::SelectedBlock;
-            m_PrimaryVolumetricSurface.isosurfaceMode = VolumetricIsosurfaceMode::PositiveOnly;
-            m_PrimaryVolumetricSurface.isoValue =
-                (dataset.blocks.empty() || !dataset.blocks.front().statistics.valid) ? 0.0f :
-                                                                                    ComputeDefaultIsoValue(dataset.blocks.front(), ResolveDefaultIsoFactor(m_PrimaryVolumetricSurface.fieldMode, m_PrimaryVolumetricSurface.isosurfaceMode, false));
-
-            m_SecondaryVolumetricSurface.enabled = dataset.blocks.size() > 1;
-            m_SecondaryVolumetricSurface.blockIndex = dataset.blocks.size() > 1 ? 1 : 0;
-            m_SecondaryVolumetricSurface.fieldMode = VolumetricFieldMode::SelectedBlock;
-            m_SecondaryVolumetricSurface.isosurfaceMode = VolumetricIsosurfaceMode::PositiveOnly;
-            const ScalarFieldBlock &secondaryBlock = dataset.blocks[static_cast<std::size_t>(m_SecondaryVolumetricSurface.blockIndex)];
-            m_SecondaryVolumetricSurface.isoValue =
-                (secondaryBlock.statistics.valid) ? ComputeDefaultIsoValue(secondaryBlock, ResolveDefaultIsoFactor(m_SecondaryVolumetricSurface.fieldMode, m_SecondaryVolumetricSurface.isosurfaceMode, true)) : 0.0f;
-        }
-        MarkVolumetricMeshesDirty();
     }
 
     void EditorLayer::PumpVolumetricSurfaceBuildJobs()
@@ -341,14 +449,16 @@ namespace ds
         }
 
         EnsureVolumetricSelection();
+        const int datasetIndex = ResolveVolumetricSurfaceDatasetIndex(*surfaceState);
         if (!surfaceState->enabled ||
-            m_ActiveVolumetricDatasetIndex < 0 ||
-            m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+            datasetIndex < 0 ||
+            datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
         {
             return false;
         }
 
-        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        surfaceState->datasetIndex = datasetIndex;
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)];
         if (dataset.blocks.empty())
         {
             return false;
@@ -521,14 +631,16 @@ namespace ds
     bool EditorLayer::RebuildVolumetricSurfaceMesh(VolumetricSurfaceState &surfaceState)
     {
         EnsureVolumetricSelection();
+        const int datasetIndex = ResolveVolumetricSurfaceDatasetIndex(surfaceState);
         if (!surfaceState.enabled ||
-            m_ActiveVolumetricDatasetIndex < 0 ||
-            m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+            datasetIndex < 0 ||
+            datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
         {
             return false;
         }
 
-        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
+        surfaceState.datasetIndex = datasetIndex;
+        const VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)];
         if (dataset.blocks.empty())
         {
             surfaceState.lastStatus = "Dataset has no blocks.";
@@ -581,7 +693,7 @@ namespace ds
                 surfaceState.lastStatus = HasPendingVolumetricBlockLoad(dataset.sourcePath, requiredBlockIndex)
                                               ? "Loading volumetric block samples..."
                                               : "Block samples not resident yet.";
-                QueueVolumetricBlockLoad(m_ActiveVolumetricDatasetIndex, requiredBlockIndex);
+                QueueVolumetricBlockLoad(datasetIndex, requiredBlockIndex);
             }
             return false;
         }
@@ -593,18 +705,31 @@ namespace ds
     void EditorLayer::EnsureVolumetricSurfaceMeshes()
     {
         SyncVolumetricSurfaceDefaults();
-        if (m_ActiveVolumetricDatasetIndex < 0 || m_ActiveVolumetricDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+        if (m_VolumetricDatasets.empty())
         {
             return;
         }
 
-        VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(m_ActiveVolumetricDatasetIndex)];
         auto ensureSurfaceBlockLoaded = [&](VolumetricSurfaceState &surface)
         {
-            if (!surface.enabled || dataset.blocks.empty())
+            if (!surface.enabled)
             {
                 return;
             }
+
+            const int datasetIndex = ResolveVolumetricSurfaceDatasetIndex(surface);
+            if (datasetIndex < 0 || datasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+            {
+                return;
+            }
+
+            surface.datasetIndex = datasetIndex;
+            VolumetricDataset &dataset = m_VolumetricDatasets[static_cast<std::size_t>(datasetIndex)];
+            if (dataset.blocks.empty())
+            {
+                return;
+            }
+
             surface.blockIndex = std::clamp(surface.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
             std::vector<int> requiredBlocks;
             requiredBlocks.push_back(surface.blockIndex);
@@ -649,7 +774,7 @@ namespace ds
                 }
                 else
                 {
-                    QueueVolumetricBlockLoad(m_ActiveVolumetricDatasetIndex, requiredBlockIndex);
+                    QueueVolumetricBlockLoad(datasetIndex, requiredBlockIndex);
                     surface.lastStatus = HasPendingVolumetricBlockLoad(dataset.sourcePath, requiredBlockIndex)
                                              ? "Queued block load..."
                                              : "Waiting for block load...";
@@ -657,28 +782,7 @@ namespace ds
                 return;
             }
 
-            const auto resolveStatsBlock = [&]() -> const ScalarFieldBlock *
-            {
-                if (surface.fieldMode == VolumetricFieldMode::SelectedBlock)
-                {
-                    return &dataset.blocks[static_cast<std::size_t>(surface.blockIndex)];
-                }
-
-                const std::optional<int> semanticIndex = ResolveSemanticBlockIndex(dataset, surface.fieldMode);
-                if (semanticIndex.has_value())
-                {
-                    return &dataset.blocks[static_cast<std::size_t>(semanticIndex.value())];
-                }
-
-                if (FieldModeRequiresTwoBlocks(surface.fieldMode) && !dataset.blocks.empty())
-                {
-                    return &dataset.blocks.front();
-                }
-
-                return nullptr;
-            };
-
-            const ScalarFieldBlock *statsBlock = resolveStatsBlock();
+            const ScalarFieldBlock *statsBlock = ResolveVolumetricSurfaceStatsBlock(surface, dataset);
             if (statsBlock != nullptr && statsBlock->statistics.valid && std::abs(surface.isoValue) <= 1e-6f)
             {
                 const bool isSecondarySurface = (&surface == &m_SecondaryVolumetricSurface);

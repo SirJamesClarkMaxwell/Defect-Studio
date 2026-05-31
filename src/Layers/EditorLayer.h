@@ -399,6 +399,11 @@ namespace ds
         bool RemoveVolumetricDatasetAtIndex(int datasetIndex);
         void ClearVolumetricDatasets();
         void EnsureVolumetricSelection();
+        int ResolveVolumetricSurfaceDatasetIndex(const struct VolumetricSurfaceState &surfaceState) const;
+        const struct ScalarFieldBlock *ResolveVolumetricSurfaceStatsBlock(
+            const struct VolumetricSurfaceState &surfaceState,
+            const struct VolumetricDataset &dataset) const;
+        void ApplyGlobalVolumetricIsoValueToSurfaces();
         bool AddAtomToStructure(const std::string &elementSymbol, const glm::vec3 &position, CoordinateMode inputMode);
         bool ApplyElementToSelectedAtoms(const std::string &elementInput, std::size_t *outChangedCount = nullptr);
         bool IsAtomSelected(std::size_t index) const;
@@ -640,6 +645,7 @@ namespace ds
         struct VolumetricSurfaceState
         {
             bool enabled = true;
+            int datasetIndex = -1;
             int blockIndex = 0;
             VolumetricFieldMode fieldMode = VolumetricFieldMode::SelectedBlock;
             VolumetricIsosurfaceMode isosurfaceMode = VolumetricIsosurfaceMode::PositiveOnly;
@@ -661,6 +667,7 @@ namespace ds
             std::uint64_t meshRevision = 1;
             std::uint64_t negativeMeshRevision = 1;
             std::uint64_t pendingBuildRequestId = 0;
+            std::string defaultsKey;
         };
         struct VolumetricDatasetLoadResult
         {
@@ -747,7 +754,8 @@ namespace ds
         }();
         glm::vec3 m_VolumetricSpecularColor = glm::vec3(0.0f);
         float m_VolumetricShininess = 100.0f;
-        std::string m_VolumetricSurfaceDatasetKey;
+        bool m_VolumetricSyncIsoAcrossSurfaces = false;
+        float m_VolumetricGlobalIsoValueNormalized = 0.05f;
         std::vector<PendingStructureLoad> m_PendingStructureLoads;
         std::vector<PendingVolumetricDatasetLoad> m_PendingVolumetricDatasetLoads;
         std::vector<PendingVolumetricBlockLoad> m_PendingVolumetricBlockLoads;

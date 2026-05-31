@@ -7881,9 +7881,40 @@ namespace ds
                 settingsChanged = true;
             }
 
+            ImGui::SeparatorText("Global iso");
+            if (ImGui::Checkbox("Sync iso level across surfaces", &m_VolumetricSyncIsoAcrossSurfaces))
+            {
+                if (m_VolumetricSyncIsoAcrossSurfaces)
+                {
+                    ApplyGlobalVolumetricIsoValueToSurfaces();
+                }
+                settingsChanged = true;
+            }
+            ImGui::SameLine();
+            DrawInlineHelpMarker("When enabled, both surfaces reuse one normalized iso slider and each surface converts it against its own dataset range.");
+            if (m_VolumetricSyncIsoAcrossSurfaces)
+            {
+                float globalIsoPercent = m_VolumetricGlobalIsoValueNormalized * 100.0f;
+                if (ImGui::SliderFloat("Global iso (% abs max)", &globalIsoPercent, 0.0f, 100.0f, "%.2f%%"))
+                {
+                    m_VolumetricGlobalIsoValueNormalized = glm::clamp(globalIsoPercent / 100.0f, 0.0f, 1.0f);
+                    ApplyGlobalVolumetricIsoValueToSurfaces();
+                    settingsChanged = true;
+                }
+
+                if (ImGui::Button("Reapply global iso"))
+                {
+                    ApplyGlobalVolumetricIsoValueToSurfaces();
+                    settingsChanged = true;
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("Global iso sync is off. Surface iso values are independent.");
+            }
+
             auto drawSurfaceControls = [&](const char *label, const char *idSuffix, VolumetricSurfaceState &surfaceState, float defaultIsoFactor)
             {
-                const bool spinSemanticsAvailable = VolumetricDatasetHasSpinSemantics(dataset);
                 const char *fieldOptions[] = {
                     VolumetricFieldModeName(VolumetricFieldMode::SelectedBlock),
                     VolumetricFieldModeName(VolumetricFieldMode::TotalDensity),
@@ -7897,6 +7928,48 @@ namespace ds
 
                 ImGui::PushID(idSuffix);
                 ImGui::TextUnformatted(label);
+                int surfaceDatasetIndex = ResolveVolumetricSurfaceDatasetIndex(surfaceState);
+                if (surfaceDatasetIndex >= 0 &&
+                    surfaceDatasetIndex < static_cast<int>(m_VolumetricDatasets.size()) &&
+                    ImGui::Combo((std::string("Dataset##") + idSuffix).c_str(),
+                                 &surfaceDatasetIndex,
+                                 datasetLabels.data(),
+                                 static_cast<int>(datasetLabels.size())))
+                {
+                    if (surfaceState.datasetIndex != surfaceDatasetIndex)
+                    {
+                        surfaceState.datasetIndex = surfaceDatasetIndex;
+                        surfaceState.defaultsKey.clear();
+                        surfaceState.dirty = true;
+                        settingsChanged = true;
+                    }
+                }
+
+                surfaceDatasetIndex = ResolveVolumetricSurfaceDatasetIndex(surfaceState);
+                if (surfaceDatasetIndex < 0 || surfaceDatasetIndex >= static_cast<int>(m_VolumetricDatasets.size()))
+                {
+                    ImGui::TextDisabled("No dataset assigned.");
+                    ImGui::PopID();
+                    return;
+                }
+                surfaceState.datasetIndex = surfaceDatasetIndex;
+
+                const VolumetricDataset &surfaceDataset = m_VolumetricDatasets[static_cast<std::size_t>(surfaceDatasetIndex)];
+                if (surfaceDataset.blocks.empty())
+                {
+                    ImGui::TextDisabled("Dataset has no volumetric blocks.");
+                    ImGui::PopID();
+                    return;
+                }
+
+                std::vector<const char *> surfaceBlockLabels;
+                surfaceBlockLabels.reserve(surfaceDataset.blocks.size());
+                for (const ScalarFieldBlock &surfaceBlock : surfaceDataset.blocks)
+                {
+                    surfaceBlockLabels.push_back(surfaceBlock.label.c_str());
+                }
+
+                const bool spinSemanticsAvailable = VolumetricDatasetHasSpinSemantics(surfaceDataset);
                 if (ImGui::Checkbox((std::string("Enabled##") + idSuffix).c_str(), &surfaceState.enabled))
                 {
                     surfaceState.dirty = true;
@@ -7925,7 +7998,10 @@ namespace ds
 
                 if (surfaceState.fieldMode == VolumetricFieldMode::SelectedBlock)
                 {
-                    if (ImGui::Combo((std::string("Block##") + idSuffix).c_str(), &surfaceState.blockIndex, blockLabels.data(), static_cast<int>(blockLabels.size())))
+                    if (ImGui::Combo((std::string("Block##") + idSuffix).c_str(),
+                                     &surfaceState.blockIndex,
+                                     surfaceBlockLabels.data(),
+                                     static_cast<int>(surfaceBlockLabels.size())))
                     {
                         surfaceState.dirty = true;
                         settingsChanged = true;
@@ -7937,9 +8013,9 @@ namespace ds
                         (surfaceState.fieldMode == VolumetricFieldMode::TotalDensity) ? std::optional<int>(0) :
                         (surfaceState.fieldMode == VolumetricFieldMode::Magnetization && spinSemanticsAvailable) ? std::optional<int>(1) :
                                                                                                                    std::nullopt;
-                    if (semanticIndex.has_value() && semanticIndex.value() >= 0 && semanticIndex.value() < static_cast<int>(dataset.blocks.size()))
+                    if (semanticIndex.has_value() && semanticIndex.value() >= 0 && semanticIndex.value() < static_cast<int>(surfaceDataset.blocks.size()))
                     {
-                        ImGui::TextDisabled("Source: %s", dataset.blocks[static_cast<std::size_t>(semanticIndex.value())].label.c_str());
+                        ImGui::TextDisabled("Source: %s", surfaceDataset.blocks[static_cast<std::size_t>(semanticIndex.value())].label.c_str());
                     }
                     else if (surfaceState.fieldMode == VolumetricFieldMode::SpinUp || surfaceState.fieldMode == VolumetricFieldMode::SpinDown)
                     {
@@ -7955,24 +8031,8 @@ namespace ds
                     settingsChanged = true;
                 }
 
-                const ScalarFieldBlock *statsBlock = nullptr;
-                if (surfaceState.fieldMode == VolumetricFieldMode::SelectedBlock)
-                {
-                    surfaceState.blockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(dataset.blocks.size()) - 1);
-                    statsBlock = &dataset.blocks[static_cast<std::size_t>(surfaceState.blockIndex)];
-                }
-                else if (surfaceState.fieldMode == VolumetricFieldMode::TotalDensity && !dataset.blocks.empty())
-                {
-                    statsBlock = &dataset.blocks.front();
-                }
-                else if (surfaceState.fieldMode == VolumetricFieldMode::Magnetization && spinSemanticsAvailable)
-                {
-                    statsBlock = &dataset.blocks[1];
-                }
-                else if ((surfaceState.fieldMode == VolumetricFieldMode::SpinUp || surfaceState.fieldMode == VolumetricFieldMode::SpinDown) && !dataset.blocks.empty())
-                {
-                    statsBlock = &dataset.blocks.front();
-                }
+                surfaceState.blockIndex = std::clamp(surfaceState.blockIndex, 0, static_cast<int>(surfaceDataset.blocks.size()) - 1);
+                const ScalarFieldBlock *statsBlock = ResolveVolumetricSurfaceStatsBlock(surfaceState, surfaceDataset);
 
                 const float dragSpeed = (statsBlock != nullptr && statsBlock->statistics.valid) ? std::max(statsBlock->statistics.absMaxValue * 0.0025f, 1e-6f) : 1e-4f;
                 const float dragMax = (statsBlock != nullptr && statsBlock->statistics.valid) ? std::max(1e-6f, std::max(std::abs(statsBlock->statistics.minValue), std::abs(statsBlock->statistics.maxValue))) : 1.0f;
@@ -7991,6 +8051,10 @@ namespace ds
                 ImGui::TextUnformatted("Iso level");
                 ImGui::SameLine();
                 DrawInlineHelpMarker("This is the scalar-field threshold used to extract the isosurface. VESTA calls the same quantity the isosurface level. Lower absolute values produce larger, more diffuse surfaces; higher absolute values keep only the strongest regions.");
+                if (m_VolumetricSyncIsoAcrossSurfaces)
+                {
+                    ImGui::BeginDisabled();
+                }
                 ImGui::DragFloat((std::string("##IsoValue") + idSuffix).c_str(), &isoMagnitude, dragSpeed, 0.0f, dragMax, "%.6g");
                 if (ImGui::IsItemDeactivatedAfterEdit())
                 {
@@ -8004,6 +8068,11 @@ namespace ds
                     surfaceState.isoValue = defaultIsoMagnitude;
                     surfaceState.dirty = true;
                     settingsChanged = true;
+                }
+                if (m_VolumetricSyncIsoAcrossSurfaces)
+                {
+                    ImGui::EndDisabled();
+                    ImGui::TextDisabled("Controlled by Global iso sync.");
                 }
 
                 if (surfaceState.isosurfaceMode == VolumetricIsosurfaceMode::PositiveOnly)
@@ -8108,6 +8177,11 @@ namespace ds
                 ImGui::TableNextColumn();
                 drawSurfaceControls("Surface B", "SecondarySurface", m_SecondaryVolumetricSurface, 0.42f);
                 ImGui::EndTable();
+            }
+
+            if (m_VolumetricSyncIsoAcrossSurfaces)
+            {
+                ApplyGlobalVolumetricIsoValueToSurfaces();
             }
         }
 
