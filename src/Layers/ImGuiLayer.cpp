@@ -271,6 +271,36 @@ namespace ds
 
             return true;
         }
+
+        std::filesystem::path ResolveRuntimeResourcePath(const std::filesystem::path &relativePath)
+        {
+            std::error_code pathError;
+            std::filesystem::path probeRoot = std::filesystem::current_path(pathError);
+            if (pathError || probeRoot.empty())
+            {
+                probeRoot = std::filesystem::path(".");
+            }
+            probeRoot = probeRoot.lexically_normal();
+
+            for (int depth = 0; depth < 10; ++depth)
+            {
+                const std::filesystem::path candidate = (probeRoot / relativePath).lexically_normal();
+                std::error_code existsError;
+                if (std::filesystem::exists(candidate, existsError) && !existsError)
+                {
+                    return candidate;
+                }
+
+                const std::filesystem::path parent = probeRoot.parent_path();
+                if (parent.empty() || parent == probeRoot)
+                {
+                    break;
+                }
+                probeRoot = parent;
+            }
+
+            return relativePath;
+        }
     }
 
     ImGuiLayer::ImGuiLayer()
@@ -329,25 +359,41 @@ namespace ds
 
         std::filesystem::create_directories("config");
         io.IniFilename = "config/imgui_layout.ini";
-        s_UIFont = io.Fonts->AddFontFromFileTTF("vendor/imgui/misc/fonts/DroidSans.ttf", 16.0f);
+        ImFont *defaultFont = io.Fonts->AddFontDefault();
+        auto loadFontOrFallback = [&](const char *relativePath, float sizePixels, ImFont *fallbackFont, const char *fontLabel) -> ImFont *
+        {
+            const std::filesystem::path resolvedPath = ResolveRuntimeResourcePath(relativePath);
+            ImFont *font = io.Fonts->AddFontFromFileTTF(resolvedPath.string().c_str(), sizePixels);
+            if (font != nullptr)
+            {
+                return font;
+            }
+
+            std::string message = "Failed to load ";
+            message += fontLabel;
+            message += " from ";
+            message += resolvedPath.string();
+            message += ". Falling back to default ImGui font.";
+            LogWarn(message);
+            return fallbackFont;
+        };
+
+        s_UIFont = loadFontOrFallback("vendor/imgui/misc/fonts/DroidSans.ttf", 16.0f, defaultFont, "DroidSans.ttf");
         if (s_UIFont == nullptr)
         {
-            s_UIFont = io.FontDefault;
-            LogWarn("Failed to load DroidSans.ttf for UI. Falling back to default ImGui font.");
+            s_UIFont = defaultFont;
         }
 
-        s_MonospaceFont = io.Fonts->AddFontFromFileTTF("vendor/imgui/misc/fonts/Cousine-Regular.ttf", 15.0f);
+        s_MonospaceFont = loadFontOrFallback("vendor/imgui/misc/fonts/Cousine-Regular.ttf", 15.0f, s_UIFont, "Cousine-Regular.ttf");
         if (s_MonospaceFont == nullptr)
         {
             s_MonospaceFont = s_UIFont;
-            LogWarn("Failed to load Cousine-Regular.ttf for console/shortcut views. Falling back to UI font.");
         }
 
-        s_BondLabelFont = io.Fonts->AddFontFromFileTTF("vendor/imgui/misc/fonts/Roboto-Medium.ttf", 18.0f);
+        s_BondLabelFont = loadFontOrFallback("vendor/imgui/misc/fonts/Roboto-Medium.ttf", 18.0f, s_UIFont, "Roboto-Medium.ttf");
         if (s_BondLabelFont == nullptr)
         {
             s_BondLabelFont = s_UIFont;
-            LogWarn("Failed to load Roboto-Medium.ttf for bond labels. Falling back to default ImGui font.");
         }
         io.FontDefault = s_UIFont;
 
