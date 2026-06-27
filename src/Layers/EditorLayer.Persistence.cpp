@@ -681,6 +681,31 @@ namespace ds
         MigrateLegacyProjectAppearanceFromSceneStateIfNeeded();
         LoadProjectAppearanceYaml();
         EnsureSceneDefaults();
+
+        if (m_HasStructureLoaded && !m_WorkingStructure.atoms.empty())
+        {
+            std::size_t visibleAtomCount = 0;
+            for (std::size_t atomIndex = 0; atomIndex < m_WorkingStructure.atoms.size(); ++atomIndex)
+            {
+                if (!IsAtomHidden(atomIndex) && IsAtomCollectionVisible(atomIndex))
+                {
+                    ++visibleAtomCount;
+                }
+            }
+
+            if (visibleAtomCount == 0)
+            {
+                LogWarn("No visible atoms after loading project state; restoring default scene visibility.");
+                m_HiddenAtomIndices.clear();
+                for (SceneCollection &collection : m_Collections)
+                {
+                    collection.visible = true;
+                    collection.selectable = true;
+                }
+                EnsureAtomCollectionAssignments();
+            }
+        }
+
         SyncRenderAppearanceFromViewport();
         SaveUiSettingsYaml();
         m_LastStructureOperationFailed = missingProjectStructure;
@@ -2213,7 +2238,14 @@ namespace ds
         const auto catalogColorIt = m_AtomDefaults.elementColors.find(normalizedElement);
         if (catalogColorIt != m_AtomDefaults.elementColors.end())
         {
-            return glm::clamp(catalogColorIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
+            const glm::vec3 catalogColor = glm::clamp(catalogColorIt->second, glm::vec3(0.0f), glm::vec3(1.0f));
+            const float brightestChannel = std::max(catalogColor.r, std::max(catalogColor.g, catalogColor.b));
+            if (brightestChannel >= 0.08f)
+            {
+                return catalogColor;
+            }
+
+            return glm::clamp(ColorFromElement(normalizedElement), glm::vec3(0.0f), glm::vec3(1.0f));
         }
 
         return glm::clamp(ColorFromElement(normalizedElement), glm::vec3(0.0f), glm::vec3(1.0f));
@@ -4650,6 +4682,7 @@ namespace ds
             m_TransformEmptyVisualScale = 0.55f;
         if (m_LastProjectDialogPath.empty())
             m_LastProjectDialogPath = GetProjectRootPath().string();
+        m_SceneSettings.atomScale = glm::clamp(m_SceneSettings.atomScale, 0.05f, 1.25f);
         if (m_SceneSettings.atomGlowStrength < 0.0f)
             m_SceneSettings.atomGlowStrength = 0.0f;
         if (m_SceneSettings.atomGlowStrength > 0.60f)
@@ -4894,6 +4927,7 @@ namespace ds
                 TryLoadYamlVec3(lighting["position"], m_LightPosition);
 
                 const YAML::Node atoms = viewport["atoms"];
+                TryLoadYamlScalar(atoms, "scale", m_SceneSettings.atomScale);
                 TryLoadYamlScalar(atoms, "overrideColorEnabled", m_SceneSettings.overrideAtomColor);
                 TryLoadYamlVec3(atoms["overrideColor"], m_SceneSettings.atomOverrideColor);
                 TryLoadYamlScalar(atoms, "brightness", m_SceneSettings.atomBrightness);
@@ -5238,6 +5272,7 @@ namespace ds
         root["viewport"]["lighting"]["position"] = MakeVec3Node(m_LightPosition);
 
         root["viewport"]["atoms"]["overrideColorEnabled"] = m_SceneSettings.overrideAtomColor;
+        root["viewport"]["atoms"]["scale"] = m_SceneSettings.atomScale;
         root["viewport"]["atoms"]["overrideColor"] = MakeColorNode(m_SceneSettings.atomOverrideColor);
         root["viewport"]["atoms"]["brightness"] = m_SceneSettings.atomBrightness;
         root["viewport"]["atoms"]["glowStrength"] = m_SceneSettings.atomGlowStrength;

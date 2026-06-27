@@ -104,3 +104,31 @@ TEST(PoscarSerializerTest, PreservesOutOfCellDirectCoordinatesWhenWrappingDisabl
     EXPECT_NE(coordinateLine.find("1.2500"), std::string::npos) << coordinateLine;
     EXPECT_NE(coordinateLine.find("-0.1000"), std::string::npos) << coordinateLine;
 }
+
+TEST(PoscarSerializerTest, PreservesOutOfCellDirectCoordinatesForUiExportOptions)
+{
+    ds::Structure structure;
+    structure.title = "UI export preserve test";
+    structure.coordinateMode = ds::CoordinateMode::Direct;
+    structure.atoms.push_back(ds::Atom{"C", glm::vec3(1.7741708f, 0.8870854f, 2.6612561f)});
+    structure.atoms.push_back(ds::Atom{"N", glm::vec3(-0.8553242f, 6.0779667f, 0.3736423f)});
+    structure.RebuildSpeciesFromAtoms();
+
+    ds::PoscarWriteOptions options;
+    options.coordinateMode = ds::CoordinateMode::Direct;
+    options.precision = 4;
+    options.canonicalizeDirectTranslation = false;
+    options.wrapDirectCoordinates = false;
+
+    ds::PoscarSerializer serializer;
+    std::string output;
+    std::string error;
+    ASSERT_TRUE(serializer.WriteToString(structure, options, output, error)) << error;
+
+    const std::vector<std::string> lines = SplitLines(output);
+    ASSERT_GE(lines.size(), 10u);
+    EXPECT_NE(lines[8].find("1.7742"), std::string::npos) << lines[8];
+    EXPECT_NE(lines[8].find("2.6613"), std::string::npos) << lines[8];
+    EXPECT_NE(lines[9].find("-0.8553"), std::string::npos) << lines[9];
+    EXPECT_NE(lines[9].find("6.0780"), std::string::npos) << lines[9];
+}

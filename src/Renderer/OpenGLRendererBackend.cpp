@@ -551,6 +551,14 @@ namespace ds
         m_FrameGridVertexCount = 0;
         glBindFramebuffer(GL_FRAMEBUFFER, m_Framebuffer);
         glViewport(0, 0, static_cast<int>(m_ViewportWidth), static_cast<int>(m_ViewportHeight));
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthFunc(GL_LEQUAL);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glEnable(GL_DEPTH_TEST);
         if (m_MsaaSamples > 1)
         {
@@ -670,6 +678,13 @@ namespace ds
             return;
         }
 
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_SCISSOR_TEST);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthFunc(GL_LEQUAL);
+
         m_Shader.Bind();
         m_Shader.SetMat4("u_ViewProjection", viewProjection);
         m_Shader.SetFloat3("u_LightDirection", glm::normalize(settings.lightDirection));
@@ -736,6 +751,13 @@ namespace ds
             return;
         }
 
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_SCISSOR_TEST);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthFunc(GL_LEQUAL);
+
         m_GridShader.Bind();
         m_GridShader.SetMat4("u_ViewProjection", viewProjection);
         m_GridShader.SetFloat3("u_GridColor", lineColor);
@@ -780,6 +802,13 @@ namespace ds
         {
             return;
         }
+
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_SCISSOR_TEST);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthFunc(GL_LEQUAL);
 
         std::vector<ColoredLineVertex> vertices;
         vertices.reserve(vertexCount);
