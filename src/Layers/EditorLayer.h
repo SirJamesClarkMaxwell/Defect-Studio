@@ -544,7 +544,7 @@ namespace ds
         std::array<char, 512> m_ExportPathBuffer = {};
         std::array<char, 512> m_VolumetricImportPathBuffer = {};
         std::array<char, 512> m_RenderImagePathBuffer = {};
-        int m_ExportPrecision = 8;
+        int m_ExportPrecision = 16;
         int m_ExportCoordinateModeIndex = 0;
         int m_RenderImageWidth = 1920;
         int m_RenderImageHeight = 1080;

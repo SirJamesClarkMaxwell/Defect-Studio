@@ -159,11 +159,14 @@ namespace ds
                 CanonicalizeDirectStructureTranslation(writable);
             }
 
-            for (Atom &atom : writable.atoms)
+            if (options.wrapDirectCoordinates)
             {
-                atom.position.x = WrapUnitCoordinate(atom.position.x);
-                atom.position.y = WrapUnitCoordinate(atom.position.y);
-                atom.position.z = WrapUnitCoordinate(atom.position.z);
+                for (Atom &atom : writable.atoms)
+                {
+                    atom.position.x = WrapUnitCoordinate(atom.position.x);
+                    atom.position.y = WrapUnitCoordinate(atom.position.y);
+                    atom.position.z = WrapUnitCoordinate(atom.position.z);
+                }
             }
         }
 
@@ -176,7 +179,7 @@ namespace ds
         }
 
         const bool hasSelectiveDynamics = options.forceSelectiveDynamics || writable.HasSelectiveDynamics();
-        const int coordinatePrecision = std::max(16, ClampPrecision(options.precision));
+        const int coordinatePrecision = ClampPrecision(options.precision);
         constexpr int kScalePrecision = 14;
         constexpr int kLatticeWidth = 23;
         constexpr int kCoordinateWidth = 20;
