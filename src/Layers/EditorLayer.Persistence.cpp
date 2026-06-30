@@ -943,6 +943,7 @@ namespace ds
         m_DeferAutoBondRebuildDuringStructureBatch = true;
 
         std::unordered_set<std::string> queuedPaths;
+        bool appendAsCollection = m_HasStructureLoaded && m_AppendImportToNewCollection;
         bool queuedAny = false;
         for (std::size_t index = 0; index < paths.size(); ++index)
         {
@@ -953,8 +954,9 @@ namespace ds
                 continue;
             }
 
-            const bool shouldAppend = index > 0;
+            const bool shouldAppend = appendAsCollection || index > 0;
             queuedAny |= QueueStructureLoad(normalizedPathString, shouldAppend, !shouldAppend);
+            appendAsCollection = true;
         }
 
         if (queuedAny)

@@ -32,12 +32,12 @@ camera:
   clipNearPadding: 2.4
   clipFarPadding: 1
   target:
-    x: 3.2673056
-    y: 8.876377
-    z: 5.332269
-  distance: 54.99632
-  yaw: 0
-  pitch: 1.5692964
+    x: 5.6301584
+    y: 8.668316
+    z: 6.587242
+  distance: 63.650963
+  yaw: 1.0471976
+  pitch: 0
   roll: 0
   sensitivityMode: relative_v2
 viewport:
@@ -57,8 +57,8 @@ viewport:
     spacing: 1
     lineWidth: 1
     origin:
-      x: 2.4837685
-      y: 15.381244
+      x: 5.6301584
+      y: 8.668316
       z: 0
     color:
       r: 0.27
@@ -102,8 +102,8 @@ viewport:
     autoRecalculateOnEdit: true
     showLengthLabels: true
     renderStyle: 2
-    deleteLabelOnlyMode: false
-    thresholdScale: 1.12
+    deleteLabelOnlyMode: true
+    thresholdScale: 1.09
     usePairThresholdOverrides: true
     pairThresholdOverrides: ""
     lineWidth: 20
@@ -248,7 +248,7 @@ hotkeys:
   scaleGizmo: 564
 elementCatalog:
   selectionSource: viewport
-  selectedSymbol: N
+  selectedSymbol: C
 volumetrics:
   previewMaxDimension: 120
   surfaceA:
@@ -293,67 +293,84 @@ sceneOutliner:
   treeOpenStates:
     collection_objects_12215694672210238159: false
     collection_objects_2265785950532160931: true
-    collection_objects_5758357109111389023: false
-    collection_objects_16297125193442105501: true
     collection_objects_1142896767235350920: false
     collection_objects_3347954039277003767: false
     collection_groups_12215694672210238159: false
+    collection_objects_5758357109111389023: false
+    collection_atoms_3798234540824013984: false
+    collection_objects_16297125193442105501: true
     empty_9818121580160418855: false
-    collection_atoms_2265785950532160931: false
     collection_objects_295568087831340321: false
+    collection_atoms_2265785950532160931: false
     collection_atoms_12215694672210238159: false
-    collection_atoms_11578982975831901882: false
-    empty_15780245378260290212: false
     collection_objects_1788093220315726589: false
+    empty_15780245378260290212: false
+    collection_atoms_11578982975831901882: false
     collection_atoms_16297125193442105501: false
-    collection_atoms_1737474619514322449: false
-    collection_objects_1480387716893472315: false
     collection_objects_13483576780383753284: false
+    collection_objects_1480387716893472315: false
+    collection_atoms_1737474619514322449: false
     collection_objects_8714447610626684171: false
     collection_objects_13100022068795947873: false
     collection_objects_13963946767877597536: false
     collection_objects_17457030727020388981: false
     collection_objects_11578982975831901882: false
     collection_objects_3005158435762991011: false
-    collection_objects_18002607108771414006: false
     collection_objects_2276919191183132208: false
+    collection_objects_18002607108771414006: false
     collection_objects_17832716872731091470: true
     collection_atoms_17832716872731091470: false
-    collection_objects_3020311759969755647: false
     collection_objects_919394852505655928: true
     collection_objects_5127571843775670048: false
-    collection_objects_17191416433613463343: true
-    collection_atoms_919394852505655928: false
-    collection_objects_17002875112437787634: false
+    collection_objects_3020311759969755647: false
     collection_objects_12253100465371712184: false
+    collection_objects_17002875112437787634: false
+    collection_atoms_919394852505655928: false
+    collection_objects_17191416433613463343: true
     collection_objects_10037723350881320244: false
     collection_objects_12367015964009413110: false
     collection_objects_630848932154948031: false
     collection_objects_3038736292657358537: false
-    collection_objects_10462375072237455256: false
     collection_objects_1296046086992992770: false
+    collection_objects_10462375072237455256: false
     collection_objects_8630452538359344906: false
     collection_objects_14300302551086272712: true
-    collection_objects_1179255315598145465: false
     collection_atoms_17032993147099444523: true
-    collection_atoms_1179255315598145465: true
+    collection_objects_1179255315598145465: false
+    collection_objects_1301265872488059766: true
     collection_objects_13413548962423964701: false
+    collection_atoms_1179255315598145465: true
     collection_atoms_14300302551086272712: true
     collection_atoms_17191416433613463343: false
     collection_objects_1108941080313391630: false
-    collection_objects_17442896411574580146: false
     collection_atoms_1108941080313391630: false
+    collection_objects_17442896411574580146: false
     collection_objects_15837636191172736892: false
     collection_objects_5376146755426512358: false
     collection_objects_7837837826389649790: true
     collection_atoms_15837636191172736892: false
-    collection_atoms_7837837826389649790: false
     collection_objects_17032993147099444523: true
+    collection_atoms_7837837826389649790: false
+    collection_groups_12428227073191140154: false
     collection_objects_15986407383399523975: false
     collection_objects_580185921945697093: false
     collection_objects_1791606240773494675: false
     collection_objects_2400575739879697858: false
     collection_objects_1737474619514322449: true
+    collection_objects_13161206597170523948: true
+    collection_atoms_13161206597170523948: true
+    collection_atoms_1301265872488059766: false
+    collection_groups_1301265872488059766: false
+    collection_objects_5776270977429927247: false
+    collection_objects_3798234540824013984: false
+    collection_atoms_5776270977429927247: false
+    collection_objects_12428227073191140154: true
+    collection_objects_2290573313048504321: false
+    collection_objects_8784672196179302952: false
+    collection_objects_13485596050344124827: false
+    collection_atoms_2290573313048504321: false
+    collection_atoms_8784672196179302952: false
+    collection_atoms_12428227073191140154: false
 projects:
   currentRoot: D:\STUDIA\Fizyka\Defects-Studio\DefectsStudio
   name: DefectsStudio

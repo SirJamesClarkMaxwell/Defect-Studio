@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
 
 namespace ds
 {
@@ -45,18 +46,109 @@ namespace ds
 
         bool BuildSpeciesOrder(const Structure &structure, std::vector<std::string> &outSpecies, std::vector<int> &outCounts)
         {
-            if (!structure.species.empty() && structure.species.size() == structure.counts.size())
+            struct SpeciesEntry
             {
-                outSpecies = structure.species;
-                outCounts = structure.counts;
+                std::string name;
+                int count = 0;
+                std::size_t firstAtomIndex = 0;
+            };
+
+            outSpecies.clear();
+            outCounts.clear();
+
+            if (structure.atoms.empty())
+            {
                 return true;
             }
 
-            Structure rebuilt = structure;
-            rebuilt.RebuildSpeciesFromAtoms();
-            outSpecies = rebuilt.species;
-            outCounts = rebuilt.counts;
-            return !outSpecies.empty() || rebuilt.atoms.empty();
+            std::vector<SpeciesEntry> entries;
+            entries.reserve(structure.atoms.size());
+            std::unordered_map<std::string, std::size_t> entryIndexByName;
+            entryIndexByName.reserve(structure.atoms.size());
+
+            for (std::size_t atomIndex = 0; atomIndex < structure.atoms.size(); ++atomIndex)
+            {
+                const std::string &element = structure.atoms[atomIndex].element;
+                const auto existing = entryIndexByName.find(element);
+                if (existing == entryIndexByName.end())
+                {
+                    const std::size_t entryIndex = entries.size();
+                    entries.push_back({element, 1, atomIndex});
+                    entryIndexByName.emplace(element, entryIndex);
+                }
+                else
+                {
+                    ++entries[existing->second].count;
+                }
+            }
+
+            const bool preserveImportedOrder = !structure.sourcePath.empty() && !structure.species.empty();
+            if (preserveImportedOrder)
+            {
+                std::unordered_map<std::string, bool> emitted;
+                emitted.reserve(entries.size());
+                for (const std::string &speciesName : structure.species)
+                {
+                    const auto entryIt = entryIndexByName.find(speciesName);
+                    if (entryIt == entryIndexByName.end() || emitted[speciesName])
+                    {
+                        continue;
+                    }
+
+                    const SpeciesEntry &entry = entries[entryIt->second];
+                    outSpecies.push_back(entry.name);
+                    outCounts.push_back(entry.count);
+                    emitted[speciesName] = true;
+                }
+
+                std::vector<SpeciesEntry> appendedEntries;
+                appendedEntries.reserve(entries.size());
+                for (const SpeciesEntry &entry : entries)
+                {
+                    if (!emitted[entry.name])
+                    {
+                        appendedEntries.push_back(entry);
+                    }
+                }
+
+                std::stable_sort(appendedEntries.begin(), appendedEntries.end(), [](const SpeciesEntry &left, const SpeciesEntry &right)
+                {
+                    if (left.count != right.count)
+                    {
+                        return left.count > right.count;
+                    }
+
+                    return left.firstAtomIndex < right.firstAtomIndex;
+                });
+
+                for (const SpeciesEntry &entry : appendedEntries)
+                {
+                    outSpecies.push_back(entry.name);
+                    outCounts.push_back(entry.count);
+                }
+
+                return !outSpecies.empty();
+            }
+
+            std::stable_sort(entries.begin(), entries.end(), [](const SpeciesEntry &left, const SpeciesEntry &right)
+            {
+                if (left.count != right.count)
+                {
+                    return left.count > right.count;
+                }
+
+                return left.firstAtomIndex < right.firstAtomIndex;
+            });
+
+            outSpecies.reserve(entries.size());
+            outCounts.reserve(entries.size());
+            for (const SpeciesEntry &entry : entries)
+            {
+                outSpecies.push_back(entry.name);
+                outCounts.push_back(entry.count);
+            }
+
+            return !outSpecies.empty();
         }
 
         float WrapUnitCoordinate(float value)

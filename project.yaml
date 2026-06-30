@@ -1,0 +1,4 @@
+version: 1
+project:
+  name: DefectsStudio
+  structurePath: assets/samples/POSCAR_1-2-copy.vasp
